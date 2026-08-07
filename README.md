@@ -1,6 +1,6 @@
 # Metaverse-Projects
 
-팀 프로젝트 진행을 위한 Git
+팀 프로젝트 진행을 위한 Git - But, It's mine  -  FROM DB
 
 **Commit Messege Rule**
 
