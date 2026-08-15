@@ -10,6 +10,7 @@
 - `app/models/`: 요청·응답 JSON 필드
 - 실행 중인 `http://127.0.0.1:8000/docs`: 실제 Swagger 문서
 - README의 `FRONTEND_ORIGINS`: React·Vite·Vanilla JS 개발 서버 연결 방법
+- `docs/FRONTEND_INTEGRATION.md`: React + Vite 환경 변수와 API 클라이언트 예시
 
 Frontend는 `services`, `repositories`, `integrations`를 직접 호출하지 않고 HTTP API만 사용합니다.
 

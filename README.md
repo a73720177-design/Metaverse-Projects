@@ -54,6 +54,7 @@ LLM_SERVICE_URL=http://localhost:8001
 LLM_API_PREFIX=/api/v1
 LLM_SERVICE_TIMEOUT=300
 FRONTEND_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:5500
+FRONTEND_ORIGIN_REGEX=^http://25(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}:(?:4173|5173)$
 ```
 
 PowerShell 현재 터미널에 직접 지정할 수도 있습니다.
@@ -63,6 +64,7 @@ $env:LLM_SERVICE_URL = "http://localhost:8001"
 $env:LLM_API_PREFIX = "/api/v1"
 $env:LLM_SERVICE_TIMEOUT = "300"
 $env:FRONTEND_ORIGINS = "http://localhost:3000,http://localhost:5173,http://localhost:5500"
+$env:FRONTEND_ORIGIN_REGEX = '^http://25(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}:(?:4173|5173)$'
 ```
 
 처음 설정할 때 저장소 루트에서 다음 명령으로 예시 파일을 `backend/.env`로 복사하면 Backend가 시작할 때 자동으로 읽습니다. `.env`는 Git에 올라가지 않습니다.
@@ -190,7 +192,7 @@ cd C:\meta_project\backend
 python -m pytest
 ```
 
-현재 Backend 테스트 결과는 `10 passed`입니다. 팀 연동 후 LLM·DB 통합 테스트를 추가해야 합니다.
+현재 Backend 테스트 결과는 `11 passed`입니다. 팀 연동 후 LLM·DB 통합 테스트를 추가해야 합니다.
 
 ## 주요 폴더
 
@@ -229,6 +231,7 @@ imjae-workingtree → Backend-main → 공통 main
 ## 관련 문서
 
 - [팀별 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
+- [React + Vite 연동 안내](./backend/docs/FRONTEND_INTEGRATION.md)
 - [팀 연동 계약](./backend/docs/INTEGRATION_CONTRACTS.md)
 - [LLM HTTP 요청·응답 계약](./backend/docs/LLM_HTTP_CONTRACT.md)
 - [팀별 버전 호환성 안내](./backend/docs/VERSION_COMPATIBILITY.md)

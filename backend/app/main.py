@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_frontend_origins
+from app.config import get_frontend_origin_regex, get_frontend_origins
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
@@ -35,6 +35,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_frontend_origins(),
+    allow_origin_regex=get_frontend_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

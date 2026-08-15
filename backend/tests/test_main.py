@@ -53,6 +53,18 @@ def test_cors_preflight_allows_known_frontend_origin() -> None:
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
+def test_cors_preflight_allows_vite_over_hamachi() -> None:
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://25.20.30.40:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://25.20.30.40:5173"
+
+
 def test_cors_does_not_allow_unknown_frontend_origin() -> None:
     response = client.options(
         "/health",
