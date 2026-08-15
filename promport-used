@@ -1,0 +1,9 @@
+python -m venv .venv                        이거 하면 뭔가 됨
+.venv\Scripts\activate                      가상환경 설정
+pip install -r requirements.txt             패키지 설정
+copy .env.example.env                       env 파일 넣어놔서 이미 됨
+pip install python-pptx                     python-pptx 설치
+uvicorn app.main:app --reload --port 8001   서버 열고
+http://localhost:8001/docs                  웹 접속
+
+
