@@ -3,8 +3,8 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.persona import PersonaCreateRequest, PersonaProfile
-from app.ports.agent_repository import AgentRepository
-from app.ports.persona_generator import PersonaGenerator, PersonaGeneratorError
+from app.integrations.llm.contracts import PersonaGenerator, PersonaGeneratorError
+from app.repositories.agent_repository import AgentRepository
 
 
 class UpstreamServiceError(RuntimeError):
@@ -22,7 +22,12 @@ class PersonaService:
         try:
             generated = await self.generator.generate(request)
             persona = PersonaProfile.model_validate(
-                {**generated, "agent_id": uuid4(), "name": request.name}
+                {
+                    **generated,
+                    "agent_id": uuid4(),
+                    "name": request.name,
+                    "description": request.description,
+                }
             )
         except (PersonaGeneratorError, ValidationError) as exc:
             raise UpstreamServiceError("Persona generator returned an invalid response") from exc
