@@ -42,17 +42,17 @@ class HttpLlmClient:
                 )
         except httpx.RequestError as exc:
             raise LlmServiceConnectionError(
-                f"LLM service is unavailable: {self.base_url}"
+                f"LLM 서비스를 사용할 수 없습니다: {self.base_url}"
             ) from exc
 
         if response.status_code >= 400:
             raise LlmServiceResponseError(
-                f"LLM service returned HTTP {response.status_code} for {path}"
+                f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다."
             )
         try:
             body = response.json()
         except ValueError as exc:
-            raise LlmServiceResponseError("LLM service returned invalid JSON") from exc
+            raise LlmServiceResponseError("LLM 서비스가 잘못된 JSON을 반환했습니다.") from exc
         if not isinstance(body, dict):
-            raise LlmServiceResponseError("LLM service response must be a JSON object")
+            raise LlmServiceResponseError("LLM 응답은 JSON 객체여야 합니다.")
         return body

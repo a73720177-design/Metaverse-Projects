@@ -3,9 +3,9 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.chat import ChatRequest, ChatResponse
-from app.ports.agent_repository import AgentRepository
-from app.ports.chat_generator import ChatGenerator, ChatGeneratorError
-from app.ports.document_repository import DocumentRepository
+from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
+from app.repositories.agent_repository import AgentRepository
+from app.repositories.document_repository import DocumentRepository
 
 
 class ChatServiceError(RuntimeError):

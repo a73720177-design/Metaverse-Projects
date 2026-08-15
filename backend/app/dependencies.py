@@ -1,17 +1,14 @@
 from functools import lru_cache
 
-from app.adapters.in_memory_agent_repository import InMemoryAgentRepository
-from app.adapters.in_memory_document_repository import InMemoryDocumentRepository
-from app.adapters.in_memory_review_repository import InMemoryReviewRepository
-from app.adapters.http_llm_client import HttpLlmClient
-from app.adapters.http_llm_generators import (
+from app.integrations.llm.client import HttpLlmClient
+from app.integrations.llm.generators import (
     HttpChatGenerator,
     HttpPersonaGenerator,
     HttpReviewGenerator,
 )
-from app.ports.agent_repository import AgentRepository
-from app.ports.document_repository import DocumentRepository
-from app.ports.review_repository import ReviewRepository
+from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository
+from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository
+from app.repositories.review_repository import ReviewRepository, InMemoryReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService

@@ -13,11 +13,11 @@ from app.dependencies import (
 from app.main import app
 from app.models.chat import ChatRequest
 from app.models.persona import PersonaCreateRequest
-from app.adapters.in_memory_agent_repository import InMemoryAgentRepository
-from app.adapters.in_memory_document_repository import InMemoryDocumentRepository
-from app.adapters.in_memory_review_repository import InMemoryReviewRepository
-from app.adapters.http_llm_client import HttpLlmClient
-from app.adapters.http_llm_generators import HttpPersonaGenerator
+from app.repositories.agent_repository import InMemoryAgentRepository
+from app.repositories.document_repository import InMemoryDocumentRepository
+from app.repositories.review_repository import InMemoryReviewRepository
+from app.integrations.llm.client import HttpLlmClient
+from app.integrations.llm.generators import HttpPersonaGenerator
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
@@ -39,6 +39,29 @@ def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_cors_preflight_allows_known_frontend_origin() -> None:
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_does_not_allow_unknown_frontend_origin() -> None:
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://example.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_rejects_unsupported_document() -> None:

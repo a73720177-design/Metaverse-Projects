@@ -99,7 +99,7 @@ Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 
 ## 6. 구현체 연결 위치
 
-실제 구현체를 선택하고 서비스에 주입하는 작업은 `app/dependencies.py`에서만 수행합니다. 개발 중 메모리 Repository를 사용하다가 실제 DB 구현체로 바꾸더라도 라우터와 서비스 코드는 수정되지 않아야 합니다.
+실제 구현체를 선택하고 서비스에 주입하는 작업은 `app/dependencies.py`에서만 수행합니다. 저장 계약은 `app/repositories/`, LLM 연동 계약은 `app/integrations/llm/`에서 확인합니다. 개발 중 메모리 Repository를 사용하다가 실제 DB 구현체로 바꾸더라도 Controller와 Service는 수정되지 않아야 합니다.
 
 ## 7. 계약 변경 절차
 

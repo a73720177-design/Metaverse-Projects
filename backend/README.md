@@ -50,7 +50,8 @@ python -m pip install -r requirements.txt
 ```text
 LLM_SERVICE_URL=http://localhost:8001
 LLM_API_PREFIX=/api/v1
-LLM_SERVICE_TIMEOUT=30
+LLM_SERVICE_TIMEOUT=300
+FRONTEND_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:5500
 ```
 
 PowerShell 현재 터미널에 직접 지정할 수도 있습니다.
@@ -58,7 +59,59 @@ PowerShell 현재 터미널에 직접 지정할 수도 있습니다.
 ```powershell
 $env:LLM_SERVICE_URL = "http://localhost:8001"
 $env:LLM_API_PREFIX = "/api/v1"
-$env:LLM_SERVICE_TIMEOUT = "30"
+$env:LLM_SERVICE_TIMEOUT = "300"
+$env:FRONTEND_ORIGINS = "http://localhost:3000,http://localhost:5173,http://localhost:5500"
+```
+
+처음 설정할 때 `.env.example`을 `.env`로 복사하면 Backend가 시작할 때 자동으로 읽습니다. `.env`는 Git에 올라가지 않습니다.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`FRONTEND_ORIGINS`는 브라우저에서 Backend를 호출할 수 있는 프론트 개발 서버 주소입니다. 쉼표로 구분하고 주소 마지막의 `/`는 생략합니다. 기본 설정은 다음 환경을 지원합니다.
+
+| 프론트 개발 방식 | 기본 주소 |
+|---|---|
+| React Create React App | `http://localhost:3000` |
+| React + Vite | `http://localhost:5173` |
+| Vite Preview | `http://localhost:4173` |
+| HTML·CSS·Vanilla JS + Live Server | `http://localhost:5500` |
+
+각 주소의 `127.0.0.1` 형태도 기본 허용됩니다. 프론트 팀이 다른 포트를 사용하면 그 주소를 `FRONTEND_ORIGINS`에 추가한 뒤 Backend를 다시 실행합니다. 운영 배포 주소는 확정된 도메인만 별도로 넣어야 하며 `*` 사용은 피합니다.
+
+HTML 파일을 탐색기에서 직접 열어 `file://`로 실행하지 말고 개발 서버를 사용합니다. Python만 있다면 프론트 폴더에서 다음처럼 실행할 수 있습니다.
+
+```powershell
+python -m http.server 5500
+```
+
+### 프론트에서 Backend 호출 예시
+
+React와 Vanilla JS 모두 표준 `fetch`를 사용할 수 있습니다.
+
+```javascript
+const API_BASE_URL = "http://127.0.0.1:8000";
+
+const response = await fetch(`${API_BASE_URL}/health`);
+if (!response.ok) {
+  throw new Error(`Backend error: ${response.status}`);
+}
+
+const data = await response.json();
+console.log(data);
+```
+
+문서 업로드는 브라우저가 multipart 경계를 자동으로 만들도록 `Content-Type`을 직접 지정하지 않습니다.
+
+```javascript
+const formData = new FormData();
+formData.append("file", selectedFile);
+
+const response = await fetch(`${API_BASE_URL}/documents/parse`, {
+  method: "POST",
+  body: formData,
+});
 ```
 
 ## 권장 실행 순서
@@ -135,18 +188,18 @@ cd C:\meta_project\backend
 python -m pytest
 ```
 
-현재 Backend 테스트 결과는 `8 passed`입니다. 팀 연동 후 LLM·DB 통합 테스트를 추가해야 합니다.
+현재 Backend 테스트 결과는 `10 passed`입니다. 팀 연동 후 LLM·DB 통합 테스트를 추가해야 합니다.
 
 ## 주요 폴더
 
 ```text
 backend/
 ├─ app/
-│  ├─ api/            # 공개 HTTP 라우터
+│  ├─ controllers/    # Frontend에 공개하는 HTTP API 계층
 │  ├─ models/         # API·도메인 데이터 구조
-│  ├─ services/       # 업무 흐름
-│  ├─ ports/          # LLM·DB 인터페이스
-│  ├─ adapters/       # HTTP와 임시 메모리 구현체
+│  ├─ services/       # Backend 업무 로직 계층
+│  ├─ repositories/   # DB 저장 계약과 임시 메모리 구현체
+│  ├─ integrations/   # LLM 등 외부 서비스 연동
 │  ├─ parsers/        # 문서 텍스트 추출
 │  └─ dependencies.py # 실제 구현체 연결 위치
 ├─ docs/              # 연동 계약과 버전 안내
@@ -173,6 +226,7 @@ imjae-workingtree → Backend-main → 공통 main
 
 ## 관련 문서
 
+- [팀별 코드 확인 안내](./docs/TEAM_CODE_GUIDE.md)
 - [팀 연동 계약](./docs/INTEGRATION_CONTRACTS.md)
 - [LLM HTTP 요청·응답 계약](./docs/LLM_HTTP_CONTRACT.md)
 - [팀별 버전 호환성 안내](./docs/VERSION_COMPATIBILITY.md)

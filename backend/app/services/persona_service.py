@@ -3,8 +3,8 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.persona import PersonaCreateRequest, PersonaProfile
-from app.ports.agent_repository import AgentRepository
-from app.ports.persona_generator import PersonaGenerator, PersonaGeneratorError
+from app.integrations.llm.contracts import PersonaGenerator, PersonaGeneratorError
+from app.repositories.agent_repository import AgentRepository
 
 
 class UpstreamServiceError(RuntimeError):

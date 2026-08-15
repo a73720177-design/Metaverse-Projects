@@ -3,10 +3,10 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.review import ReviewCreateRequest, ReviewResult
-from app.ports.agent_repository import AgentRepository
-from app.ports.document_repository import DocumentRepository
-from app.ports.review_generator import ReviewGenerator, ReviewGeneratorError
-from app.ports.review_repository import ReviewRepository
+from app.integrations.llm.contracts import ReviewGenerator, ReviewGeneratorError
+from app.repositories.agent_repository import AgentRepository
+from app.repositories.document_repository import DocumentRepository
+from app.repositories.review_repository import ReviewRepository
 
 
 class ReviewServiceError(RuntimeError):

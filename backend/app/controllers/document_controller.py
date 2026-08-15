@@ -5,24 +5,17 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.dependencies import get_document_repository
 from app.models.document import DocumentParseResponse
-from app.ports.document_repository import DocumentRepository
+from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
-
 
 router = APIRouter(prefix="/documents", tags=["문서"])
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 
 
-@router.post(
-    "/parse",
-    response_model=DocumentParseResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="문서 업로드 및 텍스트 추출",
-    description=(
-        "PPTX, PDF 또는 DOCX 파일을 업로드합니다. 파일은 uploads 폴더에 UUID 이름으로 "
-        "저장되며, 슬라이드·페이지·문단 단위 텍스트와 전체 텍스트를 반환합니다."
-    ),
-)
+@router.post("/parse", response_model=DocumentParseResponse,
+             status_code=status.HTTP_201_CREATED,
+             summary="문서 업로드 및 텍스트 추출",
+             description="PPTX, PDF, DOCX 파일을 저장하고 구간별·전체 텍스트를 반환합니다.")
 async def upload_and_parse(
     file: UploadFile = File(...),
     repository: DocumentRepository = Depends(get_document_repository),

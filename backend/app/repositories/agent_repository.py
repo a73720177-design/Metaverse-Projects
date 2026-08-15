@@ -1,10 +1,18 @@
+from typing import Protocol
 from uuid import UUID
 
 from app.models.persona import PersonaProfile
 
 
+class AgentRepository(Protocol):
+    """Backend가 DB 팀에 요구하는 평가자 저장 계약입니다."""
+
+    async def save(self, persona: PersonaProfile) -> None: ...
+    async def get(self, agent_id: UUID) -> PersonaProfile | None: ...
+
+
 class InMemoryAgentRepository:
-    """Development adapter. The DB team can replace it via dependencies.py."""
+    """실제 DB 연결 전까지 사용하는 개발용 임시 저장소입니다."""
 
     def __init__(self) -> None:
         self._agents: dict[UUID, PersonaProfile] = {}
