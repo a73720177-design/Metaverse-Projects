@@ -72,7 +72,7 @@ def health() -> dict[str, str]:
     "/health/llm",
     tags=["시스템"],
     summary="LLM 서비스 연결 상태 확인",
-    description="Backend에서 LLM 서비스의 `/api/v1/health`를 실제 호출합니다.",
+    description="현재 계약 모드에 맞춰 Backend에서 LLM 서비스의 health API를 호출합니다.",
 )
 async def llm_health(
     client: HttpLlmClient = Depends(get_llm_client),

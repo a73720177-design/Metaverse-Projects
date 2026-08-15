@@ -19,6 +19,8 @@
 현재 브랜치는 FastAPI 0.115.0, Pydantic 2.9.2, Uvicorn 0.30.6과
 unversioned `/extract-concepts`, `/generate-questions`를 사용합니다.
 
+Backend의 `LLM_CONTRACT_MODE=legacy_questions`는 이 두 API를 Persona·Review 흐름에 임시 연결합니다. 따라서 팀 코드를 먼저 합쳐 통합 테스트할 수 있지만 Chat은 지원되지 않고 정식 v1 계약도 완성된 상태가 아닙니다.
+
 필수 변경:
 
 1. `/api/v1/health`, `/api/v1/personas`, `/api/v1/reviews`, `/api/v1/chat` 구현

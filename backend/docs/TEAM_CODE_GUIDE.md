@@ -37,6 +37,7 @@ Controller → Service → Repository
 - `app/integrations/llm/contracts.py`: Backend 서비스가 요구하는 생성 기능
 - `app/integrations/llm/generators.py`: LLM 서비스로 보내는 실제 payload
 - `app/integrations/llm/client.py`: 주소, 버전 헤더, 오류 처리
+- `app/integrations/llm/legacy_generators.py`: 현재 LLM 팀 API용 임시 호환 어댑터
 
 LLM 팀은 Backend의 Controller나 Repository를 수정할 필요가 없습니다. `/api/v1` 계약을 구현하면 Backend가 HTTP로 호출합니다.
 

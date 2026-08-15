@@ -113,7 +113,8 @@ Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 ## 8. 현재 연동 상태
 
 - Backend의 LLM HTTP 클라이언트와 `/health/llm`은 구현되어 있습니다.
-- LLM 팀의 기존 API는 `/api/v1` 계약과 아직 일치하지 않습니다. 맞춰지기 전에는 관련 요청이 `503`으로 끝날 수 있습니다.
+- LLM 팀의 기존 `/extract-concepts`, `/generate-questions`는 `legacy_questions` 호환 모드로 Persona와 Review 흐름에 연결됩니다.
+- Chat은 현재 LLM API에 대응 기능이 없어 `503`을 반환하며 정식 `/api/v1/chat` 구현이 필요합니다.
 - Agent와 Document는 메모리 Repository를 사용하므로 Backend 재시작 시 사라집니다.
 - 실제 DB Repository와 Review·Chat 저장은 아직 연결되지 않았습니다.
 - 버전 차이와 팀별 수정 항목은 [버전 호환성 안내](./VERSION_COMPATIBILITY.md)를 확인합니다.
