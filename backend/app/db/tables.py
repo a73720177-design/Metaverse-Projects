@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,7 @@ class AgentTable(Base):
 
 class DocumentTable(Base):
     __tablename__ = "documents"
+    __table_args__ = (UniqueConstraint("bucket", "object_key", name="uq_documents_object"),)
 
     document_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     filename: Mapped[str] = mapped_column(Text, nullable=False)
@@ -42,6 +43,10 @@ class DocumentTable(Base):
 
 class ReviewTable(Base):
     __tablename__ = "reviews"
+    __table_args__ = (
+        Index("ix_reviews_agent_id", "agent_id"),
+        Index("ix_reviews_document_id", "document_id"),
+    )
 
     review_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     agent_id: Mapped[UUID] = mapped_column(

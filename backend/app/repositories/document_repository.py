@@ -1,3 +1,4 @@
+import os
 from typing import Protocol
 from uuid import UUID
 
@@ -27,13 +28,16 @@ class InMemoryDocumentRepository:
 
 
 class PostgresDocumentRepository:
+    def __init__(self) -> None:
+        self.bucket = os.getenv("MINIO_BUCKET", "documents")
+
     async def save(self, document: DocumentParseResponse) -> None:
         data = document.model_dump(mode="json")
         row = DocumentTable(
             document_id=document.document_id,
             filename=document.filename,
             document_type=document.document_type,
-            bucket="documents",
+            bucket=self.bucket,
             object_key=str(document.saved_path),
             sections=data["sections"],
             full_text=document.full_text,

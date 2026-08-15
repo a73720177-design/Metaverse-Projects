@@ -3,10 +3,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from app.dependencies import get_document_repository
+from app.dependencies import get_document_repository, get_object_storage
 from app.models.document import DocumentParseResponse
 from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
+from app.storage.object_storage import ObjectStorage
 
 router = APIRouter(prefix="/documents", tags=["문서"])
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
@@ -19,6 +20,7 @@ UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 async def upload_and_parse(
     file: UploadFile = File(...),
     repository: DocumentRepository = Depends(get_document_repository),
+    storage: ObjectStorage = Depends(get_object_storage),
 ) -> DocumentParseResponse:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -34,6 +36,9 @@ async def upload_and_parse(
         document = parse_document(
             saved_path, original_filename=file.filename or saved_path.name
         )
+        object_key = f"{document.document_id}{suffix}"
+        await storage.upload(saved_path, object_key, file.content_type)
+        document.saved_path = Path(object_key)
         await repository.save(document)
         return document
     except ValueError as exc:
@@ -43,4 +48,5 @@ async def upload_and_parse(
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="문서를 처리하지 못했습니다.") from exc
     finally:
+        saved_path.unlink(missing_ok=True)
         await file.close()

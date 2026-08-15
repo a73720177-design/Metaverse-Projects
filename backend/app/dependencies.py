@@ -18,6 +18,8 @@ from app.repositories.review_repository import PostgresReviewRepository, ReviewR
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
+from app.storage.minio_storage import MinioStorage
+from app.storage.object_storage import ObjectStorage
 
 
 @lru_cache
@@ -47,6 +49,11 @@ def get_document_repository() -> DocumentRepository:
 @lru_cache
 def get_review_repository() -> ReviewRepository:
     return PostgresReviewRepository()
+
+
+@lru_cache
+def get_object_storage() -> ObjectStorage:
+    return MinioStorage()
 
 
 @lru_cache
