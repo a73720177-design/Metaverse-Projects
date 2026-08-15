@@ -131,6 +131,8 @@ python integration\check_services.py
 
 ## 팀별 필수 작업
 
+공통 main 병합 전 작업의 우선순위, 담당 팀, 완료 조건은 [공통 main 병합 전 체크리스트](./integration/PRE_MAIN_CHECKLIST.md)를 기준으로 합니다. 우선순위는 Backend 통합 흐름의 의존 순서이며 팀의 중요도 순서가 아닙니다.
+
 ### Frontend
 
 - React + Vite 프로젝트를 `frontend/`에 배치
@@ -196,6 +198,7 @@ python integration\check_services.py
 ## 문서
 
 - [공통 서비스 통합 안내](./integration/README.md)
+- [공통 main 병합 전 팀별 체크리스트](./integration/PRE_MAIN_CHECKLIST.md)
 - [팀별 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
 - [팀 연동 계약](./backend/docs/INTEGRATION_CONTRACTS.md)
 - [React + Vite 연동](./backend/docs/FRONTEND_INTEGRATION.md)
