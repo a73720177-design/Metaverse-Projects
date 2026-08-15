@@ -10,6 +10,7 @@
 - `app/models/`: 요청·응답 JSON 필드
 - 실행 중인 `http://127.0.0.1:8000/docs`: 실제 Swagger 문서
 - README의 `FRONTEND_ORIGINS`: React·Vite·Vanilla JS 개발 서버 연결 방법
+- `docs/FRONTEND_INTEGRATION.md`: React + Vite 환경 변수와 API 클라이언트 예시
 
 Frontend는 `services`, `repositories`, `integrations`를 직접 호출하지 않고 HTTP API만 사용합니다.
 
@@ -36,6 +37,7 @@ Controller → Service → Repository
 - `app/integrations/llm/contracts.py`: Backend 서비스가 요구하는 생성 기능
 - `app/integrations/llm/generators.py`: LLM 서비스로 보내는 실제 payload
 - `app/integrations/llm/client.py`: 주소, 버전 헤더, 오류 처리
+- `app/integrations/llm/legacy_generators.py`: 현재 LLM 팀 API용 임시 호환 어댑터
 
 LLM 팀은 Backend의 Controller나 Repository를 수정할 필요가 없습니다. `/api/v1` 계약을 구현하면 Backend가 HTTP로 호출합니다.
 

@@ -15,9 +15,18 @@ class LlmServiceResponseError(RuntimeError):
 class HttpLlmClient:
     """LLM 팀의 독립 FastAPI 서비스와 통신하는 HTTP 클라이언트입니다."""
 
-    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: httpx.AsyncBaseTransport | None = None,
+        api_prefix: str | None = None,
+    ) -> None:
         self.base_url = os.getenv("LLM_SERVICE_URL", "http://localhost:8001").rstrip("/")
-        self.api_prefix = os.getenv("LLM_API_PREFIX", "/api/v1").rstrip("/")
+        configured_prefix = (
+            os.getenv("LLM_API_PREFIX", "/api/v1")
+            if api_prefix is None
+            else api_prefix
+        )
+        self.api_prefix = configured_prefix.rstrip("/")
         self.timeout = float(os.getenv("LLM_SERVICE_TIMEOUT", "300"))
         self.transport = transport
 

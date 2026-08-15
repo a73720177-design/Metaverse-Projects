@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_frontend_origins
+from app.config import get_frontend_origin_regex, get_frontend_origins
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
@@ -35,6 +35,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_frontend_origins(),
+    allow_origin_regex=get_frontend_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,7 +72,7 @@ def health() -> dict[str, str]:
     "/health/llm",
     tags=["시스템"],
     summary="LLM 서비스 연결 상태 확인",
-    description="Backend에서 LLM 서비스의 `/api/v1/health`를 실제 호출합니다.",
+    description="현재 계약 모드에 맞춰 Backend에서 LLM 서비스의 health API를 호출합니다.",
 )
 async def llm_health(
     client: HttpLlmClient = Depends(get_llm_client),
