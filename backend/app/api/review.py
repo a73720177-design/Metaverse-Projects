@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_review_service
 from app.models.error import ErrorResponse
 from app.models.review import ReviewCreateRequest, ReviewResult
-from app.services.review_service import ReviewService, ReviewServiceError
+from app.services.review_service import (
+    ReviewResourceNotFoundError,
+    ReviewService,
+    ReviewServiceError,
+)
 
 
 router = APIRouter(tags=["리뷰"])
@@ -30,6 +34,8 @@ async def create_review(
 ) -> ReviewResult:
     try:
         return await service.create(agent_id, request)
+    except ReviewResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ReviewServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

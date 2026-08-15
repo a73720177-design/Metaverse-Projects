@@ -1,71 +1,147 @@
-# Team integration contracts
+# 팀 연동 계약
 
-The backend team owns HTTP routes, request/response schemas, validation, error mapping,
-file upload handling, and service orchestration. It does not own database schemas,
-vector search algorithms, model selection, or prompt quality.
+이 문서는 Frontend, Backend, LLM, DB 팀이 서로의 코드를 직접 침범하지 않고 연동하기 위한 기준입니다. 내부 구현이 달라도 여기에 정의된 HTTP 요청·응답과 Repository 인터페이스를 지키면 각 팀은 독립적으로 개발할 수 있습니다.
 
-## LLM team boundary
+## 1. 전체 구조
 
-Implement `app.ports.persona_generator.PersonaGenerator`.
-
-```python
-async def generate(request: PersonaCreateRequest) -> dict[str, Any]:
-    ...
+```text
+Frontend ──HTTP──▶ Backend (:8000)
+                      ├─HTTP──▶ LLM Service (:8001) ──▶ Ollama (:11434)
+                      └─Repository──▶ DB / Vector DB / Object Storage
 ```
 
-Requirements:
+- Frontend는 Backend API만 호출합니다.
+- Backend는 요청 검증, ID 관리, 파일 처리와 업무 흐름 조정을 담당합니다.
+- LLM은 Backend와 분리된 HTTP 서버로 실행합니다. 이것이 팀에서 정한 **방식 B**입니다.
+- Ollama는 LLM 서비스가 호출하며 Backend가 직접 호출하지 않습니다.
+- DB 연결과 저장 방식은 Repository 구현체 뒤에 숨깁니다.
 
-- Return data compatible with `PersonaProfile`.
-- Do not choose or return the final `agent_id`; the backend creates it.
-- Raise `PersonaGeneratorError` for model, parsing, or connection failures.
-- Model names, prompts, retries, and Ollama settings belong inside the adapter.
+## 2. 팀별 담당 범위
 
-The same rule applies to `ReviewGenerator` and `ChatGenerator`:
+| 팀 | 담당하는 것 | 담당하지 않는 것 |
+|---|---|---|
+| Backend | 공개 API, Pydantic 검증, ID, 파일 업로드·파싱, 서비스 흐름, 오류 변환 | 모델·프롬프트, DB 스키마·마이그레이션 |
+| LLM | `/api/v1` LLM API, 프롬프트, 모델, Ollama 호출, 출력 형식 | Frontend 공개 API, 데이터 저장 |
+| DB | 스키마, 마이그레이션, CRUD Repository, Vector DB·파일 저장소 | Backend 라우팅, LLM 프롬프트 |
+| Frontend | Backend API 호출과 화면 처리 | LLM·Ollama·DB 직접 호출 |
 
-- `app.ports.review_generator.ReviewGenerator`
-- `app.ports.chat_generator.ChatGenerator`
+팀별 패키지 버전은 달라도 됩니다. 단, API 경로와 JSON 형식은 반드시 일치해야 합니다.
 
-The review generator returns claims, feedback, questions, and sources compatible
-with `ReviewResult`. The chat generator returns an answer and optional sources
-compatible with `ChatResponse`. The backend always supplies final IDs and path IDs.
+## 3. Backend와 LLM 계약
 
-## DB team boundary
+Backend와 LLM은 Python 클래스를 공유하지 않고 HTTP로만 연결합니다. 기본 주소는 `http://localhost:8001/api/v1`입니다.
 
-Implement `app.ports.agent_repository.AgentRepository`.
+| 메서드 | 경로 | 용도 |
+|---|---|---|
+| GET | `/api/v1/health` | LLM 서비스와 Ollama 상태 확인 |
+| POST | `/api/v1/personas` | 페르소나 생성 |
+| POST | `/api/v1/reviews` | 문서 리뷰 생성 |
+| POST | `/api/v1/chat` | 문서·페르소나 기반 대화 |
+
+정확한 요청·응답 예시는 [LLM HTTP 계약](./LLM_HTTP_CONTRACT.md)을 따릅니다.
+
+### Backend가 보장할 사항
+
+- 페르소나와 문서를 조회해 LLM 요청에 포함합니다.
+- 연결 실패, 시간 초과, 잘못된 JSON을 Backend 공통 오류로 변환합니다.
+- `agent_id`, `document_id`, `review_id` 등 서비스 ID를 관리합니다.
+- LLM 주소와 시간 제한을 환경 변수로 관리합니다.
+
+### LLM 팀이 보장할 사항
+
+- `/api/v1` 경로와 계약된 JSON 필드 이름을 유지합니다.
+- 모델의 자유 형식 문자열이 아닌 계약된 JSON 구조를 반환합니다.
+- Ollama 연결 실패와 모델 오류를 적절한 HTTP 상태 코드로 반환합니다.
+- Backend가 보낸 ID를 변경하거나 새 ID로 대체하지 않습니다.
+- 호환되지 않는 변경은 기존 `/api/v1`을 유지하고 `/api/v2`로 분리합니다.
+
+## 4. Backend와 DB 계약
+
+Backend 서비스는 특정 DB 라이브러리를 직접 사용하지 않고 Repository 인터페이스를 사용합니다.
 
 ```python
-async def save(persona: PersonaProfile) -> None:
-    ...
+class AgentRepository(Protocol):
+    def save(self, agent: Agent) -> Agent: ...
+    def find_by_id(self, agent_id: UUID) -> Agent | None: ...
 
-async def get(agent_id: UUID) -> PersonaProfile | None:
-    ...
+class DocumentRepository(Protocol):
+    def save(self, document: Document) -> Document: ...
+    def find_by_id(self, document_id: UUID) -> Document | None: ...
 ```
 
-Requirements:
+Review와 Chat 저장 기능도 구현 전에 같은 방식으로 Repository 계약을 합의합니다.
 
-- Preserve the API model values supplied by the backend.
-- Return `None` when an agent does not exist.
-- Database sessions, migrations, SQLite tables, and Chroma collections stay inside
-  the repository adapter.
+### Repository 구현 규칙
 
-Review persistence implements `app.ports.review_repository.ReviewRepository`.
-Chat persistence can be added as a separate repository when the DB team finalizes
-message-history requirements; the current HTTP contract does not assume a schema.
+- 조회 결과가 없으면 예외 대신 `None`을 반환합니다.
+- 라우터에서 SQLAlchemy, ChromaDB 같은 DB 라이브러리를 직접 호출하지 않습니다.
+- 연결 문자열과 비밀번호는 환경 변수로 관리합니다.
+- DB 전용 객체를 API에 직접 반환하지 않고 Backend 도메인 모델로 변환합니다.
+- 스키마 변경 전 Backend 팀과 필드 변환 방법을 합의합니다.
 
-## HTTP error contract
+## 5. 공통 오류 응답
 
-All HTTP and validation failures use this public shape:
+Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 
 ```json
 {
   "error": {
     "code": "http_404",
-    "message": "Review not found"
+    "message": "리뷰를 찾을 수 없습니다."
   }
 }
 ```
 
-## Wiring
+- `code`: 프로그램이 분기 처리할 고정 값
+- `message`: 사용자가 이해할 수 있는 설명
+- 내부 주소, 비밀번호, 전체 예외 추적은 응답에 포함하지 않습니다.
+- LLM·DB 오류도 Backend가 이 형식으로 변환하여 Frontend에 전달합니다.
 
-When team implementations are ready, change only `app/dependencies.py`. Routes and
-orchestration services must not import concrete DB or LLM libraries.
+## 6. 구현체 연결 위치
+
+실제 구현체를 선택하고 서비스에 주입하는 작업은 `app/dependencies.py`에서만 수행합니다. 개발 중 메모리 Repository를 사용하다가 실제 DB 구현체로 바꾸더라도 라우터와 서비스 코드는 수정되지 않아야 합니다.
+
+## 7. 계약 변경 절차
+
+1. 요청·응답 예시와 변경 이유를 먼저 공유합니다.
+2. 영향을 받는 팀이 필드 이름, 필수 여부, 오류 방식을 확인합니다.
+3. 호환되는 필드 추가는 `/api/v1`에서 가능합니다.
+4. 필드 삭제나 의미 변경은 `/api/v2`로 분리합니다.
+5. 계약 문서와 테스트를 같은 PR에서 수정합니다.
+6. 작업 브랜치에서 검증한 뒤 팀 main을 거쳐 공통 main에 합칩니다.
+
+## 8. 현재 연동 상태
+
+- Backend의 LLM HTTP 클라이언트와 `/health/llm`은 구현되어 있습니다.
+- LLM 팀의 기존 API는 `/api/v1` 계약과 아직 일치하지 않습니다. 맞춰지기 전에는 관련 요청이 `503`으로 끝날 수 있습니다.
+- Agent와 Document는 메모리 Repository를 사용하므로 Backend 재시작 시 사라집니다.
+- 실제 DB Repository와 Review·Chat 저장은 아직 연결되지 않았습니다.
+- 버전 차이와 팀별 수정 항목은 [버전 호환성 안내](./VERSION_COMPATIBILITY.md)를 확인합니다.
+
+## 9. 연동 전 확인 목록
+
+### LLM 팀
+
+- [ ] `/api/v1/health`, `/personas`, `/reviews`, `/chat` 구현
+- [ ] 계약서와 요청·응답 JSON 일치 확인
+- [ ] Ollama와 사용할 모델 연결 확인
+- [ ] 잘못된 요청과 Ollama 오류 상태 코드 확인
+
+### DB 팀
+
+- [ ] Repository 인터페이스와 필드 매핑 합의
+- [ ] 스키마와 마이그레이션 제공
+- [ ] 조회 실패 시 `None` 반환
+- [ ] 비밀 정보 환경 변수 처리
+
+### Backend 팀
+
+- [ ] `dependencies.py`에서 실제 구현체 연결
+- [ ] `/health`, `/health/llm`, `/docs` 확인
+- [ ] 정상·오류·시간 초과 통합 테스트
+
+### Frontend 팀
+
+- [ ] Backend `/docs` 기준으로 호출
+- [ ] `error.code`, `error.message` 처리
+- [ ] LLM·DB 주소를 직접 사용하지 않는지 확인

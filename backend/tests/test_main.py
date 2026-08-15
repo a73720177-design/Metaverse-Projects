@@ -1,11 +1,25 @@
+from pathlib import Path
+from uuid import UUID
+
+import httpx
 from fastapi.testclient import TestClient
 
-from app.dependencies import get_chat_service, get_persona_service, get_review_service
+from app.dependencies import (
+    get_chat_service,
+    get_llm_client,
+    get_persona_service,
+    get_review_service,
+)
 from app.main import app
 from app.models.chat import ChatRequest
 from app.models.persona import PersonaCreateRequest
 from app.adapters.in_memory_agent_repository import InMemoryAgentRepository
+from app.adapters.in_memory_document_repository import InMemoryDocumentRepository
 from app.adapters.in_memory_review_repository import InMemoryReviewRepository
+from app.adapters.http_llm_client import HttpLlmClient
+from app.adapters.http_llm_generators import HttpPersonaGenerator
+from app.models.document import DocumentParseResponse
+from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
@@ -66,7 +80,7 @@ def test_create_and_get_agent_through_contracts() -> None:
 
 
 class FakeReviewGenerator:
-    async def generate(self, agent_id, request: ReviewCreateRequest) -> dict:
+    async def generate(self, persona, document, instructions) -> dict:
         return {
             "feedback": {"positive": "Clear structure", "negative": "Add evidence"},
             "claims": [],
@@ -75,23 +89,48 @@ class FakeReviewGenerator:
 
 
 class FakeChatGenerator:
-    async def generate(self, agent_id, request: ChatRequest) -> dict:
+    async def generate(self, persona, request: ChatRequest, document) -> dict:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
 
 
 def test_review_contract() -> None:
-    service = ReviewService(FakeReviewGenerator(), InMemoryReviewRepository())
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    service = ReviewService(
+        FakeReviewGenerator(),
+        InMemoryReviewRepository(),
+        agent_repository,
+        document_repository,
+    )
     app.dependency_overrides[get_review_service] = lambda: service
     try:
-        agent_id = "11111111-1111-1111-1111-111111111111"
-        document_id = "22222222-2222-2222-2222-222222222222"
+        agent_id = UUID("11111111-1111-1111-1111-111111111111")
+        document_id = UUID("22222222-2222-2222-2222-222222222222")
+        import asyncio
+        asyncio.run(
+            agent_repository.save(
+                PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict")
+            )
+        )
+        asyncio.run(
+            document_repository.save(
+                DocumentParseResponse(
+                    document_id=document_id,
+                    filename="slides.pptx",
+                    document_type="pptx",
+                    saved_path=Path("uploads/slides.pptx"),
+                    sections=[],
+                    full_text="Presentation text",
+                )
+            )
+        )
         created = client.post(
-            f"/agents/{agent_id}/reviews", json={"document_id": document_id}
+            f"/agents/{agent_id}/reviews", json={"document_id": str(document_id)}
         )
         assert created.status_code == 201
         payload = created.json()
-        assert payload["agent_id"] == agent_id
-        assert payload["document_id"] == document_id
+        assert payload["agent_id"] == str(agent_id)
+        assert payload["document_id"] == str(document_id)
 
         fetched = client.get(f"/reviews/{payload['review_id']}")
         assert fetched.status_code == 200
@@ -101,11 +140,59 @@ def test_review_contract() -> None:
 
 
 def test_chat_contract() -> None:
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(FakeChatGenerator())
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    agent_id = UUID("11111111-1111-1111-1111-111111111111")
+    import asyncio
+    asyncio.run(
+        agent_repository.save(
+            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict")
+        )
+    )
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        FakeChatGenerator(), agent_repository, document_repository
+    )
     try:
-        agent_id = "11111111-1111-1111-1111-111111111111"
         response = client.post(f"/agents/{agent_id}/chat", json={"message": "Hello"})
         assert response.status_code == 200
         assert response.json()["answer"] == "Evaluator response: Hello"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_http_llm_persona_adapter_uses_service_contract() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/personas"
+        payload = __import__("json").loads(request.content)
+        assert payload["name"] == "Professor"
+        return httpx.Response(
+            200,
+            json={"role": "Professor", "expertise": [], "evaluation_style": []},
+        )
+
+    import asyncio
+    generator = HttpPersonaGenerator(HttpLlmClient(httpx.MockTransport(handler)))
+    result = asyncio.run(
+        generator.generate(
+            PersonaCreateRequest(name="Professor", description="Evidence focused")
+        )
+    )
+    assert result["role"] == "Professor"
+
+
+def test_llm_health_uses_versioned_http_service() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/health"
+        assert request.headers["X-Backend-Contract-Version"] == "1"
+        return httpx.Response(200, json={"status": "ok"})
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/llm")
+        assert response.status_code == 200
+        assert response.json()["llm_service"] == {"status": "ok"}
     finally:
         app.dependency_overrides.clear()

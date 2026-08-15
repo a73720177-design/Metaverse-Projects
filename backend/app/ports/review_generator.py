@@ -1,7 +1,6 @@
 from typing import Any, Protocol
-from uuid import UUID
-
-from app.models.review import ReviewCreateRequest
+from app.models.document import DocumentParseResponse
+from app.models.persona import PersonaProfile
 
 
 class ReviewGeneratorError(RuntimeError):
@@ -10,5 +9,8 @@ class ReviewGeneratorError(RuntimeError):
 
 class ReviewGenerator(Protocol):
     async def generate(
-        self, agent_id: UUID, request: ReviewCreateRequest
+        self,
+        persona: PersonaProfile,
+        document: DocumentParseResponse,
+        instructions: str | None,
     ) -> dict[str, Any]: ...

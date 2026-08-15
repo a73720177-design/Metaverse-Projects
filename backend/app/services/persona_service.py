@@ -22,7 +22,12 @@ class PersonaService:
         try:
             generated = await self.generator.generate(request)
             persona = PersonaProfile.model_validate(
-                {**generated, "agent_id": uuid4(), "name": request.name}
+                {
+                    **generated,
+                    "agent_id": uuid4(),
+                    "name": request.name,
+                    "description": request.description,
+                }
             )
         except (PersonaGeneratorError, ValidationError) as exc:
             raise UpstreamServiceError("Persona generator returned an invalid response") from exc

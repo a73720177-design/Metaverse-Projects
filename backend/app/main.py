@@ -1,10 +1,16 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 
+from app.adapters.http_llm_client import (
+    HttpLlmClient,
+    LlmServiceConnectionError,
+    LlmServiceResponseError,
+)
 from app.api.agent import router as agent_router
 from app.api.chat import router as chat_router
 from app.api.document import router as document_router
 from app.api.review import router as review_router
 from app.error_handlers import register_error_handlers
+from app.dependencies import get_llm_client
 
 
 app = FastAPI(
@@ -49,3 +55,19 @@ def root() -> dict[str, str]:
 )
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(
+    "/health/llm",
+    tags=["시스템"],
+    summary="LLM 서비스 연결 상태 확인",
+    description="백엔드에서 독립 LLM 서비스의 `/api/v1/health`를 실제 호출합니다.",
+)
+async def llm_health(
+    client: HttpLlmClient = Depends(get_llm_client),
+) -> dict[str, object]:
+    try:
+        detail = await client.get_json("/health")
+    except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "ok", "llm_service": detail}

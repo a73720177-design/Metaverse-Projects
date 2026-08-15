@@ -1,7 +1,7 @@
 from typing import Any, Protocol
-from uuid import UUID
-
 from app.models.chat import ChatRequest
+from app.models.document import DocumentParseResponse
+from app.models.persona import PersonaProfile
 
 
 class ChatGeneratorError(RuntimeError):
@@ -9,4 +9,9 @@ class ChatGeneratorError(RuntimeError):
 
 
 class ChatGenerator(Protocol):
-    async def generate(self, agent_id: UUID, request: ChatRequest) -> dict[str, Any]: ...
+    async def generate(
+        self,
+        persona: PersonaProfile,
+        request: ChatRequest,
+        document: DocumentParseResponse | None,
+    ) -> dict[str, Any]: ...

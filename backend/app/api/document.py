@@ -1,9 +1,11 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
+from app.dependencies import get_document_repository
 from app.models.document import DocumentParseResponse
+from app.ports.document_repository import DocumentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
 
 
@@ -21,7 +23,10 @@ UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
         "저장되며, 슬라이드·페이지·문단 단위 텍스트와 전체 텍스트를 반환합니다."
     ),
 )
-async def upload_and_parse(file: UploadFile = File(...)) -> DocumentParseResponse:
+async def upload_and_parse(
+    file: UploadFile = File(...),
+    repository: DocumentRepository = Depends(get_document_repository),
+) -> DocumentParseResponse:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
@@ -33,7 +38,11 @@ async def upload_and_parse(file: UploadFile = File(...)) -> DocumentParseRespons
     saved_path = UPLOAD_DIR / f"{uuid4().hex}{suffix}"
     try:
         saved_path.write_bytes(await file.read())
-        return parse_document(saved_path, original_filename=file.filename or saved_path.name)
+        document = parse_document(
+            saved_path, original_filename=file.filename or saved_path.name
+        )
+        await repository.save(document)
+        return document
     except ValueError as exc:
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc

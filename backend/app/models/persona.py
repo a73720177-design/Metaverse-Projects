@@ -43,6 +43,10 @@ class PersonaCreateRequest(BaseModel):
 class PersonaProfile(BaseModel):
     agent_id: UUID = Field(default_factory=uuid4)
     name: str
+    description: str = Field(
+        default="",
+        description="LLM 리뷰와 대화에 전달할 평가자 원본 설명",
+    )
     role: str = "Evaluator"
     expertise: list[PersonaTrait] = Field(default_factory=list)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list)

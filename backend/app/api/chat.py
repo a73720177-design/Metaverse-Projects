@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_chat_service
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.error import ErrorResponse
-from app.services.chat_service import ChatService, ChatServiceError
+from app.services.chat_service import (
+    ChatResourceNotFoundError,
+    ChatService,
+    ChatServiceError,
+)
 
 
 router = APIRouter(tags=["대화"])
@@ -28,5 +32,7 @@ async def chat(
 ) -> ChatResponse:
     try:
         return await service.reply(agent_id, request)
+    except ChatResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ChatServiceError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
