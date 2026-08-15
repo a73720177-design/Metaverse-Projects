@@ -1,6 +1,8 @@
-# Metaverse Projects Backend
+# Metaverse Projects — Backend
 
 문서 업로드·분석, AI 페르소나, 리뷰와 채팅 기능을 연결하는 FastAPI 백엔드입니다. Frontend에 단일 API를 제공하고 LLM과 DB는 정해진 계약을 통해 연결합니다.
+
+이 문서는 `Backend-main` 브랜치의 대표 README입니다. Backend 코드는 `backend/`에 있으며, 팀별 공통 `main`에 합칠 때는 루트 README를 전체 프로젝트 안내로 다시 구성해야 합니다.
 
 ## 현재 개발 상태
 
@@ -25,7 +27,7 @@ Frontend ──HTTP──▶ Backend :8000
                       └─Repository──▶ DB / Vector DB / Object Storage
 ```
 
-상세 역할과 변경 규칙은 [팀 연동 계약](./docs/INTEGRATION_CONTRACTS.md)을 확인하세요.
+상세 역할과 변경 규칙은 [팀 연동 계약](./backend/docs/INTEGRATION_CONTRACTS.md)을 확인하세요.
 
 ## 실행 환경과 설치
 
@@ -41,11 +43,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-팀별 Python·패키지 버전은 같을 필요가 없습니다. 자세한 기준은 [버전 호환성 안내](./docs/VERSION_COMPATIBILITY.md)에 있습니다.
+팀별 Python·패키지 버전은 같을 필요가 없습니다. 자세한 기준은 [버전 호환성 안내](./backend/docs/VERSION_COMPATIBILITY.md)에 있습니다.
 
 ## 환경 변수
 
-`.env.example`의 기본 예시는 다음과 같습니다.
+`backend/.env.example`의 기본 예시는 다음과 같습니다.
 
 ```text
 LLM_SERVICE_URL=http://localhost:8001
@@ -63,10 +65,10 @@ $env:LLM_SERVICE_TIMEOUT = "300"
 $env:FRONTEND_ORIGINS = "http://localhost:3000,http://localhost:5173,http://localhost:5500"
 ```
 
-처음 설정할 때 `.env.example`을 `.env`로 복사하면 Backend가 시작할 때 자동으로 읽습니다. `.env`는 Git에 올라가지 않습니다.
+처음 설정할 때 저장소 루트에서 다음 명령으로 예시 파일을 `backend/.env`로 복사하면 Backend가 시작할 때 자동으로 읽습니다. `.env`는 Git에 올라가지 않습니다.
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item backend\.env.example backend\.env
 ```
 
 `FRONTEND_ORIGINS`는 브라우저에서 Backend를 호출할 수 있는 프론트 개발 서버 주소입니다. 쉼표로 구분하고 주소 마지막의 `/`는 생략합니다. 기본 설정은 다음 환경을 지원합니다.
@@ -165,7 +167,7 @@ python -m uvicorn app.main:app --reload
 - 계약된 JSON 응답과 Ollama 오류의 HTTP 변환
 - Backend가 보낸 ID와 필드 이름 유지
 
-기준은 [LLM HTTP 계약](./docs/LLM_HTTP_CONTRACT.md)입니다.
+기준은 [LLM HTTP 계약](./backend/docs/LLM_HTTP_CONTRACT.md)입니다.
 
 ### DB
 
@@ -226,7 +228,7 @@ imjae-workingtree → Backend-main → 공통 main
 
 ## 관련 문서
 
-- [팀별 코드 확인 안내](./docs/TEAM_CODE_GUIDE.md)
-- [팀 연동 계약](./docs/INTEGRATION_CONTRACTS.md)
-- [LLM HTTP 요청·응답 계약](./docs/LLM_HTTP_CONTRACT.md)
-- [팀별 버전 호환성 안내](./docs/VERSION_COMPATIBILITY.md)
+- [팀별 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
+- [팀 연동 계약](./backend/docs/INTEGRATION_CONTRACTS.md)
+- [LLM HTTP 요청·응답 계약](./backend/docs/LLM_HTTP_CONTRACT.md)
+- [팀별 버전 호환성 안내](./backend/docs/VERSION_COMPATIBILITY.md)
