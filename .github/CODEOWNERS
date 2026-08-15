@@ -1,1 +1,5 @@
-/backend/ @a73720177-design @a73720177-design
+# 백엔드 변경 시 팀원 전원에게 리뷰를 요청합니다.
+/backend/ @a73720177-design @candyclothes @kunhee-log @lovelovelyst0419-source
+
+# CODEOWNERS 규칙 자체의 변경도 팀원 검토 대상으로 지정합니다.
+/.github/CODEOWNERS @a73720177-design @candyclothes @kunhee-log @lovelovelyst0419-source
