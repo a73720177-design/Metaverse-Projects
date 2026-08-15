@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager          #시작, 종료시 실행할 작업 정의
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +9,7 @@ from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.dependencies import get_llm_client
+from app.db.database import init_db                                                     # database.py의 테이블 생성 함수 가져오기
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -15,9 +18,16 @@ from app.integrations.llm.client import (
 )
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI): # 아래의 작업  FastAPI에 등록
+    await init_db()             # 없는 테이블 생성
+    yield
+
+
 app = FastAPI(
     title="로컬 AI 발표자료 평가 백엔드",
     version="0.2.0",
+    lifespan=lifespan,
     description=(
         "PPTX·PDF·DOCX 문서를 처리하고 평가자 페르소나 기반 리뷰와 대화를 "
         "제공하는 API입니다. Backend는 요청 검증과 서비스 조합을 담당하고, "

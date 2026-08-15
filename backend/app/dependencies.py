@@ -12,9 +12,9 @@ from app.integrations.llm.legacy_generators import (
     LocalPersonaGenerator,
     UnsupportedLegacyChatGenerator,
 )
-from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository
-from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository
-from app.repositories.review_repository import ReviewRepository, InMemoryReviewRepository
+from app.repositories.agent_repository import AgentRepository, PostgresAgentRepository
+from app.repositories.document_repository import DocumentRepository, PostgresDocumentRepository
+from app.repositories.review_repository import PostgresReviewRepository, ReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
@@ -36,17 +36,17 @@ def get_llm_contract_mode() -> str:
 
 @lru_cache
 def get_agent_repository() -> AgentRepository:
-    return InMemoryAgentRepository()
+    return PostgresAgentRepository()
 
 
 @lru_cache
 def get_document_repository() -> DocumentRepository:
-    return InMemoryDocumentRepository()
+    return PostgresDocumentRepository()
 
 
 @lru_cache
 def get_review_repository() -> ReviewRepository:
-    return InMemoryReviewRepository()
+    return PostgresReviewRepository()
 
 
 @lru_cache
