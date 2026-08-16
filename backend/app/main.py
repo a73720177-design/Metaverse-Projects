@@ -3,13 +3,18 @@ from contextlib import asynccontextmanager          #시작, 종료시 실행할
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_frontend_origin_regex, get_frontend_origins
+from app.config import (
+    get_db_auto_create,
+    get_frontend_origin_regex,
+    get_frontend_origins,
+    get_repository_mode,
+)
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.dependencies import get_llm_client
-from app.db.database import init_db                                                     # database.py의 테이블 생성 함수 가져오기
+from app.db.database import close_db, init_db
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -20,8 +25,14 @@ from app.integrations.llm.client import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI): # 아래의 작업  FastAPI에 등록
-    await init_db()             # 없는 테이블 생성
-    yield
+    postgres_enabled = get_repository_mode() == "postgres"
+    if postgres_enabled and get_db_auto_create():
+        await init_db()
+    try:
+        yield
+    finally:
+        if postgres_enabled:
+            await close_db()
 
 
 app = FastAPI(

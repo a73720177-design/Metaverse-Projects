@@ -45,3 +45,23 @@ def get_frontend_origin_regex() -> str | None:
         return DEFAULT_FRONTEND_ORIGIN_REGEX
 
     return configured_regex.strip() or None
+
+
+def _get_choice(name: str, default: str, choices: set[str]) -> str:
+    value = os.getenv(name, default).strip().lower()
+    if value not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise RuntimeError(f"{name} must be one of: {allowed}")
+    return value
+
+
+def get_repository_mode() -> str:
+    return _get_choice("REPOSITORY_MODE", "memory", {"memory", "postgres"})
+
+
+def get_object_storage_mode() -> str:
+    return _get_choice("OBJECT_STORAGE_MODE", "local", {"local", "minio"})
+
+
+def get_db_auto_create() -> bool:
+    return os.getenv("DB_AUTO_CREATE", "false").strip().lower() in {"1", "true", "yes"}

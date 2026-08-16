@@ -10,5 +10,6 @@ python-docx==1.2.0
 pytest==8.4.1
 pytest-asyncio==1.1.0
 SQLAlchemy==2.0.43
-asyncpg==0.30.0
+greenlet==3.5.5
+asyncpg==0.31.0
 minio==7.2.20

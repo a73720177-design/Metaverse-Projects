@@ -1,7 +1,17 @@
+import os
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "").strip()
+pytestmark = pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="TEST_DATABASE_URL이 설정된 별도 테스트 DB에서만 실행합니다.",
+)
+if TEST_DATABASE_URL:
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from app import config  # noqa: F401 - .env를 먼저 불러옵니다.
 from app.db.database import init_db

@@ -3,7 +3,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.models.document import DocumentParseResponse
-from app.db.database import AsyncSessionLocal
+from app.db.database import get_session_factory
 from app.db.tables import DocumentTable
 
 
@@ -29,7 +29,8 @@ class InMemoryDocumentRepository:
 
 class PostgresDocumentRepository:
     def __init__(self) -> None:
-        self.bucket = os.getenv("MINIO_BUCKET", "documents")
+        storage_mode = os.getenv("OBJECT_STORAGE_MODE", "local").strip().lower()
+        self.bucket = "local" if storage_mode == "local" else os.getenv("MINIO_BUCKET", "documents")
 
     async def save(self, document: DocumentParseResponse) -> None:
         data = document.model_dump(mode="json")
@@ -42,12 +43,12 @@ class PostgresDocumentRepository:
             sections=data["sections"],
             full_text=document.full_text,
         )
-        async with AsyncSessionLocal() as session:
+        async with get_session_factory()() as session:
             await session.merge(row)
             await session.commit()
 
     async def get(self, document_id: UUID) -> DocumentParseResponse | None:
-        async with AsyncSessionLocal() as session:
+        async with get_session_factory()() as session:
             row = await session.get(DocumentTable, document_id)
         if row is None:
             return None

@@ -1,5 +1,47 @@
 # Metaverse Projects
 
+## Backend-CYCL-2 통합 작업 현황 (DB 팀 확인 요청)
+
+작업 브랜치: `backend-cycl-2-integration-fix`
+
+기준 브랜치: `Backend-CYCL-2`
+
+Backend는 DB 팀의 Repository 구현을 유지하면서 외부 인프라가 준비되지 않은 상황에서도
+서버와 테스트를 실행할 수 있도록 다음과 같이 정리했습니다.
+
+- `REPOSITORY_MODE=memory|postgres`로 메모리 저장소와 PostgreSQL을 선택합니다.
+- `OBJECT_STORAGE_MODE=local|minio`로 로컬 파일 저장소와 MinIO를 선택합니다.
+- 기본값은 `memory + local`이므로 DB나 MinIO가 꺼져 있어도 Backend를 실행할 수 있습니다.
+- PostgreSQL 엔진은 실제로 필요할 때 생성하고 서버 종료 시 연결을 정리합니다.
+- `postgresql://` 주소를 `postgresql+asyncpg://`로 자동 변환합니다.
+- `DB_AUTO_CREATE=false`가 기본값이므로 팀 스키마를 임의로 변경하지 않습니다.
+- 업로드 후 DB 저장이 실패하면 이미 저장된 Local/MinIO 파일을 삭제합니다.
+- MinIO 자격 증명의 기본값을 제거했습니다. MinIO 모드에서는 환경 변수 입력이 필수입니다.
+- Python 3.14 호환을 위해 `asyncpg 0.31.0`, `greenlet 3.5.5`를 사용합니다.
+- 기본 테스트 결과는 `16 passed, 1 skipped`입니다. PostgreSQL 통합 테스트는 별도 테스트
+  DB를 `TEST_DATABASE_URL`로 지정해야 실행됩니다.
+
+### DB 팀이 우선 확인할 사항
+
+1. 최종 문서 스키마를 결정해 주세요. 현재 DB의 `document_files`, `document_chunks` 구조와
+   Backend-CYCL-2의 `documents` 테이블 구조가 다릅니다.
+2. 최종 스키마가 정해지면 `AgentTable`, `DocumentTable`, `ReviewTable` 및 세 Repository의
+   필드 매핑이 실제 테이블과 일치하는지 확인해 주세요.
+3. `agents → reviews`, `documents → reviews` 외래 키의 삭제 정책과 인덱스를 결정해 주세요.
+4. `expertise`, `evaluation_style`, `sections`, `claims`, `feedback`, `questions`의 JSONB 형식이
+   Backend Pydantic 모델의 JSON과 일치하는지 확인해 주세요.
+5. 공통 main에서는 `DB_AUTO_CREATE=true`에 의존하지 않도록 버전 관리되는 마이그레이션 SQL과
+   적용 순서를 제공해 주세요.
+6. MinIO bucket과 object key 규칙을 확정해 주세요. 현재 Backend는 bucket 기본 이름을
+   `documents`, object key를 `{document_id}.{확장자}`로 사용합니다.
+7. 팀 공유 DB가 아닌 별도 테스트 DB 주소를 전달해 주세요. Repository 통합 테스트는 데이터를
+   생성하므로 실제 개발 DB를 테스트 대상으로 사용하면 안 됩니다.
+8. 현재 로컬 `.env` 주소의 읽기 연결 검사는 DB 서버 응답 지연(`WinError 121`)으로 완료되지
+   않았습니다. PostgreSQL 실행 상태, 포트, 방화벽 및 접속 허용 주소를 확인해 주세요.
+
+환경 변수와 실행 방법은 [`backend/docs/DB_INTEGRATION.md`](./backend/docs/DB_INTEGRATION.md)를
+기준으로 확인하면 됩니다. 비밀번호와 MinIO 접근 키는 README, 코드, PR에 입력하지 않습니다.
+
 발표 자료를 업로드하면 평가자 페르소나 관점에서 핵심 개념과 비판 질문을 생성하고 대화할 수 있도록 만드는 팀 프로젝트입니다.
 
 이 문서는 공통 `main` 기준의 통합 안내서입니다. 각 팀은 자기 폴더와 팀 main을 소유하고, HTTP·Repository 계약을 통해 연결합니다.

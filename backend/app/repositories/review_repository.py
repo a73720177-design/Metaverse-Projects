@@ -2,7 +2,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.models.review import ReviewResult
-from app.db.database import AsyncSessionLocal
+from app.db.database import get_session_factory
 from app.db.tables import ReviewTable
 
 
@@ -37,12 +37,12 @@ class PostgresReviewRepository:
             feedback=data["feedback"],
             questions=data["questions"],
         )
-        async with AsyncSessionLocal() as session:
+        async with get_session_factory()() as session:
             await session.merge(row)
             await session.commit()
 
     async def get(self, review_id: UUID) -> ReviewResult | None:
-        async with AsyncSessionLocal() as session:
+        async with get_session_factory()() as session:
             row = await session.get(ReviewTable, review_id)
         if row is None:
             return None

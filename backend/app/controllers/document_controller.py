@@ -31,6 +31,8 @@ async def upload_and_parse(
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     saved_path = UPLOAD_DIR / f"{uuid4().hex}{suffix}"
+    object_key: str | None = None
+    uploaded = False
     try:
         saved_path.write_bytes(await file.read())
         document = parse_document(
@@ -38,13 +40,24 @@ async def upload_and_parse(
         )
         object_key = f"{document.document_id}{suffix}"
         await storage.upload(saved_path, object_key, file.content_type)
+        uploaded = True
         document.saved_path = Path(object_key)
         await repository.save(document)
         return document
     except ValueError as exc:
+        if uploaded and object_key is not None:
+            try:
+                await storage.delete(object_key)
+            except Exception:
+                pass
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        if uploaded and object_key is not None:
+            try:
+                await storage.delete(object_key)
+            except Exception:
+                pass
         saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="문서를 처리하지 못했습니다.") from exc
     finally:
