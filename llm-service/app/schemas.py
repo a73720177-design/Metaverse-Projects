@@ -7,7 +7,12 @@ class Concept(BaseModel):
 
 
 class ConceptExtractionRequest(BaseModel):
-    paper_text: str = Field(..., description="개념을 추출할 논문 본문 전체 텍스트")
+    paper_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=200_000,
+        description="개념을 추출할 논문 본문 전체 텍스트",
+    )
 
 
 class ConceptExtractionResponse(BaseModel):
@@ -15,9 +20,18 @@ class ConceptExtractionResponse(BaseModel):
 
 
 class QuestionGenerationRequest(BaseModel):
-    concepts: list[Concept] = Field(..., description="1단계에서 추출된 개념 목록")
-    critical_points: str = Field(..., description="사용자가 평소 중요하게 여기는 관점 (캐릭터 설정)")
-    script_text: str = Field(..., description="비판 대상이 되는 발표 대본")
+    concepts: list[Concept] = Field(
+        ..., min_length=1, max_length=100, description="1단계에서 추출된 개념 목록"
+    )
+    critical_points: str = Field(
+        ...,
+        min_length=1,
+        max_length=5_000,
+        description="사용자가 평소 중요하게 여기는 관점 (캐릭터 설정)",
+    )
+    script_text: str = Field(
+        ..., min_length=1, max_length=200_000, description="비판 대상이 되는 발표 대본"
+    )
 
 
 class Question(BaseModel):
