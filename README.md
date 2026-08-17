@@ -1,5 +1,47 @@
 # Metaverse Projects
 
+## Backend-CYCL-2 통합 작업 현황 (DB 팀 확인 요청)
+
+작업 브랜치: `backend-cycl-2-integration-fix`
+
+기준 브랜치: `Backend-CYCL-2`
+
+Backend는 DB 팀의 Repository 구현을 유지하면서 외부 인프라가 준비되지 않은 상황에서도
+서버와 테스트를 실행할 수 있도록 다음과 같이 정리했습니다.
+
+- `REPOSITORY_MODE=memory|postgres`로 메모리 저장소와 PostgreSQL을 선택합니다.
+- `OBJECT_STORAGE_MODE=local|minio`로 로컬 파일 저장소와 MinIO를 선택합니다.
+- 기본값은 `memory + local`이므로 DB나 MinIO가 꺼져 있어도 Backend를 실행할 수 있습니다.
+- PostgreSQL 엔진은 실제로 필요할 때 생성하고 서버 종료 시 연결을 정리합니다.
+- `postgresql://` 주소를 `postgresql+asyncpg://`로 자동 변환합니다.
+- `DB_AUTO_CREATE=false`가 기본값이므로 팀 스키마를 임의로 변경하지 않습니다.
+- 업로드 후 DB 저장이 실패하면 이미 저장된 Local/MinIO 파일을 삭제합니다.
+- MinIO 자격 증명의 기본값을 제거했습니다. MinIO 모드에서는 환경 변수 입력이 필수입니다.
+- Python 3.14 호환을 위해 `asyncpg 0.31.0`, `greenlet 3.5.5`를 사용합니다.
+- 기본 테스트 결과는 `29 passed, 1 skipped`입니다. PostgreSQL 통합 테스트는 별도 테스트
+  DB를 `TEST_DATABASE_URL`로 지정해야 실행됩니다.
+
+### DB 팀이 우선 확인할 사항
+
+1. 최종 문서 스키마를 결정해 주세요. 현재 DB의 `document_files`, `document_chunks` 구조와
+   Backend-CYCL-2의 `documents` 테이블 구조가 다릅니다.
+2. 최종 스키마가 정해지면 `AgentTable`, `DocumentTable`, `ReviewTable` 및 세 Repository의
+   필드 매핑이 실제 테이블과 일치하는지 확인해 주세요.
+3. `agents → reviews`, `documents → reviews` 외래 키의 삭제 정책과 인덱스를 결정해 주세요.
+4. `expertise`, `evaluation_style`, `sections`, `claims`, `feedback`, `questions`의 JSONB 형식이
+   Backend Pydantic 모델의 JSON과 일치하는지 확인해 주세요.
+5. 공통 main에서는 `DB_AUTO_CREATE=true`에 의존하지 않도록 버전 관리되는 마이그레이션 SQL과
+   적용 순서를 제공해 주세요.
+6. MinIO bucket과 object key 규칙을 확정해 주세요. 현재 Backend는 bucket 기본 이름을
+   `documents`, object key를 `{document_id}.{확장자}`로 사용합니다.
+7. 팀 공유 DB가 아닌 별도 테스트 DB 주소를 전달해 주세요. Repository 통합 테스트는 데이터를
+   생성하므로 실제 개발 DB를 테스트 대상으로 사용하면 안 됩니다.
+8. 현재 로컬 `.env` 주소의 읽기 연결 검사는 DB 서버 응답 지연(`WinError 121`)으로 완료되지
+   않았습니다. PostgreSQL 실행 상태, 포트, 방화벽 및 접속 허용 주소를 확인해 주세요.
+
+환경 변수와 실행 방법은 [`backend/docs/DB_INTEGRATION.md`](./backend/docs/DB_INTEGRATION.md)를
+기준으로 확인하면 됩니다. 비밀번호와 MinIO 접근 키는 README, 코드, PR에 입력하지 않습니다.
+
 발표 자료를 업로드하면 평가자 페르소나 관점에서 핵심 개념과 비판 질문을 생성하고 대화할 수 있도록 만드는 팀 프로젝트입니다.
 
 이 문서는 공통 `main` 기준의 통합 안내서입니다. 각 팀은 자기 폴더와 팀 main을 소유하고, HTTP·Repository 계약을 통해 연결합니다.
@@ -29,9 +71,9 @@ Frontend는 LLM·Ollama·DB를 직접 호출하지 않습니다. Backend도 Olla
 | 영역 | 상태 | 설명 |
 |---|---|---|
 | Backend | 실행 가능 | API, 문서 파싱, CORS, LLM HTTP 연동 구현 |
-| React + Vite | 계약 준비 완료 | Backend CORS와 환경 변수 문서 완료, 실제 Frontend 코드는 아직 원격에 없음 |
-| LLM | 호환 모드 연결 가능 | 현재 `/extract-concepts`, `/generate-questions` API에 맞춘 Backend 어댑터 제공 |
-| Chat | 연동 대기 | LLM 팀의 `/api/v1/chat` 구현 필요 |
+| React + Vite | 계약 조정 필요 | `kstttt`의 임시 `/api/chat/stream`을 Backend UUID 기반 API로 변경 필요 |
+| LLM | PR 리뷰 중 | legacy와 `/api/v1/personas`, `/reviews`, `/chat` 구현 및 Backend mock 계약 검증 완료 |
+| Chat | v1 계약 검증 완료 | LLM-main 병합 후 실제 Ollama 통합 테스트 필요 |
 | PostgreSQL | 접속 확인 | `qwendb` 로그인과 CONNECT·CREATE 권한 확인 |
 | DB 저장 연동 | 연동 대기 | 문서 테이블은 존재하지만 Backend Repository 구현 필요 |
 
@@ -88,7 +130,7 @@ LLM_SERVICE_URL=http://localhost:8001
 LLM_CONTRACT_MODE=legacy_questions
 ```
 
-LLM 팀이 정식 `/api/v1/personas`, `/reviews`, `/chat`을 구현한 뒤에는 다음처럼 전환합니다.
+LLM PR #17이 `LLM-main`에 병합되고 통합 테스트가 끝난 뒤에는 다음처럼 전환합니다.
 
 ```env
 LLM_CONTRACT_MODE=v1
@@ -149,7 +191,7 @@ python integration\check_services.py
 ### LLM
 
 - 현재 코드를 먼저 `LLM-main`에 PR로 병합
-- 장기적으로 `/api/v1/personas`, `/reviews`, `/chat` 계약 구현
+- `/api/v1/personas`, `/reviews`, `/chat` 자동화 테스트와 환경 설정 보완
 - Ollama 오류를 HTTP 502 또는 503으로 명확히 반환
 - 모델 출력은 계약된 JSON으로 검증
 
