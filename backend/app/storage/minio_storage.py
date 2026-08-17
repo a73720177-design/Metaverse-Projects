@@ -4,6 +4,8 @@ from pathlib import Path
 
 from minio import Minio
 
+from app.storage.object_storage import ObjectStorageError
+
 
 class MinioStorage:
     def __init__(self) -> None:
@@ -38,7 +40,13 @@ class MinioStorage:
     async def upload(
         self, source: Path, object_key: str, content_type: str | None = None
     ) -> None:
-        await asyncio.to_thread(self._upload, source, object_key, content_type)
+        try:
+            await asyncio.to_thread(self._upload, source, object_key, content_type)
+        except Exception as exc:
+            raise ObjectStorageError("MinIO upload failed.") from exc
 
     async def delete(self, object_key: str) -> None:
-        await asyncio.to_thread(self.client.remove_object, self.bucket, object_key)
+        try:
+            await asyncio.to_thread(self.client.remove_object, self.bucket, object_key)
+        except Exception as exc:
+            raise ObjectStorageError("MinIO delete failed.") from exc

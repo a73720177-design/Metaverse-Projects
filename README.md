@@ -18,7 +18,7 @@ Backend는 DB 팀의 Repository 구현을 유지하면서 외부 인프라가 �
 - 업로드 후 DB 저장이 실패하면 이미 저장된 Local/MinIO 파일을 삭제합니다.
 - MinIO 자격 증명의 기본값을 제거했습니다. MinIO 모드에서는 환경 변수 입력이 필수입니다.
 - Python 3.14 호환을 위해 `asyncpg 0.31.0`, `greenlet 3.5.5`를 사용합니다.
-- 기본 테스트 결과는 `16 passed, 1 skipped`입니다. PostgreSQL 통합 테스트는 별도 테스트
+- 기본 테스트 결과는 `29 passed, 1 skipped`입니다. PostgreSQL 통합 테스트는 별도 테스트
   DB를 `TEST_DATABASE_URL`로 지정해야 실행됩니다.
 
 ### DB 팀이 우선 확인할 사항
@@ -71,9 +71,9 @@ Frontend는 LLM·Ollama·DB를 직접 호출하지 않습니다. Backend도 Olla
 | 영역 | 상태 | 설명 |
 |---|---|---|
 | Backend | 실행 가능 | API, 문서 파싱, CORS, LLM HTTP 연동 구현 |
-| React + Vite | 계약 준비 완료 | Backend CORS와 환경 변수 문서 완료, 실제 Frontend 코드는 아직 원격에 없음 |
-| LLM | 호환 모드 연결 가능 | 현재 `/extract-concepts`, `/generate-questions` API에 맞춘 Backend 어댑터 제공 |
-| Chat | 연동 대기 | LLM 팀의 `/api/v1/chat` 구현 필요 |
+| React + Vite | 계약 조정 필요 | `kstttt`의 임시 `/api/chat/stream`을 Backend UUID 기반 API로 변경 필요 |
+| LLM | PR 리뷰 중 | legacy와 `/api/v1/personas`, `/reviews`, `/chat` 구현 및 Backend mock 계약 검증 완료 |
+| Chat | v1 계약 검증 완료 | LLM-main 병합 후 실제 Ollama 통합 테스트 필요 |
 | PostgreSQL | 접속 확인 | `qwendb` 로그인과 CONNECT·CREATE 권한 확인 |
 | DB 저장 연동 | 연동 대기 | 문서 테이블은 존재하지만 Backend Repository 구현 필요 |
 
@@ -130,7 +130,7 @@ LLM_SERVICE_URL=http://localhost:8001
 LLM_CONTRACT_MODE=legacy_questions
 ```
 
-LLM 팀이 정식 `/api/v1/personas`, `/reviews`, `/chat`을 구현한 뒤에는 다음처럼 전환합니다.
+LLM PR #17이 `LLM-main`에 병합되고 통합 테스트가 끝난 뒤에는 다음처럼 전환합니다.
 
 ```env
 LLM_CONTRACT_MODE=v1
@@ -191,7 +191,7 @@ python integration\check_services.py
 ### LLM
 
 - 현재 코드를 먼저 `LLM-main`에 PR로 병합
-- 장기적으로 `/api/v1/personas`, `/reviews`, `/chat` 계약 구현
+- `/api/v1/personas`, `/reviews`, `/chat` 자동화 테스트와 환경 설정 보완
 - Ollama 오류를 HTTP 502 또는 503으로 명확히 반환
 - 모델 출력은 계약된 JSON으로 검증
 

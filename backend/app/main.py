@@ -14,7 +14,7 @@ from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.dependencies import get_llm_client
-from app.db.database import close_db, init_db
+from app.db.database import check_db, close_db, init_db
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -87,6 +87,34 @@ def root() -> dict[str, str]:
 )
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(
+    "/health/db",
+    tags=["시스템"],
+    summary="DB 연결 상태 확인",
+    description="현재 Repository 모드와 PostgreSQL 연결 가능 여부를 확인합니다.",
+)
+async def db_health() -> dict[str, str]:
+    repository_mode = get_repository_mode()
+    if repository_mode == "memory":
+        return {
+            "status": "ok",
+            "repository_mode": "memory",
+            "database": "not_configured",
+        }
+    try:
+        await check_db()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="PostgreSQL 연결을 확인할 수 없습니다.",
+        ) from exc
+    return {
+        "status": "ok",
+        "repository_mode": "postgres",
+        "database": "connected",
+    }
 
 
 @app.get(

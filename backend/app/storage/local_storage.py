@@ -3,6 +3,8 @@ import os
 import shutil
 from pathlib import Path
 
+from app.storage.object_storage import ObjectStorageError
+
 
 class LocalStorage:
     """Development object storage backed by a directory on this machine."""
@@ -23,7 +25,13 @@ class LocalStorage:
     ) -> None:
         target = self._target(object_key)
         target.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(shutil.copy2, source, target)
+        try:
+            await asyncio.to_thread(shutil.copy2, source, target)
+        except OSError as exc:
+            raise ObjectStorageError("Local upload failed.") from exc
 
     async def delete(self, object_key: str) -> None:
-        await asyncio.to_thread(self._target(object_key).unlink, missing_ok=True)
+        try:
+            await asyncio.to_thread(self._target(object_key).unlink, missing_ok=True)
+        except OSError as exc:
+            raise ObjectStorageError("Local delete failed.") from exc

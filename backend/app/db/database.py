@@ -2,6 +2,7 @@ import os
 from collections.abc import AsyncIterator
 
 from app import config as app_config  # noqa: F401 - backend/.env를 먼저 불러옵니다.
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -64,6 +65,12 @@ async def init_db() -> None:
 
     async with get_engine().begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+
+
+async def check_db() -> None:
+    """Verify connectivity without reading or changing application data."""
+    async with get_engine().connect() as connection:
+        await connection.execute(text("SELECT 1"))
 
 
 async def close_db() -> None:

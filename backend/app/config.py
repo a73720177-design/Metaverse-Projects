@@ -65,3 +65,14 @@ def get_object_storage_mode() -> str:
 
 def get_db_auto_create() -> bool:
     return os.getenv("DB_AUTO_CREATE", "false").strip().lower() in {"1", "true", "yes"}
+
+
+def get_max_upload_size_bytes() -> int:
+    value = os.getenv("MAX_UPLOAD_SIZE_MB", "25").strip()
+    try:
+        megabytes = int(value)
+    except ValueError as exc:
+        raise RuntimeError("MAX_UPLOAD_SIZE_MB must be an integer.") from exc
+    if megabytes < 1:
+        raise RuntimeError("MAX_UPLOAD_SIZE_MB must be at least 1.")
+    return megabytes * 1024 * 1024
