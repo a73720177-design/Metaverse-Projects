@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from app.llm_client import LLMError, call_llm
+from app.prompts import CONCEPT_EXTRACTION_PROMPT, QUESTION_GENERATION_PROMPT
 from app.schemas import (
     ConceptExtractionRequest,
     ConceptExtractionResponse,
@@ -36,6 +37,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# response_schema로 구조화 출력을 강제해도, Ollama 버전에 따라 강제가 안 통하는
+# 경우를 대비한 방어적 처리로 코드펜스 제거는 남겨둔다.
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
@@ -46,28 +49,23 @@ def health_check():
 
 
 def _build_concept_prompt(paper_text: str) -> str:
-    return (
-        "다음 본문에서 핵심 개념을 추출해라. 다른 설명 없이 JSON으로만 응답해라.\n"
-        '형식: {"concepts": [{"name": "...", "definition": "..."}]}\n\n'
-        f"본문:\n{paper_text}"
-    )
+    return CONCEPT_EXTRACTION_PROMPT.format(paper_text=paper_text)
 
 
 def _build_question_prompt(request: QuestionGenerationRequest) -> str:
-    concepts_text = "\n".join(f"- {c.name}: {c.definition}" for c in request.concepts)
-    return (
-        "아래 개념과 발표 대본을 참고해서, 주어진 평가 관점으로 비판 질문을 만들어라. "
-        "다른 설명 없이 JSON으로만 응답해라.\n"
-        '형식: {"questions": [{"question": "..."}]}\n\n'
-        f"개념:\n{concepts_text}\n\n"
-        f"평가자 관점: {request.critical_points}\n\n"
-        f"발표 대본:\n{request.script_text}"
+    concepts_json = json.dumps(
+        [c.model_dump() for c in request.concepts], ensure_ascii=False
+    )
+    return QUESTION_GENERATION_PROMPT.format(
+        critical_points=request.critical_points,
+        concepts_json=concepts_json,
+        script_text=request.script_text,
     )
 
 
-def _call_llm_as_json(prompt: str) -> dict:
+def _call_llm_as_json(prompt: str, response_schema: dict) -> dict:
     try:
-        raw = call_llm(prompt)
+        raw = call_llm(prompt, response_schema=response_schema)
     except LLMError:
         # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
         # 클라이언트에는 일반화된 메시지만 반환한다.
@@ -85,7 +83,8 @@ def _call_llm_as_json(prompt: str) -> dict:
 
 @app.post("/extract-concepts", response_model=ConceptExtractionResponse)
 def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
-    data = _call_llm_as_json(_build_concept_prompt(request.paper_text))
+    schema = ConceptExtractionResponse.model_json_schema()
+    data = _call_llm_as_json(_build_concept_prompt(request.paper_text), schema)
     try:
         return ConceptExtractionResponse.model_validate(data)
     except ValidationError:
@@ -95,7 +94,8 @@ def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResp
 
 @app.post("/generate-questions", response_model=QuestionGenerationResponse)
 def generate_questions(request: QuestionGenerationRequest) -> QuestionGenerationResponse:
-    data = _call_llm_as_json(_build_question_prompt(request))
+    schema = QuestionGenerationResponse.model_json_schema()
+    data = _call_llm_as_json(_build_question_prompt(request), schema)
     try:
         return QuestionGenerationResponse.model_validate(data)
     except ValidationError:

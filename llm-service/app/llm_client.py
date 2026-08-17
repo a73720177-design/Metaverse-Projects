@@ -1,9 +1,9 @@
 """
 Ollama 로컬 서버(qwen3:14b)를 호출하는 클라이언트.
 
-모델 출력을 구조화된 JSON으로 받고 검증하는 부분(파싱)은 이 모듈이 아니라
-정식 /api/v1 엔드포인트를 설계할 때 함께 정리한다. 이 모듈은 Ollama HTTP
-호출과 연결 오류 처리만 담당한다.
+모델 출력을 구조화된 JSON으로 검증하는 부분(파싱)은 이 모듈이 아니라 호출하는
+쪽(app/main.py)이 담당한다. 이 모듈은 Ollama HTTP 호출, 응답 형식을 JSON
+Schema로 강제하는 것(response_schema), 연결 오류 처리만 담당한다.
 """
 
 import os
@@ -21,9 +21,16 @@ class LLMError(Exception):
     """Ollama 서버 호출 실패 시 발생하는 에러"""
 
 
-def call_llm(prompt: str, model: str | None = None) -> str:
+def call_llm(
+    prompt: str,
+    model: str | None = None,
+    response_schema: dict | None = None,
+) -> str:
     """
     Ollama /api/generate를 호출하고 원본 응답 텍스트를 그대로 반환한다.
+
+    response_schema를 넘기면 Ollama의 structured output 기능으로 모델이
+    해당 JSON Schema를 따르는 출력만 내도록 강제한다.
 
     Raises:
         LLMError: Ollama 서버 호출 실패 시
@@ -33,6 +40,8 @@ def call_llm(prompt: str, model: str | None = None) -> str:
         "prompt": prompt,
         "stream": False,
     }
+    if response_schema is not None:
+        payload["format"] = response_schema
 
     try:
         response = requests.post(
