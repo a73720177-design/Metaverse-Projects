@@ -75,6 +75,7 @@
 
 ### P2 — MVP 연결 후 안정화
 
+- [x] 외부 서비스 없이 실행되는 Backend GitHub Actions CI 추가
 - [ ] LLM timeout 및 제한적 재시도 정책 적용
 - [ ] 대용량 문서를 LLM에 보낼 때 길이 제한 또는 chunk 정책 적용
 - [ ] OCR 결과 계약 정의 후 문서 파서 또는 독립 OCR 서비스와 연결
