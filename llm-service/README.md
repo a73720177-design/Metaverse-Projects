@@ -30,6 +30,22 @@ Ollama(qwen3:14b)를 로컬에서 호출합니다.
 qwen3는 reasoning 모델이라 이 서비스는 `think: false`로 호출해 추론 과정이
 응답에 섞이지 않게 합니다 (`app/llm_client.py`).
 
+### 검증 기록
+
+위 버전 조합으로 5개 엔드포인트 전부 실제 Ollama 호출까지 수동으로 확인했습니다
+(응답이 스키마와 정확히 일치, 잘못된 입력은 LLM 호출 없이 422로 즉시 차단됨).
+
+| 엔드포인트 | 결과 | 응답 시간 |
+|---|---|---|
+| `GET /health`, `GET /api/v1/health` | 200 | 즉시 |
+| `POST /extract-concepts` | 200 | 약 44초 |
+| `POST /generate-questions` | 200 | 약 37초 |
+| `POST /api/v1/personas` | 200 | 약 68초 |
+| `POST /api/v1/reviews` | 200 | 약 57초 |
+| `POST /api/v1/chat` | 200 | 약 22초 |
+
+자동화된 회귀 테스트(pytest)는 아직 없습니다. 위는 수동 확인 기록입니다.
+
 ## 실행 방법
 
 ```bash
@@ -141,8 +157,9 @@ uvicorn app.main:app --reload --port 8001
 - `app/llm_client.py`: Ollama `/api/generate` 호출용 HTTP 클라이언트.
   `response_schema`로 구조화 출력을 강제하고 `think=False`로 추론 과정을 끕니다.
 - `app/prompts.py`: 프롬프트 템플릿. 개념 추출·질문 생성 프롬프트는 맥북/Windows
-  양쪽에서 검증됨. persona/review/chat 프롬프트는 새로 작성해 아직 실기기
-  검증 전입니다.
+  양쪽에서 검증됨. persona/review/chat 프롬프트는 이번에 새로 작성해 위
+  "검증 기록"의 1회 수동 테스트만 거쳤습니다 (반복 실행 시 품질 편차는
+  아직 확인 전).
 - `app/schemas.py`: legacy `/extract-concepts`, `/generate-questions`가 쓰는 스키마.
 - `app/schemas_v1.py`: 정식 `/api/v1` 계약 스키마. Backend의
   `backend/app/models/{persona,document,review,chat}.py`와 필드가 1:1로
