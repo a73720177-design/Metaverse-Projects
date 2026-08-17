@@ -25,12 +25,16 @@ def call_llm(
     prompt: str,
     model: str | None = None,
     response_schema: dict | None = None,
+    think: bool = False,
 ) -> str:
     """
     Ollama /api/generate를 호출하고 원본 응답 텍스트를 그대로 반환한다.
 
     response_schema를 넘기면 Ollama의 structured output 기능으로 모델이
     해당 JSON Schema를 따르는 출력만 내도록 강제한다.
+
+    qwen3는 reasoning 모델이라 think=True면 추론 과정이 응답에 섞여
+    JSON 파싱이 깨질 수 있다. 기본값 False로 추론 과정을 끈다.
 
     Raises:
         LLMError: Ollama 서버 호출 실패 시
@@ -39,6 +43,7 @@ def call_llm(
         "model": model or OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
+        "think": think,
     }
     if response_schema is not None:
         payload["format"] = response_schema
