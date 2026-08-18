@@ -22,7 +22,7 @@ from typing import TypeVar
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from app.llm_client import LLMError, call_llm
+from app.llm_client import LLMError, call_llm, check_ollama_health
 from app.prompts import (
     CHAT_PROMPT,
     CONCEPT_EXTRACTION_PROMPT,
@@ -156,7 +156,14 @@ v1_router = APIRouter(prefix="/api/v1")
 
 @v1_router.get("/health")
 def health_check_v1():
-    """Backend가 LLM 서비스와 Ollama 상태를 확인할 때 호출."""
+    """Backend가 LLM 서비스와 Ollama 상태를 확인할 때 호출.
+
+    INTEGRATION_CONTRACTS.md 계약대로 이 서비스 프로세스뿐 아니라 Ollama
+    연결까지 확인한다. legacy `/health`는 프로세스 생존만 확인하는 단순
+    버전으로 남겨둔다.
+    """
+    if not check_ollama_health():
+        raise HTTPException(status_code=503, detail="Ollama에 연결할 수 없습니다.")
     return {"status": "ok"}
 
 

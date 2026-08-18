@@ -44,7 +44,8 @@ qwen3는 reasoning 모델이라 이 서비스는 `think: false`로 호출해 추
 | `POST /api/v1/reviews` | 200 | 약 57초 |
 | `POST /api/v1/chat` | 200 | 약 22초 |
 
-자동화된 회귀 테스트(pytest)는 아직 없습니다. 위는 수동 확인 기록입니다.
+위는 실제 Ollama를 부른 1회 수동 확인 기록입니다. 매번 반복하기엔 느리므로,
+계약이 깨지지 않는지는 아래 자동화 테스트로 상시 확인합니다.
 
 ## 실행 방법
 
@@ -54,21 +55,39 @@ python -m venv .venv
 .venv\Scripts\activate      # Windows
 # source .venv/bin/activate  # Mac/Linux
 
-# 2. 패키지 설치
+# 2. 환경 변수 설정
+copy .env.example .env      # Windows
+# cp .env.example .env      # Mac/Linux
+# 필요하면 .env 값을 직접 수정 (기본값은 로컬 Ollama 기준으로 이미 맞춰져 있음)
+
+# 3. 패키지 설치
 pip install -r requirements.txt
 
-# 3. 서버 실행
+# 4. 서버 실행
 uvicorn app.main:app --reload --port 8001
 ```
 
 서버가 뜨면 `http://localhost:8001/docs` 에서 Swagger UI로 API를 바로 테스트해볼 수 있습니다.
+
+## 테스트
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/test_main.py`는 `app.main.call_llm`을 mock해서 **실제 Ollama 없이도** 5개
+생성 엔드포인트가 계약대로 200/422/502/503을 반환하는지 검증합니다. 프롬프트나
+스키마를 바꾼 뒤에는 이 테스트부터 돌려서 계약이 안 깨졌는지 확인하세요.
 
 ## API
 
 ### 정식 계약 (`/api/v1`)
 
 #### `GET /api/v1/health`
-서버 상태 확인용. Backend의 `/health/llm`이 호출합니다.
+이 서비스 프로세스뿐 아니라 **Ollama 연결까지 확인**합니다 (`GET {OLLAMA_HOST}/api/tags`
+호출). Ollama에 연결이 안 되면 200이 아니라 **503**을 반환합니다. Backend의
+`/health/llm`이 이 엔드포인트를 호출합니다.
 
 #### `POST /api/v1/personas`
 
@@ -114,7 +133,8 @@ uvicorn app.main:app --reload --port 8001
 ### legacy 호환
 
 #### `GET /health`
-서버 상태 확인용.
+프로세스가 살아있는지만 확인하는 단순 버전입니다. Ollama 상태는 보지 않습니다
+(Ollama까지 확인하려면 `GET /api/v1/health`를 쓰세요).
 
 #### `POST /extract-concepts`
 
@@ -164,4 +184,8 @@ uvicorn app.main:app --reload --port 8001
 - `app/schemas_v1.py`: 정식 `/api/v1` 계약 스키마. Backend의
   `backend/app/models/{persona,document,review,chat}.py`와 필드가 1:1로
   맞아야 하므로, Backend 모델이 바뀌면 이 파일도 같이 맞춥니다.
-- `.env.example`은 아직 git에 커밋하지 않습니다 (`.gitignore` 참고). 로컬에서만 사용하세요.
+- `.env.example`: 실제 값 없이 커밋된 환경 변수 템플릿. `.env`는 `.gitignore`로
+  제외되며, `app/llm_client.py`가 `load_dotenv()`로 로드합니다.
+- `requirements-dev.txt`: `pytest`, `httpx` 등 테스트 전용 의존성. 서비스
+  실행에는 `requirements.txt`만 있으면 됩니다.
+- `tests/test_main.py`: Ollama를 mock한 계약 테스트. "테스트" 섹션 참고.

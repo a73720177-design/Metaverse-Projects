@@ -9,6 +9,10 @@ Schema로 강제하는 것(response_schema), 연결 오류 처리만 담당한�
 import os
 
 import requests
+from dotenv import load_dotenv
+
+# os.getenv()가 모듈 로드 시점에 바로 읽히므로, 반드시 그 전에 .env를 로드해야 한다.
+load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b")
@@ -61,3 +65,12 @@ def call_llm(
         ) from e
 
     return response.json().get("response", "")
+
+
+def check_ollama_health() -> bool:
+    """Ollama가 응답하는지 확인한다. 예외를 던지지 않고 True/False만 반환."""
+    try:
+        response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+        return response.ok
+    except requests.RequestException:
+        return False

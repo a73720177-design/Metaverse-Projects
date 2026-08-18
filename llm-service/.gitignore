@@ -3,6 +3,3 @@ __pycache__/
 .env
 .venv/
 venv/
-
-# 예시 환경변수는 API 설계와 함께 다시 정리할 때까지 추적하지 않음
-.env.example
