@@ -1,8 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { streamChat } from './api'
+import { streamChat, login } from './api'
+
+const MAX_PERSONA_FILE_SIZE = 20 * 1024 * 1024 // 20MB per file
+const ALLOWED_PERSONA_EXTENSIONS = ['.pptx', '.pdf', '.docx']
+
+function fileExtension(fileName) {
+  const match = /\.[^.]+$/.exec(fileName)
+  return match ? match[0].toLowerCase() : ''
+}
+
+function formatFileSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  return `${Math.ceil(bytes / 1024)}KB`
+}
+
+// Turns a localStorage failure into a message a non-technical user can act on.
+function describeStorageError(e) {
+  if (e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014)) {
+    return '저장 공간이 가득 차서 데이터를 저장하지 못했어요. "전체 삭제"로 오래된 채팅을 정리해주세요.'
+  }
+  if (e && e.name === 'SecurityError') {
+    return '브라우저 설정(시크릿 모드, 쿠키/저장소 차단 등)으로 인해 데이터를 저장할 수 없어요. 지금 입력한 내용은 새로고침하면 사라져요.'
+  }
+  return '데이터를 저장하는 중 문제가 발생했어요. 방금 변경한 내용이 저장되지 않았을 수 있어요.'
+}
 
 export default function App() {
-  const [items, setItems] = useState([])
   const [content, setContent] = useState('')
   const [persona, setPersona] = useState(null)
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
@@ -10,27 +33,51 @@ export default function App() {
   const [assistantReply, setAssistantReply] = useState('')
   const [sendError, setSendError] = useState(null)
   const streamAbortRef = useRef(null)
+  const initStorageErrorsRef = useRef([])
   const [chats, setChats] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('chats') || '[]')
     } catch (e) {
+      initStorageErrorsRef.current.push('저장된 채팅 기록이 손상되어 불러오지 못했어요. 채팅 목록이 초기화됐어요.')
       return []
     }
   })
   const [selectedChatId, setSelectedChatId] = useState(null)
   const [activeView, setActiveView] = useState('chats')
   const [historyQuery, setHistoryQuery] = useState('')
-  // Personas are entirely user-created (optionally backed by an uploaded PPT/PDF) — starts blank.
+  // Personas are entirely user-created (optionally backed by an uploaded PPTX/PDF/DOCX) — starts blank.
   const [personas, setPersonas] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('personas') || '[]')
     } catch (e) {
+      initStorageErrorsRef.current.push('저장된 페르소나가 손상되어 불러오지 못했어요. 페르소나 목록이 초기화됐어요.')
       return []
     }
   })
   const [newPersonaName, setNewPersonaName] = useState('')
-  const [newPersonaFile, setNewPersonaFile] = useState(null)
+  const [newPersonaFiles, setNewPersonaFiles] = useState([])
+  const [personaFileError, setPersonaFileError] = useState(null)
+  const [storageWarning, setStorageWarning] = useState(null)
+  const [authUser, setAuthUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('authUser') || 'null')
+    } catch (e) {
+      return null
+    }
+  })
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('authToken') || null)
+  const [loginModalOpen, setLoginModalOpen] = useState(false)
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState(null)
+  const [loginSubmitting, setLoginSubmitting] = useState(false)
   const personaGridRef = useRef(null)
+
+  useEffect(() => {
+    if (initStorageErrorsRef.current.length > 0) {
+      setStorageWarning(initStorageErrorsRef.current.join(' '))
+    }
+  }, [])
 
   useEffect(() => {
     const p = localStorage.getItem('persona')
@@ -39,30 +86,99 @@ export default function App() {
 
   useEffect(() => {
     if (persona) localStorage.setItem('persona', persona)
+    else localStorage.removeItem('persona')
   }, [persona])
 
   useEffect(() => {
     try {
       localStorage.setItem('chats', JSON.stringify(chats))
-    } catch (e) {}
+    } catch (e) {
+      setStorageWarning(describeStorageError(e))
+    }
   }, [chats])
 
   useEffect(() => {
     try {
       localStorage.setItem('personas', JSON.stringify(personas))
-    } catch (e) {}
+    } catch (e) {
+      setStorageWarning(describeStorageError(e))
+    }
   }, [personas])
+
+  useEffect(() => {
+    try {
+      if (authUser) localStorage.setItem('authUser', JSON.stringify(authUser))
+      else localStorage.removeItem('authUser')
+      if (authToken) localStorage.setItem('authToken', authToken)
+      else localStorage.removeItem('authToken')
+    } catch (e) {
+      setStorageWarning(describeStorageError(e))
+    }
+  }, [authUser, authToken])
+
+  function openLoginModal() {
+    setLoginEmail('')
+    setLoginPassword('')
+    setLoginError(null)
+    setLoginModalOpen(true)
+  }
+
+  async function handleLoginSubmit(e) {
+    e.preventDefault()
+    if (!loginEmail.trim() || !loginPassword) return
+    setLoginSubmitting(true)
+    setLoginError(null)
+    try {
+      const { token, user } = await login({ email: loginEmail.trim(), password: loginPassword })
+      setAuthToken(token)
+      setAuthUser(user)
+      setLoginModalOpen(false)
+      setLoginPassword('')
+    } catch (err) {
+      setLoginError(err.message || '로그인에 실패했어요.')
+    } finally {
+      setLoginSubmitting(false)
+    }
+  }
+
+  function handleLogout() {
+    setAuthToken(null)
+    setAuthUser(null)
+  }
 
   function handleAdd(e) {
     e.preventDefault()
     if (!content) return
-    setItems((s) => [...s, { content }])
-    const chatId = Date.now()
-    const newChat = { id: chatId, title: content.slice(0, 40) || '(제목 없음)', content, persona, reply: '', createdAt: chatId }
-    setChats((s) => [newChat, ...s])
-    setSelectedChatId(chatId)
 
-    const messageToSend = content
+    const userMessage = { role: 'user', content }
+    const existingChat = chats.find((c) => c.id === selectedChatId) || null
+
+    let chatId
+    let historyForRequest
+    let personaIdForRequest
+
+    if (existingChat) {
+      // Continue the open thread — keep using the persona it was started
+      // with, not whatever's currently selected in the sidebar.
+      chatId = existingChat.id
+      historyForRequest = [...existingChat.messages, userMessage]
+      personaIdForRequest = existingChat.persona
+      setChats((s) => s.map((c) => (c.id === chatId ? { ...c, messages: historyForRequest } : c)))
+    } else {
+      chatId = Date.now()
+      historyForRequest = [userMessage]
+      personaIdForRequest = persona
+      const newChat = {
+        id: chatId,
+        title: content.slice(0, 40) || '(제목 없음)',
+        persona,
+        createdAt: chatId,
+        messages: historyForRequest,
+      }
+      setChats((s) => [newChat, ...s])
+      setSelectedChatId(chatId)
+    }
+
     setContent('')
 
     if (streamAbortRef.current) streamAbortRef.current.abort()
@@ -75,8 +191,9 @@ export default function App() {
 
     let fullReply = ''
     streamChat({
-      message: messageToSend,
-      persona: personas.find((p) => p.id === persona)?.name || null,
+      messages: historyForRequest,
+      persona: personas.find((p) => p.id === personaIdForRequest)?.name || null,
+      token: authToken,
       signal: controller.signal,
       onDelta: (chunk) => {
         fullReply += chunk
@@ -84,11 +201,15 @@ export default function App() {
       },
       onDone: () => {
         setSending(false)
-        setChats((s) => s.map((c) => (c.id === chatId ? { ...c, reply: fullReply } : c)))
+        setAssistantReply('')
+        if (!fullReply) return
+        setChats((s) => s.map((c) => (
+          c.id === chatId ? { ...c, messages: [...c.messages, { role: 'assistant', content: fullReply }] } : c
+        )))
       },
-      onError: () => {
+      onError: (err) => {
         setSending(false)
-        setSendError('백엔드에 연결할 수 없어요. src/api.js의 API 주소·엔드포인트가 실제 백엔드와 맞는지 확인해주세요.')
+        setSendError(err?.message || '백엔드에 연결할 수 없어요. src/api.js의 API 주소·엔드포인트가 실제 백엔드와 맞는지 확인해주세요.')
       },
     })
   }
@@ -120,9 +241,10 @@ export default function App() {
 
   const templates = Object.fromEntries(personas.map((p) => [p.id, p.template]))
 
-  // When user switches persona, if inputs are empty, prefill them with the persona template.
+  // When user switches persona, if inputs are empty, prefill them with the persona
+  // template — but only for a brand-new conversation, not mid-thread.
   useEffect(() => {
-    if (!content) {
+    if (!content && !selectedChatId) {
       const tpl = templates[persona] || ''
       setContent(tpl)
     }
@@ -131,7 +253,6 @@ export default function App() {
 
   function startNewChat() {
     if (streamAbortRef.current) streamAbortRef.current.abort()
-    setItems([])
     setContent('')
     setActiveView('chats')
     setSelectedChatId(null)
@@ -152,27 +273,53 @@ export default function App() {
     setActiveView('materials')
   }
 
-  // Deliberately load a persona's template into the composer, overwriting any current draft.
+  // Deliberately load a persona's template into the composer, overwriting any
+  // current draft, and start a fresh conversation with it.
   function applyPersonaTemplate(personaId) {
     const tpl = templates[personaId] || ''
     setPersona(personaId)
     setContent(tpl)
+    setSelectedChatId(null)
     setActiveView('chats')
   }
 
   function openNewPersona() {
     setNewPersonaName('')
-    setNewPersonaFile(null)
+    setNewPersonaFiles([])
+    setPersonaFileError(null)
     setActiveView('newPersona')
   }
 
   function handlePersonaFileChange(e) {
-    const file = e.target.files && e.target.files[0]
-    if (!file) return
-    setNewPersonaFile(file)
-    if (!newPersonaName.trim()) {
-      setNewPersonaName(file.name.replace(/\.[^.]+$/, ''))
+    const selected = Array.from(e.target.files || [])
+    e.target.value = '' // allow re-picking the same file(s) later
+    if (selected.length === 0) return
+
+    const accepted = []
+    const errors = []
+    for (const file of selected) {
+      if (!ALLOWED_PERSONA_EXTENSIONS.includes(fileExtension(file.name))) {
+        errors.push(`${file.name}: PPTX, PDF, DOCX 파일만 올릴 수 있어요.`)
+        continue
+      }
+      if (file.size > MAX_PERSONA_FILE_SIZE) {
+        errors.push(`${file.name}: 파일 용량이 너무 커요 (${formatFileSize(file.size)} / 최대 20MB).`)
+        continue
+      }
+      accepted.push(file)
     }
+
+    if (accepted.length > 0) {
+      setNewPersonaFiles((prev) => [...prev, ...accepted])
+      if (!newPersonaName.trim()) {
+        setNewPersonaName(accepted[0].name.replace(/\.[^.]+$/, ''))
+      }
+    }
+    setPersonaFileError(errors.length > 0 ? errors.join(' ') : null)
+  }
+
+  function removePersonaFile(index) {
+    setNewPersonaFiles((s) => s.filter((_, i) => i !== index))
   }
 
   function createPersona(e) {
@@ -180,15 +327,18 @@ export default function App() {
     const name = newPersonaName.trim()
     if (!name) return
     const id = 'persona-' + Date.now()
-    const template = newPersonaFile
-      ? `${newPersonaFile.name} 자료를 참고해서 발표를 준비해주세요.`
+    const fileNames = newPersonaFiles.map((f) => f.name)
+    const template = fileNames.length > 0
+      ? `${fileNames.join(', ')} 자료를 참고해서 발표를 준비해주세요.`
       : `${name} 스타일로 발표를 도와주세요.`
-    const p = { id, name, template, fileName: newPersonaFile ? newPersonaFile.name : null }
+    const p = { id, name, template, fileNames: fileNames.length > 0 ? fileNames : null }
     setPersonas((s) => [...s, p])
     setPersona(id)
     setContent(template)
     setNewPersonaName('')
-    setNewPersonaFile(null)
+    setNewPersonaFiles([])
+    setPersonaFileError(null)
+    setSelectedChatId(null)
     setActiveView('chats')
   }
 
@@ -201,13 +351,18 @@ export default function App() {
     c.title.toLowerCase().includes(historyQuery.trim().toLowerCase())
   )
 
+  const activeChat = chats.find((c) => c.id === selectedChatId) || null
+  const personaIdInView = activeChat ? activeChat.persona : persona
+
   return (
     <div className={`app ${sidebarExpanded ? 'expanded' : ''}`}>
-      <aside
-        className="sidebar"
-        onMouseEnter={() => setSidebarExpanded(true)}
-        onMouseLeave={() => setSidebarExpanded(false)}
-      >
+      {storageWarning && (
+        <div className="storage-warning" role="alert">
+          <span>{storageWarning}</span>
+          <button type="button" onClick={() => setStorageWarning(null)} aria-label="닫기">×</button>
+        </div>
+      )}
+      <aside className="sidebar">
         <div className="brand">
           <div className="brand-row">
             <div className="brand-mark">PH</div>
@@ -276,12 +431,12 @@ export default function App() {
                   className={`history-item ${selectedChatId === c.id ? 'active' : ''}`}
                   onClick={() => {
                     if (streamAbortRef.current) streamAbortRef.current.abort()
-                    setContent(c.content)
                     setSelectedChatId(c.id)
                     setActiveView('chats')
                     setSending(false)
-                    setAssistantReply(c.reply || '')
+                    setAssistantReply('')
                     setSendError(null)
+                    setContent('')
                   }}
                   title={`${c.title} · ${formatTime(c.createdAt)}`}
                 >
@@ -301,7 +456,7 @@ export default function App() {
             <div key={p.id} className="persona-dot-wrap">
               <button
                 className={`persona-dot ${persona === p.id ? 'active' : ''}`}
-                title={p.fileName ? `${p.name} (${p.fileName})` : p.name}
+                title={p.fileNames?.length ? `${p.name} (${p.fileNames.join(', ')})` : p.name}
                 onClick={() => { setPersona(p.id); setActiveView('chats') }}
               >
                 {p.name.slice(0,1)}
@@ -319,93 +474,183 @@ export default function App() {
         </div>
 
         <div className="sidebar-foot">
-          <div className="avatar-sm">유</div>
-          <div className="foot-user">
-            <b>사용자</b>
-          </div>
+          {authUser ? (
+            <>
+              <div className="avatar-sm">{(authUser.name || authUser.email || '유').slice(0, 1)}</div>
+              <div className="foot-user">
+                <b>{authUser.name || authUser.email}</b>
+                <span>{authUser.email}</span>
+              </div>
+              <button type="button" className="logout-btn" onClick={handleLogout}>로그아웃</button>
+            </>
+          ) : (
+            <button type="button" className="login-btn" onClick={openLoginModal}>
+              <div className="avatar-sm avatar-sm-guest">?</div>
+              <span>로그인</span>
+            </button>
+          )}
         </div>
       </aside>
 
+      {loginModalOpen && (
+        <div className="login-modal-backdrop" onClick={() => setLoginModalOpen(false)}>
+          <div className="login-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="login-modal-head">
+              <h3>로그인</h3>
+              <button type="button" className="login-modal-close" onClick={() => setLoginModalOpen(false)} aria-label="닫기">×</button>
+            </div>
+            <form onSubmit={handleLoginSubmit}>
+              <label>
+                이메일
+                <input
+                  type="email"
+                  autoFocus
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
+                />
+              </label>
+              <label>
+                비밀번호
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="비밀번호"
+                  required
+                />
+              </label>
+              {loginError && <p className="login-error">{loginError}</p>}
+              <button type="submit" className="login-submit" disabled={loginSubmitting || !loginEmail.trim() || !loginPassword}>
+                {loginSubmitting ? '로그인 중…' : '로그인'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="container">
         <main className="content">
-          <div className="hero">
-            <div className="hero-avatar"></div>
-            <h1>오늘은 어떤 발표를 도와드릴까요?</h1>
-            {persona ? (
-              <p>선택된 페르소나: <strong>{personas.find(p=>p.id===persona)?.name}</strong></p>
-            ) : (
-              <p style={{ color: '#9ca3af' }}>아직 선택된 페르소나가 없어요. 아래에서 만들어보세요.</p>
-            )}
-
-            <form className="add-form hero-form" onSubmit={handleAdd}>
-              <textarea
-                placeholder="메시지를 입력하세요"
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-              />
-              <div className="hero-form-actions">
-                <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-              </div>
-            </form>
-            {(sending || assistantReply || sendError) && (
-              <div className="assistant-reply">
-                {sendError ? (
-                  <p className="assistant-reply-error">{sendError}</p>
+          {activeChat ? (
+            <div className="thread">
+              <div className="thread-head">
+                <h2>{activeChat.title}</h2>
+                {personaIdInView ? (
+                  <p>선택된 페르소나: <strong>{personas.find(p => p.id === personaIdInView)?.name}</strong></p>
                 ) : (
-                  <>
-                    <div className="assistant-reply-label">{sending ? 'AI 응답 생성 중…' : 'AI 응답'}</div>
-                    <p className="assistant-reply-text">{assistantReply}{sending && <span className="assistant-reply-cursor" />}</p>
-                  </>
+                  <p style={{ color: '#9ca3af' }}>페르소나 없이 진행 중인 대화예요.</p>
                 )}
               </div>
-            )}
-            {/* View-specific panels */}
-            {activeView === 'materials' && (
-              <div className="materials-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
-                <h3>자료</h3>
-                <p style={{ color: '#6b7280', marginBottom: 10 }}>페르소나를 만들 때 올린 자료 목록입니다.</p>
-                {personas.filter((p) => p.fileName).length === 0 && (
-                  <p style={{ color: '#9ca3af' }}>아직 업로드한 자료가 없습니다.</p>
-                )}
-                {personas.filter((p) => p.fileName).map((p) => (
-                  <button key={p.id} className="template-pick" onClick={() => applyPersonaTemplate(p.id)}>
-                    <b>{p.fileName}</b>
-                    <span>{p.name} 페르소나에 연결됨</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {activeView === 'newPersona' && (
-              <div className="new-persona-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
-                <h3>새 페르소나 만들기</h3>
-                <p style={{ color: '#6b7280', marginBottom: 10 }}>이름을 정하고, 원하면 PPT나 PDF 같은 참고 자료를 함께 올려보세요.</p>
-                <form className="new-persona-form" onSubmit={createPersona}>
-                  <input
-                    placeholder="페르소나 이름 — 예: 투자 발표용"
-                    value={newPersonaName}
-                    onChange={(e) => setNewPersonaName(e.target.value)}
-                  />
-                  <label className="file-drop">
-                    <input
-                      type="file"
-                      accept=".ppt,.pptx,.pdf"
-                      onChange={handlePersonaFileChange}
-                      style={{ display: 'none' }}
-                    />
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    <span>{newPersonaFile ? newPersonaFile.name : 'PPT, PDF 자료 올리기 (선택)'}</span>
-                  </label>
-                  <p className="new-persona-note">* 업로드한 파일 내용은 자동으로 분석되지 않아요. 파일명이 템플릿에 참고용으로 표시됩니다.</p>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button type="submit" className="new-persona-submit" disabled={!newPersonaName.trim()}>만들기</button>
-                    <button type="button" className="new-persona-cancel" onClick={() => setActiveView('chats')}>취소</button>
+
+              <div className="thread-messages">
+                {activeChat.messages.map((m, i) => (
+                  <div key={i} className={`thread-msg thread-msg-${m.role}`}>
+                    <div className="thread-msg-bubble">{m.content}</div>
                   </div>
-                </form>
+                ))}
+                {sending && (
+                  <div className="thread-msg thread-msg-assistant">
+                    <div className="thread-msg-bubble">{assistantReply}<span className="assistant-reply-cursor" /></div>
+                  </div>
+                )}
+                {sendError && <p className="assistant-reply-error">{sendError}</p>}
               </div>
-            )}
-          </div>
+
+              <form className="add-form hero-form thread-composer" onSubmit={handleAdd}>
+                <textarea
+                  placeholder="메시지를 입력하세요"
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                />
+                <div className="hero-form-actions">
+                  <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div className="hero">
+              <div className="hero-avatar"></div>
+              <h1>오늘은 어떤 발표를 도와드릴까요?</h1>
+              {persona ? (
+                <p>선택된 페르소나: <strong>{personas.find(p=>p.id===persona)?.name}</strong></p>
+              ) : (
+                <p style={{ color: '#9ca3af' }}>아직 선택된 페르소나가 없어요. 아래에서 만들어보세요.</p>
+              )}
+
+              <form className="add-form hero-form" onSubmit={handleAdd}>
+                <textarea
+                  placeholder="메시지를 입력하세요"
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                />
+                <div className="hero-form-actions">
+                  <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* View-specific panels */}
+          {activeView === 'materials' && (
+            <div className="materials-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
+              <h3>자료</h3>
+              <p style={{ color: '#6b7280', marginBottom: 10 }}>페르소나를 만들 때 올린 자료 목록입니다.</p>
+              {personas.filter((p) => p.fileNames?.length).length === 0 && (
+                <p style={{ color: '#9ca3af' }}>아직 업로드한 자료가 없습니다.</p>
+              )}
+              {personas.filter((p) => p.fileNames?.length).map((p) => (
+                <button key={p.id} className="template-pick" onClick={() => applyPersonaTemplate(p.id)}>
+                  <b>{p.fileNames.join(', ')}</b>
+                  <span>{p.name} 페르소나에 연결됨</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {activeView === 'newPersona' && (
+            <div className="new-persona-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
+              <h3>새 페르소나 만들기</h3>
+              <p style={{ color: '#6b7280', marginBottom: 10 }}>이름을 정하고, 원하면 PPTX나 PDF, DOCX 같은 참고 자료를 함께 올려보세요.</p>
+              <form className="new-persona-form" onSubmit={createPersona}>
+                <input
+                  placeholder="페르소나 이름 — 예: 투자 발표용"
+                  value={newPersonaName}
+                  onChange={(e) => setNewPersonaName(e.target.value)}
+                />
+                <label className="file-drop">
+                  <input
+                    type="file"
+                    accept=".pptx,.pdf,.docx"
+                    multiple
+                    onChange={handlePersonaFileChange}
+                    style={{ display: 'none' }}
+                  />
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <span>{newPersonaFiles.length > 0 ? `${newPersonaFiles.length}개 파일 선택됨` : 'PPTX, PDF, DOCX 자료 올리기 (여러 개 선택 가능)'}</span>
+                </label>
+                {newPersonaFiles.length > 0 && (
+                  <ul className="persona-file-list">
+                    {newPersonaFiles.map((f, i) => (
+                      <li key={`${f.name}-${f.size}-${i}`}>
+                        <span>{f.name}</span>
+                        <button type="button" onClick={() => removePersonaFile(i)} aria-label={`${f.name} 제거`}>×</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {personaFileError && <p className="persona-file-error">{personaFileError}</p>}
+                <p className="new-persona-note">* 업로드한 파일 내용은 자동으로 분석되지 않아요. 파일명이 템플릿에 참고용으로 표시됩니다.</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="submit" className="new-persona-submit" disabled={!newPersonaName.trim()}>만들기</button>
+                  <button type="button" className="new-persona-cancel" onClick={() => setActiveView('chats')}>취소</button>
+                </div>
+              </form>
+            </div>
+          )}
 
           <div className="persona-rail" ref={personaGridRef}>
             <div className="persona-grid">
@@ -425,7 +670,7 @@ export default function App() {
                     <div className="persona-avatar" data-n={idx+1}></div>
                     <div>
                       <div className="persona-name">{p.name}</div>
-                      <div className="persona-tag">{p.fileName ? p.fileName : `페르소나 ${idx+1}`}</div>
+                      <div className="persona-tag">{p.fileNames?.length ? p.fileNames.join(', ') : `페르소나 ${idx+1}`}</div>
                     </div>
                   </div>
                   <div className="persona-desc">{p.name} 스타일로 대화를 시작합니다.</div>
@@ -437,14 +682,6 @@ export default function App() {
               </div>
             </div>
           </div>
-
-          <ul className="items">
-            {items.map((it, i) => (
-              <li key={i}>
-                <p>{it.content}</p>
-              </li>
-            ))}
-          </ul>
         </main>
       </div>
     </div>
