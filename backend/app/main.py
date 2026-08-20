@@ -1,12 +1,20 @@
+from contextlib import asynccontextmanager          #시작, 종료시 실행할 작업 정의
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_frontend_origin_regex, get_frontend_origins
+from app.config import (
+    get_db_auto_create,
+    get_frontend_origin_regex,
+    get_frontend_origins,
+    get_repository_mode,
+)
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.dependencies import get_llm_client
+from app.db.database import check_db, close_db, init_db
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -15,9 +23,22 @@ from app.integrations.llm.client import (
 )
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI): # 아래의 작업  FastAPI에 등록
+    postgres_enabled = get_repository_mode() == "postgres"
+    if postgres_enabled and get_db_auto_create():
+        await init_db()
+    try:
+        yield
+    finally:
+        if postgres_enabled:
+            await close_db()
+
+
 app = FastAPI(
     title="로컬 AI 발표자료 평가 백엔드",
     version="0.2.0",
+    lifespan=lifespan,
     description=(
         "PPTX·PDF·DOCX 문서를 처리하고 평가자 페르소나 기반 리뷰와 대화를 "
         "제공하는 API입니다. Backend는 요청 검증과 서비스 조합을 담당하고, "
@@ -66,6 +87,34 @@ def root() -> dict[str, str]:
 )
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(
+    "/health/db",
+    tags=["시스템"],
+    summary="DB 연결 상태 확인",
+    description="현재 Repository 모드와 PostgreSQL 연결 가능 여부를 확인합니다.",
+)
+async def db_health() -> dict[str, str]:
+    repository_mode = get_repository_mode()
+    if repository_mode == "memory":
+        return {
+            "status": "ok",
+            "repository_mode": "memory",
+            "database": "not_configured",
+        }
+    try:
+        await check_db()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="PostgreSQL 연결을 확인할 수 없습니다.",
+        ) from exc
+    return {
+        "status": "ok",
+        "repository_mode": "postgres",
+        "database": "connected",
+    }
 
 
 @app.get(

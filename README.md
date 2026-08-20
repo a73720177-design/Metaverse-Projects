@@ -1,10 +1,34 @@
 # Metaverse Projects
 
-발표 자료를 업로드하면 평가자 페르소나 관점에서 핵심 개념과 비판 질문을 생성하고 대화할 수 있도록 만드는 팀 프로젝트입니다.
+발표 자료를 업로드하고 평가자 페르소나 관점에서 리뷰와 질문, 대화를 생성하는 팀 프로젝트입니다.
+이 문서는 `imjae-workingtree`에서 검증한 Backend 통합 현황과 다른 팀의 연결 방법을 설명합니다.
 
-이 문서는 공통 `main` 기준의 통합 안내서입니다. 각 팀은 자기 폴더와 팀 main을 소유하고, HTTP·Repository 계약을 통해 연결합니다.
+## 현재 Backend 작업 결과
 
-## 전체 구조
+- FastAPI Controller → Service → Repository 구조
+- PPTX·PDF·DOCX 업로드 및 텍스트 추출
+- Persona·Document·Review·Chat 공개 API
+- 독립 LLM FastAPI 서비스와 HTTP 방식으로 연결
+- LLM legacy 계약과 정식 `/api/v1` 계약을 환경 변수로 선택
+- 메모리 또는 PostgreSQL Repository 선택
+- 로컬 디렉터리 또는 MinIO 파일 저장소 선택
+- React + Vite localhost·Hamachi CORS 지원
+- PostgreSQL·MinIO 오류의 공통 503 응답 처리
+- 파일명·빈 파일·최대 업로드 크기 검증
+- PostgreSQL 연결 지연 초기화 및 종료 시 연결 정리
+- Python 3.14 호환 의존성 적용
+- GitHub Actions Backend CI 적용
+
+현재 자동 테스트 결과는 다음과 같습니다.
+
+```text
+29 passed, 1 skipped
+```
+
+skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 통합 테스트입니다. 별도
+`TEST_DATABASE_URL`을 설정했을 때만 실행됩니다.
+
+## 전체 연결 구조
 
 ```text
 React + Vite :5173
@@ -12,68 +36,29 @@ React + Vite :5173
         ▼
 Backend :8000
    ├─ HTTP ──▶ LLM Service :8001 ──▶ Ollama :11434
-   └─ Repository ──▶ PostgreSQL / MinIO / Vector DB
+   └─ Repository ──▶ PostgreSQL / MinIO
 ```
 
-| 팀 | 공통 main 경로 | 담당 범위 |
-|---|---|---|
-| Frontend | `frontend/` | React + Vite 화면, Backend API 호출 |
-| Backend | `backend/` | 공개 API, 요청 검증, 문서 파싱, 서비스 조합 |
-| LLM | `llm-service/` | 프롬프트, Ollama 호출, 구조화 응답 |
-| DB | `database/` 또는 합의된 독립 경로 | PostgreSQL·MinIO·Vector DB와 Repository |
+- Frontend는 Backend만 호출합니다.
+- Backend는 Ollama를 직접 호출하지 않고 LLM 팀의 FastAPI 서비스를 호출합니다.
+- Controller와 Service는 SQLAlchemy나 MinIO 클라이언트를 직접 사용하지 않습니다.
+- DB와 파일 저장 구현은 Repository·ObjectStorage 인터페이스 뒤에서 교체합니다.
 
-Frontend는 LLM·Ollama·DB를 직접 호출하지 않습니다. Backend도 Ollama나 DB 라이브러리를 Controller에서 직접 호출하지 않습니다.
+## 팀 브랜치 기준 진행 상황
 
-## 현재 통합 상태
+| 팀 | 확인한 작업 브랜치 | 현재 상태 | 다음 연결 조건 |
+|---|---|---|---|
+| Backend | `imjae-workingtree` | 통합 코드와 CI 검증 완료 | `Backend-main` PR 리뷰 및 병합 |
+| LLM | `kunhee-workspace` | legacy API와 정식 `/api/v1` Persona·Review·Chat 구현 | PR #17 수정·병합 후 실제 Ollama 통합 테스트 |
+| Frontend | `kstttt` | React + Vite 화면 구현 | 임시 `/api/chat/stream`을 Backend UUID API로 변경 |
+| DB | `Backend-CYCL-2`, `DB-One-of-kind-1` | PostgreSQL Repository·MinIO 구현과 OCR 실험 존재 | 최종 문서 스키마와 migration 확정 |
 
-| 영역 | 상태 | 설명 |
-|---|---|---|
-| Backend | 실행 가능 | API, 문서 파싱, CORS, LLM HTTP 연동 구현 |
-| React + Vite | 계약 준비 완료 | Backend CORS와 환경 변수 문서 완료, 실제 Frontend 코드는 아직 원격에 없음 |
-| LLM | 호환 모드 연결 가능 | 현재 `/extract-concepts`, `/generate-questions` API에 맞춘 Backend 어댑터 제공 |
-| Chat | 연동 대기 | LLM 팀의 `/api/v1/chat` 구현 필요 |
-| PostgreSQL | 접속 확인 | `qwendb` 로그인과 CONNECT·CREATE 권한 확인 |
-| DB 저장 연동 | 연동 대기 | 문서 테이블은 존재하지만 Backend Repository 구현 필요 |
+## Backend 실행
 
-## 이번 통합 작업 요약
-
-- Backend와 현재 LLM 팀 API 사이에 `legacy_questions` 호환 어댑터 추가
-- React + Vite의 localhost·Hamachi 개발 Origin 허용
-- 공통 서비스 상태 점검 도구 `integration/check_services.py` 추가
-- PostgreSQL `qwendb` 접속과 권한을 읽기 전용 쿼리로 검증
-- DB에 `document_files`, `document_chunks` 테이블이 존재함을 확인
-- 팀별 실행 환경과 공통 main 병합 기준 문서화
-- Backend 자동 테스트 `13 passed`
-
-PostgreSQL 접속 확인은 저장 기능 구현 완료를 뜻하지 않습니다. 현재 Backend는 여전히 메모리 Repository를 사용하므로 서버를 재시작하면 Agent·Document·Review 데이터가 사라집니다.
-
-## 서비스 실행 순서
-
-### 1. Ollama
-
-LLM 담당자 PC에서 실행하고 사용할 모델을 준비합니다.
+Windows PowerShell 기준입니다.
 
 ```powershell
-ollama serve
-ollama pull qwen3:14b
-```
-
-### 2. LLM 서비스
-
-공통 main에 `llm-service/`가 병합된 뒤 해당 폴더에서 실행합니다.
-
-```powershell
-cd llm-service
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --port 8001
-```
-
-### 3. Backend
-
-```powershell
-cd backend
+cd C:\meta_project\backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
@@ -81,126 +66,196 @@ Copy-Item .env.example .env
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-현재 LLM 팀 코드와 연결할 Backend 설정:
+확인 주소:
+
+- Swagger: <http://localhost:8000/docs>
+- Backend 상태: <http://localhost:8000/health>
+- DB 상태: <http://localhost:8000/health/db>
+- Backend → LLM 상태: <http://localhost:8000/health/llm>
+
+## 개발 모드
+
+외부 DB와 MinIO가 준비되지 않았을 때 사용하는 기본 설정입니다.
+
+```env
+REPOSITORY_MODE=memory
+OBJECT_STORAGE_MODE=local
+DB_AUTO_CREATE=false
+MAX_UPLOAD_SIZE_MB=25
+```
+
+- 데이터는 Backend 재시작 시 초기화됩니다.
+- 업로드 원본은 기본적으로 `backend/uploads/objects`에 저장됩니다.
+- DB·MinIO가 꺼져 있어도 Backend 개발과 단위 테스트가 가능합니다.
+
+## PostgreSQL·MinIO 통합 모드
+
+DB 팀과 통합할 때 로컬 `backend/.env`에만 실제 값을 입력합니다.
+
+```env
+REPOSITORY_MODE=postgres
+OBJECT_STORAGE_MODE=minio
+DB_AUTO_CREATE=false
+DATABASE_URL=postgresql://사용자:비밀번호@호스트:5432/qwendb
+MINIO_ENDPOINT=호스트:9000
+MINIO_ACCESS_KEY=접근키
+MINIO_SECRET_KEY=비밀키
+MINIO_BUCKET=documents
+MINIO_SECURE=false
+```
+
+- `.env`는 Git에 커밋하지 않습니다.
+- `postgresql://` 주소는 Backend가 `postgresql+asyncpg://`로 자동 변환합니다.
+- 공통 환경에서는 `DB_AUTO_CREATE=true` 대신 버전 관리되는 migration을 사용합니다.
+- MinIO 기본 관리자 계정은 코드에 포함하지 않습니다.
+
+### DB 팀 확인 사항
+
+1. `documents`와 기존 `document_files + document_chunks` 중 최종 문서 스키마를 확정합니다.
+2. `AgentTable`, `DocumentTable`, `ReviewTable` 필드를 실제 테이블과 맞춥니다.
+3. JSONB 필드와 외래 키 삭제 정책, 인덱스를 확정합니다.
+4. migration SQL과 적용 순서를 제공합니다.
+5. MinIO bucket과 `{document_id}.{확장자}` object key 규칙을 확인합니다.
+6. 공유 개발 DB와 분리된 `TEST_DATABASE_URL`을 제공합니다.
+7. GOT-OCR·Surya는 Repository에 직접 넣지 않고 OCR 입출력 계약을 먼저 정합니다.
+
+자세한 내용은 [DB 통합 안내](./backend/docs/DB_INTEGRATION.md)를 확인합니다.
+
+## LLM 연결
+
+LLM 서비스 기본 주소는 `http://localhost:8001`입니다.
+
+PR #17이 `LLM-main`에 병합되기 전까지는 legacy 모드를 유지합니다.
 
 ```env
 LLM_SERVICE_URL=http://localhost:8001
 LLM_CONTRACT_MODE=legacy_questions
+LLM_SERVICE_TIMEOUT=300
 ```
 
-LLM 팀이 정식 `/api/v1/personas`, `/reviews`, `/chat`을 구현한 뒤에는 다음처럼 전환합니다.
+PR 병합과 실제 통합 테스트가 끝난 뒤 정식 v1로 전환합니다.
 
 ```env
+LLM_SERVICE_URL=http://localhost:8001
 LLM_CONTRACT_MODE=v1
 LLM_API_PREFIX=/api/v1
+LLM_SERVICE_TIMEOUT=300
 ```
 
-### 4. React + Vite
+Backend 계약 테스트는 PR #17의 전체 커밋과 최종 `schemas_v1.py`를 기준으로 다음을 검증합니다.
 
-프론트 프로젝트의 `.env.development.local`에 Backend 주소를 넣습니다.
+- `/api/v1/personas` 요청·응답과 Backend ID 생성
+- `/api/v1/reviews` Persona·Document·Instructions payload
+- LLM 요청에서 내부 `saved_path` 제외
+- `/api/v1/chat`의 선택적 Document 처리
+- `X-Backend-Contract-Version: 1` 헤더
+- LLM 502·503 및 잘못된 JSON 처리
+- LLM 오류 본문의 내부 정보 비노출
+
+### LLM 팀 확인 사항
+
+1. PR #17 제목과 본문을 최종 구현 상태에 맞춥니다.
+2. mock 기반 자동화 테스트를 추가합니다.
+3. `.env` 로딩 방법과 안전한 `.env.example`을 제공합니다.
+4. `/api/v1/health`가 FastAPI만 확인하는지 Ollama·모델까지 확인하는지 명시합니다.
+5. v1 필드나 타입을 변경할 때 Backend 계약 문서를 먼저 함께 수정합니다.
+
+자세한 요청·응답은 [LLM HTTP 계약](./backend/docs/LLM_HTTP_CONTRACT.md)을 확인합니다.
+
+## Frontend 연결
+
+Frontend 환경 변수에는 Backend 주소만 입력합니다.
 
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Hamachi를 사용할 때는 Backend 담당자 주소로 바꿉니다.
+Hamachi에서는 Backend PC의 Hamachi IP를 사용합니다.
 
 ```env
 VITE_API_BASE_URL=http://<Backend-Hamachi-IP>:8000
 ```
 
-Vite 환경 변수에는 비밀번호나 API 키를 넣지 않습니다.
+현재 `kstttt`의 `POST /api/chat/stream`은 Backend에 없는 임시 SSE 계약입니다.
+Backend의 현재 Chat API는 다음과 같습니다.
 
-## 상태 확인
+```http
+POST /agents/{agent_id}/chat
+Content-Type: application/json
+```
 
-개별 주소:
+```json
+{
+  "message": "핵심 문제가 무엇인가요?",
+  "document_id": null
+}
+```
 
-- Frontend: <http://localhost:5173>
-- Backend Swagger: <http://localhost:8000/docs>
-- Backend 상태: <http://localhost:8000/health>
-- Backend → LLM 상태: <http://localhost:8000/health/llm>
-- LLM 상태: <http://localhost:8001/health>
-- Ollama 모델 목록: <http://localhost:11434/api/tags>
+### Frontend 팀 확인 사항
 
-전체 상태 점검:
+1. `POST /agents` 응답의 `agent_id`를 저장합니다.
+2. 문서는 `POST /documents/parse`에 `FormData`로 전송하고 `document_id`를 저장합니다.
+3. Chat과 Review 요청에는 이름 대신 UUID를 사용합니다.
+4. 파일 선택 형식은 Backend와 동일하게 `.pptx,.pdf,.docx`로 설정합니다.
+5. Backend 오류의 `error.code`, `error.message`를 화면에 표시합니다.
+6. 스트리밍이 반드시 필요하면 Frontend만 임의로 가정하지 않고 새 계약으로 협의합니다.
+
+자세한 내용은 [React + Vite 연동 안내](./backend/docs/FRONTEND_INTEGRATION.md)를 확인합니다.
+
+## 주요 Backend API
+
+| 메서드 | 경로 | 용도 |
+|---|---|---|
+| GET | `/health` | Backend 프로세스 상태 |
+| GET | `/health/db` | Repository 모드와 PostgreSQL 상태 |
+| GET | `/health/llm` | LLM 서비스 상태 |
+| POST | `/agents` | 평가자 페르소나 생성 |
+| GET | `/agents/{agent_id}` | 평가자 조회 |
+| POST | `/documents/parse` | 문서 업로드 및 텍스트 추출 |
+| POST | `/agents/{agent_id}/reviews` | 문서 리뷰 생성 |
+| GET | `/reviews/{review_id}` | 리뷰 조회 |
+| POST | `/agents/{agent_id}/chat` | 평가자 관점 대화 |
+
+정확한 필드와 오류 응답은 실행 중인 `/docs`를 기준으로 합니다.
+
+## 테스트와 CI
+
+로컬 테스트:
 
 ```powershell
-Copy-Item integration\.env.example integration\.env
-python integration\check_services.py
+cd C:\meta_project\backend
+.\.venv\Scripts\python.exe -m compileall -q app tests
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-## 팀별 필수 작업
+GitHub Actions의 `Backend CI`는 다음 상황에서 실행됩니다.
 
-공통 main 병합 전 작업의 우선순위, 담당 팀, 완료 조건은 [공통 main 병합 전 체크리스트](./integration/PRE_MAIN_CHECKLIST.md)를 기준으로 합니다. 우선순위는 Backend 통합 흐름의 의존 순서이며 팀의 중요도 순서가 아닙니다.
+- `imjae-workingtree`, `Backend-main`에 Backend 변경 push
+- `Backend-main`, `main` 대상 Backend PR
+- Actions 화면에서 수동 실행
 
-### Frontend
+CI는 Python 3.14, `memory + local` 모드를 사용하며 외부 DB·MinIO·Ollama에 의존하지 않습니다.
 
-- React + Vite 프로젝트를 `frontend/`에 배치
-- `VITE_API_BASE_URL`을 통해 Backend만 호출
-- Backend의 `error.code`, `error.message` 표시
-- 파일 업로드 시 `FormData`의 `Content-Type`을 직접 지정하지 않기
-
-### Backend
-
-- 공개 API와 팀 간 오류 형식 유지
-- LLM 호환 모드는 임시 연결에만 사용
-- DB 팀 구현이 준비되면 `dependencies.py`에서 Repository 교체
-
-### LLM
-
-- 현재 코드를 먼저 `LLM-main`에 PR로 병합
-- 장기적으로 `/api/v1/personas`, `/reviews`, `/chat` 계약 구현
-- Ollama 오류를 HTTP 502 또는 503으로 명확히 반환
-- 모델 출력은 계약된 JSON으로 검증
-
-### DB
-
-- 코드에 MinIO·PostgreSQL 주소와 인증 정보 하드코딩 금지
-- 실험 스크립트를 Backend Repository 또는 독립 DB 서비스로 정리
-- 스키마와 마이그레이션 제공
-- Agent, Document, Review 저장 계약부터 구현
-- 현재 `document_files`, `document_chunks` 스키마를 Backend `DocumentRepository`와 매핑
-
-## 테스트
-
-Backend:
-
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-python -m pytest
-```
-
-현재 기준 결과:
-
-```text
-13 passed
-```
-
-공통 통합 상태:
-
-```powershell
-python integration\check_services.py
-```
-
-## Git 통합 원칙
+## Git 협업 원칙
 
 ```text
 개인 작업 브랜치 → 팀 main → 공통 main
 ```
 
 - 다른 팀 작업 브랜치에 직접 push하지 않습니다.
-- 각 팀 main에서 단독 실행을 확인한 뒤 공통 main PR을 만듭니다.
-- 계약이 달라지면 코드를 억지로 합치지 말고 계약 문서와 예시 JSON을 먼저 수정합니다.
-- rebase, force push, 다른 브랜치 병합은 담당자 확인 후 실행합니다.
-- 공통 main 루트 README는 전체 프로젝트 안내로 유지합니다.
+- 팀 main에서 테스트 후 공통 main PR을 만듭니다.
+- rebase는 담당자 확인 없이 실행하지 않습니다.
+- force push를 사용하지 않습니다.
+- API나 DB 계약이 달라지면 계약 문서와 예시 JSON을 먼저 수정합니다.
+- 비밀번호, 실제 DB URL, MinIO secret을 코드·README·PR에 작성하지 않습니다.
 
 ## 문서
 
-- [공통 서비스 통합 안내](./integration/README.md)
-- [공통 main 병합 전 팀별 체크리스트](./integration/PRE_MAIN_CHECKLIST.md)
-- [팀별 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
+- [Backend 작업 계획과 팀 브랜치 분석](./backend.md)
 - [팀 연동 계약](./backend/docs/INTEGRATION_CONTRACTS.md)
-- [React + Vite 연동](./backend/docs/FRONTEND_INTEGRATION.md)
 - [LLM HTTP 계약](./backend/docs/LLM_HTTP_CONTRACT.md)
+- [DB 통합 안내](./backend/docs/DB_INTEGRATION.md)
+- [React + Vite 연동](./backend/docs/FRONTEND_INTEGRATION.md)
 - [버전 호환성](./backend/docs/VERSION_COMPATIBILITY.md)
+- [팀별 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
+- [공통 main 병합 체크리스트](./integration/PRE_MAIN_CHECKLIST.md)
