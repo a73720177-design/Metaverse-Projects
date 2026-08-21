@@ -1,10 +1,12 @@
 import os
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
+
+from sqlalchemy import delete, select
 
 from app.models.document import DocumentParseResponse
 from app.db.database import get_session_factory
-from app.db.tables import DocumentTable
+from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable
 
 
 class DocumentRepository(Protocol):
@@ -34,31 +36,67 @@ class PostgresDocumentRepository:
 
     async def save(self, document: DocumentParseResponse) -> None:
         data = document.model_dump(mode="json")
+        content_types = {
+            "pdf": "application/pdf",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
         row = DocumentTable(
             document_id=document.document_id,
             filename=document.filename,
             document_type=document.document_type,
-            bucket=self.bucket,
-            object_key=str(document.saved_path),
-            sections=data["sections"],
             full_text=document.full_text,
         )
         async with get_session_factory()() as session:
             await session.merge(row)
+            await session.merge(
+                DocumentFileTable(
+                    document_id=document.document_id,
+                    bucket=self.bucket,
+                    object_key=str(document.saved_path),
+                    content_type=content_types.get(document.document_type),
+                )
+            )
+            await session.execute(
+                delete(DocumentChunkTable).where(
+                    DocumentChunkTable.document_id == document.document_id
+                )
+            )
+            session.add_all(
+                DocumentChunkTable(
+                    chunk_id=uuid4(),
+                    document_id=document.document_id,
+                    chunk_index=section["index"],
+                    content=section["text"],
+                    metadata_json={},
+                )
+                for section in data["sections"]
+            )
             await session.commit()
 
     async def get(self, document_id: UUID) -> DocumentParseResponse | None:
         async with get_session_factory()() as session:
             row = await session.get(DocumentTable, document_id)
-        if row is None:
+            file_row = await session.get(DocumentFileTable, document_id)
+            chunks = (
+                await session.scalars(
+                    select(DocumentChunkTable)
+                    .where(DocumentChunkTable.document_id == document_id)
+                    .order_by(DocumentChunkTable.chunk_index)
+                )
+            ).all()
+        if row is None or file_row is None:
             return None
         return DocumentParseResponse.model_validate(
             {
                 "document_id": row.document_id,
                 "filename": row.filename,
                 "document_type": row.document_type,
-                "saved_path": row.object_key,
-                "sections": row.sections,
+                "saved_path": file_row.object_key,
+                "sections": [
+                    {"index": chunk.chunk_index, "text": chunk.content}
+                    for chunk in chunks
+                ],
                 "full_text": row.full_text,
             }
         )

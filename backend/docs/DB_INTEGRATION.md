@@ -35,10 +35,24 @@ DB_AUTO_CREATE=false
 Python 3.14에서는 빌드 오류가 있는 `asyncpg 0.30.0` 대신 3.14 wheel을 제공하는
 `asyncpg 0.31.0`과 `greenlet 3.5.5`를 사용합니다.
 
-현재 DB에 있는 `document_files`, `document_chunks`와 이 브랜치의 `documents` 테이블은
-구조가 다릅니다. 공통 main 병합 전 DB 팀과 최종 스키마를 하나로 확정해야 합니다.
-운영 기준은 `database/001_initial_schema.sql` 같은 버전 관리 SQL을 권장하며,
-`DB_AUTO_CREATE=true`는 개인 개발 DB에서만 사용합니다.
+문서 저장 구조는 `documents`, `document_files`, `document_chunks`로 분리합니다.
+
+- `documents`: 문서 기본 정보와 전체 텍스트
+- `document_files`: MinIO 또는 로컬 저장소의 bucket, object key, content type
+- `document_chunks`: 순서가 있는 문서 구간과 확장 metadata
+
+새 DB는 `database/001_initial_schema.sql`을 적용합니다. 기존 단일 `documents` 구조에서
+전환할 때는 백업 후 `database/002_split_document_storage.sql`을 적용합니다. 이 migration은
+기존 파일 메타데이터와 sections를 새 테이블로 옮긴 다음 이전 컬럼을 제거합니다.
+`DB_AUTO_CREATE=true`는 개인 개발 DB에서만 사용하고 공유 DB는 버전 관리 SQL을 사용합니다.
+
+적용 순서:
+
+1. 대상 DB를 백업합니다.
+2. 별도 테스트 DB에 `002_split_document_storage.sql`을 먼저 실행합니다.
+3. 이전된 `document_files`, `document_chunks`의 개수와 내용을 확인합니다.
+4. 동일 SQL을 한 번 더 실행해 재실행 안전성을 확인합니다.
+5. 검증 후 공유 DB에 적용합니다.
 
 ## MinIO 연결
 
@@ -53,6 +67,13 @@ MINIO_SECURE=false
 
 MinIO 모드에서는 endpoint, access key, secret key가 모두 필요합니다. 기본 관리자 계정은
 코드에 넣지 않습니다. 로컬 모드의 파일은 기본적으로 `backend/uploads/objects`에 저장됩니다.
+원본 파일의 object key는 `{document_id}/original{suffix}` 형식입니다.
+
+예시:
+
+```text
+12345678-1234-5678-1234-567812345678/original.pdf
+```
 
 ## 테스트
 
@@ -64,6 +85,7 @@ python -m pytest -q
 ```
 
 Repository 통합 테스트는 별도의 테스트 DB 주소를 지정했을 때만 실행됩니다.
+설정 예시는 `backend/.env.test.example`에 있습니다.
 
 ```powershell
 $env:TEST_DATABASE_URL="postgresql://사용자:비밀번호@localhost:5432/qwendb_test"
