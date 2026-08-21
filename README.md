@@ -125,6 +125,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - Backend 상태: <http://localhost:8000/health>
 - DB 상태: <http://localhost:8000/health/db>
 - LLM 상태: <http://localhost:8000/health/llm>
+- 통합 상태: <http://localhost:8000/health/services>
 
 ## 개발 모드
 
@@ -166,6 +167,7 @@ MINIO_SECURE=false
 | GET | `/health` | Backend 프로세스 상태 |
 | GET | `/health/db` | Repository 모드와 PostgreSQL 상태 |
 | GET | `/health/llm` | LLM 서비스 상태 |
+| GET | `/health/services` | Backend·DB·LLM 통합 연결 상태 |
 | POST | `/agents` | 평가자 페르소나 생성 |
 | GET | `/agents/{agent_id}` | 평가자 조회 |
 | POST | `/documents/parse` | 문서 업로드와 텍스트 추출 |

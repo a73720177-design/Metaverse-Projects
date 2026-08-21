@@ -270,6 +270,46 @@ def test_llm_health_uses_versioned_http_service() -> None:
         app.dependency_overrides.clear()
 
 
+def test_services_health_reports_all_backend_dependencies() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/health"
+        return httpx.Response(200, json={"status": "ok"})
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["services"]["backend"]["status"] == "ok"
+        assert payload["services"]["database"]["status"] == "development"
+        assert payload["services"]["database"]["mode"] == "memory"
+        assert payload["services"]["llm"]["status"] == "ok"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("private-host:8001 secret detail")
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "degraded"
+        assert payload["services"]["llm"]["status"] == "unavailable"
+        assert "private-host" not in response.text
+        assert "secret" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
