@@ -43,6 +43,8 @@ VITE_API_BASE_URL=http://25.x.x.x:8000
 
 현재 Backend에는 인증 API와 SSE 채팅 API가 없으므로 로그인 UI와 `/api/chat/stream` 가정은 제거했습니다. 채팅 기록은 화면에서 멀티턴으로 보관하지만 Backend에는 현재 질문 한 건과 선택적 `document_id`를 전송합니다.
 
+화면 상단의 상태 카드는 Backend의 `GET /health/services`를 호출해 Frontend, Backend, DB, LLM 연결을 함께 표시합니다. 15초마다 자동으로 갱신되며 수동 새로고침도 지원합니다. 초록색은 연결됨, 노란색은 외부 PostgreSQL을 사용하지 않는 개발 모드, 빨간색은 연결 실패를 의미합니다.
+
 자세한 요청·응답은 [Frontend API 계약](./FRONTEND_INTEGRATION.md)을 확인합니다.
 
 ## 파일 업로드

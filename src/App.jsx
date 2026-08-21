@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { createAgent, sendChat, uploadDocument } from './api'
+import { checkServices, createAgent, sendChat, uploadDocument } from './api'
 
 const MAX_PERSONA_FILE_SIZE = 25 * 1024 * 1024
 const ALLOWED_PERSONA_EXTENSIONS = ['.pptx', '.pdf', '.docx']
@@ -60,7 +60,59 @@ export default function App() {
   const [personaFileError, setPersonaFileError] = useState(null)
   const [personaSubmitting, setPersonaSubmitting] = useState(false)
   const [storageWarning, setStorageWarning] = useState(null)
+  const [serviceStatus, setServiceStatus] = useState({
+    overall: 'checking',
+    checkedAt: null,
+    services: {
+      frontend: { label: 'Frontend', status: 'ok', message: '현재 화면이 실행 중입니다.' },
+      backend: { label: 'Backend', status: 'checking', message: '확인 중입니다.' },
+      database: { label: 'DB', status: 'checking', message: '확인 중입니다.' },
+      llm: { label: 'LLM', status: 'checking', message: '확인 중입니다.' },
+    },
+  })
+  const [statusRefreshing, setStatusRefreshing] = useState(false)
   const personaGridRef = useRef(null)
+
+  async function refreshServiceStatus(signal) {
+    setStatusRefreshing(true)
+    try {
+      const payload = await checkServices(signal)
+      setServiceStatus({
+        overall: payload.status,
+        checkedAt: new Date(),
+        services: {
+          frontend: { label: 'Frontend', status: 'ok', message: '현재 화면이 실행 중입니다.' },
+          backend: payload.services.backend,
+          database: payload.services.database,
+          llm: payload.services.llm,
+        },
+      })
+    } catch (error) {
+      if (error.name === 'AbortError') return
+      setServiceStatus({
+        overall: 'degraded',
+        checkedAt: new Date(),
+        services: {
+          frontend: { label: 'Frontend', status: 'ok', message: '현재 화면이 실행 중입니다.' },
+          backend: { label: 'Backend', status: 'unavailable', message: 'Backend에 연결할 수 없습니다.' },
+          database: { label: 'DB', status: 'unknown', message: 'Backend 연결 후 확인할 수 있습니다.' },
+          llm: { label: 'LLM', status: 'unknown', message: 'Backend 연결 후 확인할 수 있습니다.' },
+        },
+      })
+    } finally {
+      if (!signal?.aborted) setStatusRefreshing(false)
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    refreshServiceStatus(controller.signal)
+    const timer = window.setInterval(() => refreshServiceStatus(), 15000)
+    return () => {
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     if (initStorageErrorsRef.current.length > 0) {
@@ -459,6 +511,43 @@ export default function App() {
 
       <div className="container">
         <main className="content">
+          <section className="service-status-panel" aria-label="팀 서비스 연결 상태">
+            <div className="service-status-head">
+              <div>
+                <h2>서비스 연결 상태</h2>
+                <p>
+                  {serviceStatus.checkedAt
+                    ? `${serviceStatus.checkedAt.toLocaleTimeString()} 기준`
+                    : '연결 상태 확인 중'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => refreshServiceStatus()}
+                disabled={statusRefreshing}
+              >
+                {statusRefreshing ? '확인 중…' : '새로고침'}
+              </button>
+            </div>
+            <div className="service-status-grid">
+              {Object.entries(serviceStatus.services).map(([key, service]) => (
+                <article className={`service-status-card status-${service.status}`} key={key}>
+                  <div className="service-status-title">
+                    <span className="service-status-dot" aria-hidden="true" />
+                    <strong>{service.label}</strong>
+                    <span className="service-status-value">
+                      {service.status === 'ok' && '연결됨'}
+                      {service.status === 'development' && '개발 모드'}
+                      {service.status === 'unavailable' && '연결 안 됨'}
+                      {service.status === 'unknown' && '확인 불가'}
+                      {service.status === 'checking' && '확인 중'}
+                    </span>
+                  </div>
+                  <p>{service.message || '정상적으로 연결되어 있습니다.'}</p>
+                </article>
+              ))}
+            </div>
+          </section>
           {activeChat ? (
             <div className="thread">
               <div className="thread-head">

@@ -19,6 +19,14 @@ Backend 오류의 기본 형식은 다음과 같습니다.
 
 Frontend는 `error.message`, `detail`, `message` 순서로 사용자용 오류 문구를 찾습니다.
 
+## 통합 상태
+
+```http
+GET /health/services
+```
+
+Frontend는 이 응답과 현재 브라우저 실행 상태를 합쳐 Frontend, Backend, DB, LLM 상태를 한 화면에 표시합니다. 15초마다 자동 갱신하며 수동 새로고침도 지원합니다. 상태 응답에는 내부 URL, 비밀번호, 예외 원문을 포함하지 않습니다.
+
 ## 페르소나 생성
 
 ```http

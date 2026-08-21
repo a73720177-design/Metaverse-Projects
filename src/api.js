@@ -27,8 +27,8 @@ async function apiFetch(path, options = {}) {
   return response.json()
 }
 
-export function checkBackend(signal) {
-  return apiFetch('/health', { signal })
+export function checkServices(signal) {
+  return apiFetch('/health/services', { signal })
 }
 
 export function createAgent({ name, description }, signal) {
