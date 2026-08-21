@@ -2,7 +2,7 @@
 
 확인일: 2026-08-22
 
-이 문서는 각 파트의 최신 원격 브랜치와 열린 Pull Request를 비교하여, 현재 통합 상태와 다음 작업을 공유하기 위한 문서입니다. 실제 API의 최종 기준은 실행 중인 Backend의 `/docs`와 `backend/docs/` 아래 계약 문서입니다.
+이 문서는 각 파트의 최신 원격 브랜치와 열린 Pull Request를 비교하여 현재 통합 상태와 다음 작업을 공유합니다. 실제 API의 최종 기준은 실행 중인 Backend의 `/docs`와 `backend/docs/` 아래 계약 문서입니다.
 
 ## 현재 기준 브랜치
 
@@ -14,7 +14,7 @@
 | LLM | `LLM-main` | `kunhee-workspace` | legacy 및 정식 v1 API가 작업 브랜치에 있으며 PR #17 변경 요청 상태 |
 | DB | `DB-main` | `Backend-CYCL-2`, `DB-One-of-kind-1` | 문서 저장 구조와 OCR 실험이 여러 브랜치에 나뉘어 있음 |
 
-파트별 main보다 작업 브랜치가 최신인 경우가 있으므로, 연동 작업 전에는 대상 PR과 최신 커밋을 함께 확인해야 합니다.
+파트별 main보다 작업 브랜치가 최신인 경우가 있으므로 연동 작업 전에는 대상 PR과 최신 커밋을 함께 확인해야 합니다.
 
 ## 열린 Pull Request
 
@@ -60,7 +60,7 @@
 - `002_split_document_storage.sql` 마이그레이션
 - `{document_id}/original{suffix}` 형식의 객체 저장 경로
 
-다만 이 브랜치는 최신 `Backend-main`의 모든 안전장치를 포함하지 않으므로 전체 코드를 그대로 적용하면 안 됩니다. 최신 Backend 구조를 유지하면서 모델, repository, migration 변경을 선별하여 연결해야 합니다.
+이 브랜치는 최신 `Backend-main`의 모든 안전장치를 포함하지 않으므로 전체 코드를 그대로 적용하면 안 됩니다. 최신 Backend 구조를 유지하면서 모델, repository, migration 변경을 선별하여 연결해야 합니다.
 
 유지해야 하는 Backend 동작:
 
@@ -137,12 +137,7 @@
 
 ## Ruleset 확인 결과
 
-파트별 main(`Backend-main`, `Frontend-main`, `LLM-main`, `DB-main`)에는 다음 보호가 적용되어 있습니다.
-
-- 브랜치 삭제 및 force push 금지
-- Pull Request 필수
-- 승인 1명과 리뷰 대화 해결 필요
-- squash merge만 허용
+파트별 main(`Backend-main`, `Frontend-main`, `LLM-main`, `DB-main`)에는 브랜치 삭제 및 force push 금지, Pull Request 필수, 승인 1명, 리뷰 대화 해결, squash merge 제한이 적용되어 있습니다.
 
 승인 후 새 커밋이 추가되어도 기존 승인이 유지될 수 있으므로 `Dismiss stale approvals when new commits are pushed` 활성화를 권장합니다.
 
