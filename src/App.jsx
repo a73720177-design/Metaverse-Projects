@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { streamChat, login } from './api'
+import { createAgent, sendChat, uploadDocument } from './api'
 
-const MAX_PERSONA_FILE_SIZE = 20 * 1024 * 1024 // 20MB per file
+const MAX_PERSONA_FILE_SIZE = 25 * 1024 * 1024
 const ALLOWED_PERSONA_EXTENSIONS = ['.pptx', '.pdf', '.docx']
 
 function fileExtension(fileName) {
@@ -55,22 +55,11 @@ export default function App() {
     }
   })
   const [newPersonaName, setNewPersonaName] = useState('')
+  const [newPersonaDescription, setNewPersonaDescription] = useState('')
   const [newPersonaFiles, setNewPersonaFiles] = useState([])
   const [personaFileError, setPersonaFileError] = useState(null)
+  const [personaSubmitting, setPersonaSubmitting] = useState(false)
   const [storageWarning, setStorageWarning] = useState(null)
-  const [authUser, setAuthUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('authUser') || 'null')
-    } catch (e) {
-      return null
-    }
-  })
-  const [authToken, setAuthToken] = useState(() => localStorage.getItem('authToken') || null)
-  const [loginModalOpen, setLoginModalOpen] = useState(false)
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
-  const [loginError, setLoginError] = useState(null)
-  const [loginSubmitting, setLoginSubmitting] = useState(false)
   const personaGridRef = useRef(null)
 
   useEffect(() => {
@@ -105,68 +94,33 @@ export default function App() {
     }
   }, [personas])
 
-  useEffect(() => {
-    try {
-      if (authUser) localStorage.setItem('authUser', JSON.stringify(authUser))
-      else localStorage.removeItem('authUser')
-      if (authToken) localStorage.setItem('authToken', authToken)
-      else localStorage.removeItem('authToken')
-    } catch (e) {
-      setStorageWarning(describeStorageError(e))
-    }
-  }, [authUser, authToken])
-
-  function openLoginModal() {
-    setLoginEmail('')
-    setLoginPassword('')
-    setLoginError(null)
-    setLoginModalOpen(true)
-  }
-
-  async function handleLoginSubmit(e) {
+  async function handleAdd(e) {
     e.preventDefault()
-    if (!loginEmail.trim() || !loginPassword) return
-    setLoginSubmitting(true)
-    setLoginError(null)
-    try {
-      const { token, user } = await login({ email: loginEmail.trim(), password: loginPassword })
-      setAuthToken(token)
-      setAuthUser(user)
-      setLoginModalOpen(false)
-      setLoginPassword('')
-    } catch (err) {
-      setLoginError(err.message || '로그인에 실패했어요.')
-    } finally {
-      setLoginSubmitting(false)
-    }
-  }
+    const message = content.trim()
+    if (!message || sending) return
 
-  function handleLogout() {
-    setAuthToken(null)
-    setAuthUser(null)
-  }
-
-  function handleAdd(e) {
-    e.preventDefault()
-    if (!content) return
-
-    const userMessage = { role: 'user', content }
+    const userMessage = { role: 'user', content: message }
     const existingChat = chats.find((c) => c.id === selectedChatId) || null
+    const intendedPersonaId = existingChat?.persona || persona
+    const selectedPersona = personas.find((p) => p.id === intendedPersonaId)
+    if (!selectedPersona?.agentId) {
+      setSendError('Backend에 등록된 페르소나를 먼저 만들어 선택해주세요.')
+      return
+    }
 
     let chatId
-    let historyForRequest
     let personaIdForRequest
 
     if (existingChat) {
       // Continue the open thread — keep using the persona it was started
       // with, not whatever's currently selected in the sidebar.
       chatId = existingChat.id
-      historyForRequest = [...existingChat.messages, userMessage]
+      const historyForRequest = [...existingChat.messages, userMessage]
       personaIdForRequest = existingChat.persona
       setChats((s) => s.map((c) => (c.id === chatId ? { ...c, messages: historyForRequest } : c)))
     } else {
       chatId = Date.now()
-      historyForRequest = [userMessage]
+      const historyForRequest = [userMessage]
       personaIdForRequest = persona
       const newChat = {
         id: chatId,
@@ -189,29 +143,28 @@ export default function App() {
     setAssistantReply('')
     setSendError(null)
 
-    let fullReply = ''
-    streamChat({
-      messages: historyForRequest,
-      persona: personas.find((p) => p.id === personaIdForRequest)?.name || null,
-      token: authToken,
-      signal: controller.signal,
-      onDelta: (chunk) => {
-        fullReply += chunk
-        setAssistantReply(fullReply)
-      },
-      onDone: () => {
-        setSending(false)
-        setAssistantReply('')
-        if (!fullReply) return
-        setChats((s) => s.map((c) => (
-          c.id === chatId ? { ...c, messages: [...c.messages, { role: 'assistant', content: fullReply }] } : c
-        )))
-      },
-      onError: (err) => {
-        setSending(false)
-        setSendError(err?.message || '백엔드에 연결할 수 없어요. src/api.js의 API 주소·엔드포인트가 실제 백엔드와 맞는지 확인해주세요.')
-      },
-    })
+    try {
+      const response = await sendChat({
+        agentId: selectedPersona?.agentId,
+        message: userMessage.content,
+        documentId: selectedPersona?.documentId || null,
+        signal: controller.signal,
+      })
+      const fullReply = response.answer
+      setChats((s) => s.map((c) => (
+        c.id === chatId
+          ? { ...c, messages: [...c.messages, { role: 'assistant', content: fullReply }] }
+          : c
+      )))
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setSendError(err?.message || 'Backend에 연결할 수 없습니다.')
+      }
+    } finally {
+      setSending(false)
+      setAssistantReply('')
+      if (streamAbortRef.current === controller) streamAbortRef.current = null
+    }
   }
 
   function deleteChat(id) {
@@ -285,6 +238,7 @@ export default function App() {
 
   function openNewPersona() {
     setNewPersonaName('')
+    setNewPersonaDescription('')
     setNewPersonaFiles([])
     setPersonaFileError(null)
     setActiveView('newPersona')
@@ -303,14 +257,14 @@ export default function App() {
         continue
       }
       if (file.size > MAX_PERSONA_FILE_SIZE) {
-        errors.push(`${file.name}: 파일 용량이 너무 커요 (${formatFileSize(file.size)} / 최대 20MB).`)
+        errors.push(`${file.name}: 파일 용량이 너무 커요 (${formatFileSize(file.size)} / 최대 25MB).`)
         continue
       }
       accepted.push(file)
     }
 
     if (accepted.length > 0) {
-      setNewPersonaFiles((prev) => [...prev, ...accepted])
+      setNewPersonaFiles([accepted[0]])
       if (!newPersonaName.trim()) {
         setNewPersonaName(accepted[0].name.replace(/\.[^.]+$/, ''))
       }
@@ -322,24 +276,45 @@ export default function App() {
     setNewPersonaFiles((s) => s.filter((_, i) => i !== index))
   }
 
-  function createPersona(e) {
+  async function createPersona(e) {
     e.preventDefault()
     const name = newPersonaName.trim()
-    if (!name) return
-    const id = 'persona-' + Date.now()
-    const fileNames = newPersonaFiles.map((f) => f.name)
-    const template = fileNames.length > 0
-      ? `${fileNames.join(', ')} 자료를 참고해서 발표를 준비해주세요.`
-      : `${name} 스타일로 발표를 도와주세요.`
-    const p = { id, name, template, fileNames: fileNames.length > 0 ? fileNames : null }
-    setPersonas((s) => [...s, p])
-    setPersona(id)
-    setContent(template)
-    setNewPersonaName('')
-    setNewPersonaFiles([])
+    const description = newPersonaDescription.trim()
+    if (!name || !description || personaSubmitting) return
+
+    setPersonaSubmitting(true)
     setPersonaFileError(null)
-    setSelectedChatId(null)
-    setActiveView('chats')
+    try {
+      const agent = await createAgent({ name, description })
+      const uploaded = newPersonaFiles[0]
+        ? await uploadDocument(newPersonaFiles[0])
+        : null
+      const id = agent.agent_id
+      const template = uploaded
+        ? `${uploaded.filename} 자료를 참고해서 발표를 검토해주세요.`
+        : `${name}의 관점에서 발표를 검토해주세요.`
+      const p = {
+        id,
+        agentId: agent.agent_id,
+        name: agent.name,
+        description,
+        template,
+        documentId: uploaded?.document_id || null,
+        fileNames: uploaded ? [uploaded.filename] : null,
+      }
+      setPersonas((s) => [...s, p])
+      setPersona(id)
+      setContent(template)
+      setNewPersonaName('')
+      setNewPersonaDescription('')
+      setNewPersonaFiles([])
+      setSelectedChatId(null)
+      setActiveView('chats')
+    } catch (err) {
+      setPersonaFileError(err?.message || '페르소나를 만들지 못했습니다.')
+    } finally {
+      setPersonaSubmitting(false)
+    }
   }
 
   function deletePersona(id) {
@@ -474,61 +449,13 @@ export default function App() {
         </div>
 
         <div className="sidebar-foot">
-          {authUser ? (
-            <>
-              <div className="avatar-sm">{(authUser.name || authUser.email || '유').slice(0, 1)}</div>
-              <div className="foot-user">
-                <b>{authUser.name || authUser.email}</b>
-                <span>{authUser.email}</span>
-              </div>
-              <button type="button" className="logout-btn" onClick={handleLogout}>로그아웃</button>
-            </>
-          ) : (
-            <button type="button" className="login-btn" onClick={openLoginModal}>
-              <div className="avatar-sm avatar-sm-guest">?</div>
-              <span>로그인</span>
-            </button>
-          )}
-        </div>
-      </aside>
-
-      {loginModalOpen && (
-        <div className="login-modal-backdrop" onClick={() => setLoginModalOpen(false)}>
-          <div className="login-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="login-modal-head">
-              <h3>로그인</h3>
-              <button type="button" className="login-modal-close" onClick={() => setLoginModalOpen(false)} aria-label="닫기">×</button>
-            </div>
-            <form onSubmit={handleLoginSubmit}>
-              <label>
-                이메일
-                <input
-                  type="email"
-                  autoFocus
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  required
-                />
-              </label>
-              <label>
-                비밀번호
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  placeholder="비밀번호"
-                  required
-                />
-              </label>
-              {loginError && <p className="login-error">{loginError}</p>}
-              <button type="submit" className="login-submit" disabled={loginSubmitting || !loginEmail.trim() || !loginPassword}>
-                {loginSubmitting ? '로그인 중…' : '로그인'}
-              </button>
-            </form>
+          <div className="avatar-sm avatar-sm-guest">API</div>
+          <div className="foot-user">
+            <b>Backend 연결 모드</b>
+            <span>로그인은 현재 MVP 범위에서 제외</span>
           </div>
         </div>
-      )}
+      </aside>
 
       <div className="container">
         <main className="content">
@@ -562,6 +489,7 @@ export default function App() {
                   placeholder="메시지를 입력하세요"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
+                  maxLength={5000}
                 />
                 <div className="hero-form-actions">
                   <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
@@ -585,6 +513,7 @@ export default function App() {
                   placeholder="메시지를 입력하세요"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
+                  maxLength={5000}
                 />
                 <div className="hero-form-actions">
                   <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
@@ -620,17 +549,25 @@ export default function App() {
                   placeholder="페르소나 이름 — 예: 투자 발표용"
                   value={newPersonaName}
                   onChange={(e) => setNewPersonaName(e.target.value)}
+                  maxLength={100}
+                  required
+                />
+                <textarea
+                  placeholder="평가자의 전문 분야와 평가 기준을 설명해주세요."
+                  value={newPersonaDescription}
+                  onChange={(e) => setNewPersonaDescription(e.target.value)}
+                  maxLength={5000}
+                  required
                 />
                 <label className="file-drop">
                   <input
                     type="file"
                     accept=".pptx,.pdf,.docx"
-                    multiple
                     onChange={handlePersonaFileChange}
                     style={{ display: 'none' }}
                   />
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  <span>{newPersonaFiles.length > 0 ? `${newPersonaFiles.length}개 파일 선택됨` : 'PPTX, PDF, DOCX 자료 올리기 (여러 개 선택 가능)'}</span>
+                  <span>{newPersonaFiles.length > 0 ? newPersonaFiles[0].name : 'PPTX, PDF, DOCX 자료 올리기 (선택)'}</span>
                 </label>
                 {newPersonaFiles.length > 0 && (
                   <ul className="persona-file-list">
@@ -643,10 +580,12 @@ export default function App() {
                   </ul>
                 )}
                 {personaFileError && <p className="persona-file-error">{personaFileError}</p>}
-                <p className="new-persona-note">* 업로드한 파일 내용은 자동으로 분석되지 않아요. 파일명이 템플릿에 참고용으로 표시됩니다.</p>
+                <p className="new-persona-note">* 선택한 파일은 Backend에 업로드되어 채팅 문맥으로 사용됩니다.</p>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="submit" className="new-persona-submit" disabled={!newPersonaName.trim()}>만들기</button>
-                  <button type="button" className="new-persona-cancel" onClick={() => setActiveView('chats')}>취소</button>
+                  <button type="submit" className="new-persona-submit" disabled={personaSubmitting || !newPersonaName.trim() || !newPersonaDescription.trim()}>
+                    {personaSubmitting ? 'Backend에 등록 중…' : '만들기'}
+                  </button>
+                  <button type="button" className="new-persona-cancel" disabled={personaSubmitting} onClick={() => setActiveView('chats')}>취소</button>
                 </div>
               </form>
             </div>
