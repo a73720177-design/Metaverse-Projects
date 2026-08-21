@@ -2,7 +2,9 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.dependencies import (
     get_chat_service,
@@ -18,6 +20,7 @@ from app.repositories.document_repository import InMemoryDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import HttpPersonaGenerator
+from app.integrations.llm.contracts import ReviewGeneratorError
 from app.integrations.llm.legacy_generators import (
     LegacyQuestionReviewGenerator,
     LocalPersonaGenerator,
@@ -43,6 +46,16 @@ def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_db_health_reports_memory_mode_without_external_db() -> None:
+    response = client.get("/health/db")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "repository_mode": "memory",
+        "database": "not_configured",
+    }
 
 
 def test_cors_preflight_allows_known_frontend_origin() -> None:
@@ -84,6 +97,26 @@ def test_rejects_unsupported_document() -> None:
     response = client.post("/documents/parse", files={"file": ("sample.txt", b"hello", "text/plain")})
     assert response.status_code == 415
     assert response.json()["error"]["code"] == "http_415"
+
+
+def test_rejects_empty_supported_document() -> None:
+    response = client.post(
+        "/documents/parse",
+        files={"file": ("sample.pdf", b"", "application/pdf")},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "빈 파일은 업로드할 수 없습니다."
+
+
+def test_rejects_document_over_configured_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_UPLOAD_SIZE_MB", "1")
+    response = client.post(
+        "/documents/parse",
+        files={"file": ("large.pdf", b"x" * (1024 * 1024 + 1), "application/pdf")},
+    )
+    assert response.status_code == 413
 
 
 class FakePersonaGenerator:
@@ -237,6 +270,46 @@ def test_llm_health_uses_versioned_http_service() -> None:
         app.dependency_overrides.clear()
 
 
+def test_services_health_reports_all_backend_dependencies() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/health"
+        return httpx.Response(200, json={"status": "ok"})
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["services"]["backend"]["status"] == "ok"
+        assert payload["services"]["database"]["status"] == "development"
+        assert payload["services"]["database"]["mode"] == "memory"
+        assert payload["services"]["llm"]["status"] == "ok"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("private-host:8001 secret detail")
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "degraded"
+        assert payload["services"]["llm"]["status"] == "unavailable"
+        assert "private-host" not in response.text
+        assert "secret" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
@@ -246,6 +319,33 @@ def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
         )
     )
     assert result["role"] == "Evaluator"
+
+
+def test_database_failure_uses_safe_common_error_response() -> None:
+    class FailingAgentRepository:
+        async def save(self, persona: PersonaProfile) -> None:
+            raise SQLAlchemyError("sensitive database detail")
+
+        async def get(self, agent_id: UUID) -> PersonaProfile | None:
+            return None
+
+    service = PersonaService(LocalPersonaGenerator(), FailingAgentRepository())
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        response = client.post(
+            "/agents",
+            json={"name": "Professor", "description": "Evidence focused"},
+        )
+        assert response.status_code == 503
+        assert response.json() == {
+            "error": {
+                "code": "database_unavailable",
+                "message": "데이터베이스를 일시적으로 사용할 수 없습니다.",
+            }
+        }
+        assert "sensitive" not in response.text
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_legacy_review_adapts_current_llm_team_contract() -> None:
@@ -286,3 +386,30 @@ def test_legacy_review_adapts_current_llm_team_contract() -> None:
 
     assert requested_paths == ["/extract-concepts", "/generate-questions"]
     assert result["questions"] == ["근거는 무엇인가요?"]
+
+
+def test_legacy_review_rejects_invalid_concept_contract() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/extract-concepts":
+            return httpx.Response(200, json={"concepts": [{"name": "AI"}]})
+        raise AssertionError("질문 API는 호출되면 안 됩니다.")
+
+    import asyncio
+
+    generator = LegacyQuestionReviewGenerator(
+        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
+    )
+    with pytest.raises(ReviewGeneratorError, match="definition"):
+        asyncio.run(
+            generator.generate(
+                PersonaProfile(name="Evaluator", description="Evidence"),
+                DocumentParseResponse(
+                    filename="slides.pdf",
+                    document_type="pdf",
+                    saved_path=Path("uploads/slides.pdf"),
+                    sections=[],
+                    full_text="Presentation",
+                ),
+                None,
+            )
+        )
