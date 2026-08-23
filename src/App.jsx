@@ -71,7 +71,6 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState(null)
   const [loginSubmitting, setLoginSubmitting] = useState(false)
-  const personaGridRef = useRef(null)
 
   useEffect(() => {
     if (initStorageErrorsRef.current.length > 0) {
@@ -263,10 +262,6 @@ export default function App() {
 
   function openPersonas() {
     setActiveView('personas')
-    // scroll persona rail into view
-    setTimeout(() => {
-      if (personaGridRef.current) personaGridRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 120)
   }
 
   function openMaterials() {
@@ -369,11 +364,6 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div className="brand-name">발표 도우미</div>
             </div>
-            <div className="brand-toggle-wrap">
-              <button className="collapse-btn" onClick={() => setSidebarExpanded((v) => !v)} aria-label="사이드바 확장" aria-expanded={sidebarExpanded}>
-                {sidebarExpanded ? '‹' : '›'}
-              </button>
-            </div>
           </div>
         </div>
 
@@ -383,7 +373,7 @@ export default function App() {
         </button>
 
         <div className="sidebar-search">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><circle cx="11" cy="11" r="7" stroke="#9a978c" strokeWidth="1.6"/><path d="M21 21l-4.3-4.3" stroke="#9a978c" strokeWidth="1.6" strokeLinecap="round"/></svg>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.6"/><path d="M21 21l-4.3-4.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
           <input
             type="text"
             placeholder="채팅 검색"
@@ -396,13 +386,13 @@ export default function App() {
           <div className="nav-list">
             <button className={`nav-item ${activeView === 'materials' ? 'active' : ''}`} title="자료" onClick={() => openMaterials()}>
               <span className="icon" aria-hidden>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="#475569" strokeWidth="1.2" strokeLinejoin="round"/><path d="M14 3v5h5" stroke="#475569" strokeWidth="1.2" strokeLinejoin="round"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>
               </span>
               <span className="nav-label">자료</span>
             </button>
             <button className={`nav-item ${activeView === 'personas' ? 'active' : ''}`} title="페르소나" onClick={() => openPersonas()}>
               <span className="icon" aria-hidden>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="8" r="3.2" stroke="#475569" strokeWidth="1.2"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="#475569" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.2"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
               </span>
               <span className="nav-label">페르소나</span>
             </button>
@@ -423,8 +413,8 @@ export default function App() {
                 </button>
               )}
             </div>
-            {chats.length === 0 && <div style={{ color: '#94a3b8', padding: '8px 10px' }}>이전 채팅이 없습니다.</div>}
-            {chats.length > 0 && filteredChats.length === 0 && <div style={{ color: '#94a3b8', padding: '8px 10px' }}>검색 결과가 없습니다.</div>}
+            {chats.length === 0 && <div className="empty-hint">이전 채팅이 없습니다.</div>}
+            {chats.length > 0 && filteredChats.length === 0 && <div className="empty-hint">검색 결과가 없습니다.</div>}
             {filteredChats.map((c) => (
               <div key={c.id} className="history-row">
                 <button
@@ -443,7 +433,7 @@ export default function App() {
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title}</span>
                 </button>
                 <button className="history-action" aria-label="삭제" onClick={() => deleteChat(c.id)}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/><path d="M8 6v12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v5M14 11v5" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M8 6v12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v5M14 11v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
                 </button>
               </div>
             ))}
@@ -492,6 +482,18 @@ export default function App() {
         </div>
       </aside>
 
+      <button
+        className="sidebar-toggle"
+        onClick={() => setSidebarExpanded((v) => !v)}
+        aria-label={sidebarExpanded ? '사이드바 접기' : '사이드바 펼치기'}
+        aria-expanded={sidebarExpanded}
+        title={sidebarExpanded ? '사이드바 접기' : '사이드바 펼치기'}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+          <path d={sidebarExpanded ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+
       {loginModalOpen && (
         <div className="login-modal-backdrop" onClick={() => setLoginModalOpen(false)}>
           <div className="login-modal" onClick={(e) => e.stopPropagation()}>
@@ -532,14 +534,16 @@ export default function App() {
 
       <div className="container">
         <main className="content">
-          {activeChat ? (
+          {/* Each nav button (자료/페르소나) shows only its own content — these
+             views are mutually exclusive, not stacked. */}
+          {activeView === 'chats' && (activeChat ? (
             <div className="thread">
               <div className="thread-head">
                 <h2>{activeChat.title}</h2>
                 {personaIdInView ? (
                   <p>선택된 페르소나: <strong>{personas.find(p => p.id === personaIdInView)?.name}</strong></p>
                 ) : (
-                  <p style={{ color: '#9ca3af' }}>페르소나 없이 진행 중인 대화예요.</p>
+                  <p className="muted-hint">페르소나 없이 진행 중인 대화예요.</p>
                 )}
               </div>
 
@@ -577,7 +581,7 @@ export default function App() {
               {persona ? (
                 <p>선택된 페르소나: <strong>{personas.find(p=>p.id===persona)?.name}</strong></p>
               ) : (
-                <p style={{ color: '#9ca3af' }}>아직 선택된 페르소나가 없어요. 아래에서 만들어보세요.</p>
+                <p className="muted-hint">아직 선택된 페르소나가 없어요. 아래에서 만들어보세요.</p>
               )}
 
               <form className="add-form hero-form" onSubmit={handleAdd}>
@@ -593,28 +597,42 @@ export default function App() {
                 </div>
               </form>
             </div>
-          )}
+          ))}
 
-          {/* View-specific panels */}
           {activeView === 'materials' && (
-            <div className="materials-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
+            <div className="materials-panel panel">
+              <div className="view-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/><path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/></svg>
+              </div>
               <h3>자료</h3>
-              <p style={{ color: '#6b7280', marginBottom: 10 }}>페르소나를 만들 때 올린 자료 목록입니다.</p>
-              {personas.filter((p) => p.fileNames?.length).length === 0 && (
-                <p style={{ color: '#9ca3af' }}>아직 업로드한 자료가 없습니다.</p>
+              <p className="panel-intro">페르소나를 만들 때 올린 자료 목록입니다.</p>
+              {personas.filter((p) => p.fileNames?.length).length === 0 ? (
+                <div className="panel-empty-state">
+                  <p className="muted-hint">아직 업로드한 자료가 없습니다.</p>
+                  <button type="button" className="empty-cta" onClick={() => openNewPersona()}>+ 페르소나 만들며 자료 올리기</button>
+                </div>
+              ) : (
+                <div className="materials-list">
+                  {personas.filter((p) => p.fileNames?.length).map((p) => (
+                    <button key={p.id} className="template-pick" onClick={() => applyPersonaTemplate(p.id)}>
+                      <span className="template-pick-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/><path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/></svg>
+                      </span>
+                      <span className="template-pick-body">
+                        <b>{p.fileNames.join(', ')}</b>
+                        <span>{p.name} 페르소나에 연결됨</span>
+                      </span>
+                      <svg className="template-pick-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M9 5l7 7-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  ))}
+                </div>
               )}
-              {personas.filter((p) => p.fileNames?.length).map((p) => (
-                <button key={p.id} className="template-pick" onClick={() => applyPersonaTemplate(p.id)}>
-                  <b>{p.fileNames.join(', ')}</b>
-                  <span>{p.name} 페르소나에 연결됨</span>
-                </button>
-              ))}
             </div>
           )}
           {activeView === 'newPersona' && (
-            <div className="new-persona-panel" style={{ marginTop: 14, maxWidth: 760, width: '100%' }}>
+            <div className="new-persona-panel panel">
               <h3>새 페르소나 만들기</h3>
-              <p style={{ color: '#6b7280', marginBottom: 10 }}>이름을 정하고, 원하면 PPTX나 PDF, DOCX 같은 참고 자료를 함께 올려보세요.</p>
+              <p className="panel-intro">이름을 정하고, 원하면 PPTX나 PDF, DOCX 같은 참고 자료를 함께 올려보세요.</p>
               <form className="new-persona-form" onSubmit={createPersona}>
                 <input
                   placeholder="페르소나 이름 — 예: 투자 발표용"
@@ -629,7 +647,7 @@ export default function App() {
                     onChange={handlePersonaFileChange}
                     style={{ display: 'none' }}
                   />
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#7c3aed" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#C15F3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#C15F3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   <span>{newPersonaFiles.length > 0 ? `${newPersonaFiles.length}개 파일 선택됨` : 'PPTX, PDF, DOCX 자료 올리기 (여러 개 선택 가능)'}</span>
                 </label>
                 {newPersonaFiles.length > 0 && (
@@ -652,36 +670,55 @@ export default function App() {
             </div>
           )}
 
-          <div className="persona-rail" ref={personaGridRef}>
-            <div className="persona-grid">
-              {personas.length === 0 && (
-                <div className="persona-empty">아직 만든 페르소나가 없어요. 아래에서 첫 페르소나를 만들어보세요.</div>
-              )}
-              {personas.map((p, idx) => (
-                  <div key={p.id} className="persona-card" onClick={() => setPersona(p.id)}>
-                  <button
-                    className="persona-card-remove"
-                    aria-label={`${p.name} 삭제`}
-                    onClick={(e) => { e.stopPropagation(); deletePersona(p.id) }}
-                  >
-                    ×
-                  </button>
-                  <div className="persona-top">
-                    <div className="persona-avatar" data-n={idx+1}></div>
-                    <div>
-                      <div className="persona-name">{p.name}</div>
-                      <div className="persona-tag">{p.fileNames?.length ? p.fileNames.join(', ') : `페르소나 ${idx+1}`}</div>
-                    </div>
-                  </div>
-                  <div className="persona-desc">{p.name} 스타일로 대화를 시작합니다.</div>
+          {activeView === 'personas' && (
+            <div className="persona-rail">
+              <div className="persona-rail-intro">
+                <div className="view-icon view-icon-inline">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.4"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
                 </div>
-              ))}
-              <div className="persona-card add" onClick={() => openNewPersona()}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-                <span>새 페르소나 추가</span>
+                <div>
+                  <h3>페르소나 {personas.length > 0 && <span className="persona-count">{personas.length}</span>}</h3>
+                  <p className="panel-intro">만들어둔 페르소나 목록이에요. 카드를 클릭하면 선택돼요.</p>
+                </div>
+              </div>
+              <div className="persona-grid">
+                {personas.length === 0 && (
+                  <div className="persona-empty">
+                    <div className="persona-empty-icon">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.4"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                    </div>
+                    <p>아직 만든 페르소나가 없어요.</p>
+                    <button type="button" className="empty-cta" onClick={() => openNewPersona()}>+ 첫 페르소나 만들기</button>
+                  </div>
+                )}
+                {personas.map((p) => (
+                    <div key={p.id} className="persona-card" onClick={() => setPersona(p.id)}>
+                    <button
+                      className="persona-card-remove"
+                      aria-label={`${p.name} 삭제`}
+                      onClick={(e) => { e.stopPropagation(); deletePersona(p.id) }}
+                    >
+                      ×
+                    </button>
+                    <div className="persona-top">
+                      <div className="persona-avatar" data-n={p.name.slice(0, 1)}></div>
+                      <div>
+                        <div className="persona-name">{p.name}</div>
+                        <div className="persona-tag">{p.fileNames?.length ? p.fileNames.join(', ') : '텍스트 전용 페르소나'}</div>
+                      </div>
+                    </div>
+                    <div className="persona-desc">{p.name} 스타일로 대화를 시작합니다.</div>
+                  </div>
+                ))}
+                {personas.length > 0 && (
+                  <div className="persona-card add" onClick={() => openNewPersona()}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+                    <span>새 페르소나 추가</span>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
+          )}
         </main>
       </div>
     </div>
