@@ -14,6 +14,18 @@ function formatFileSize(bytes) {
   return `${Math.ceil(bytes / 1024)}KB`
 }
 
+// Lets a non-<button> clickable element (e.g. a card containing its own
+// nested button, where a real <button> wrapper would be invalid HTML)
+// respond to Enter/Space like a real button for keyboard users.
+function activateOnKey(handler) {
+  return (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      handler(e)
+    }
+  }
+}
+
 // Turns a localStorage failure into a message a non-technical user can act on.
 function describeStorageError(e) {
   if (e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014)) {
@@ -114,6 +126,13 @@ export default function App() {
       setStorageWarning(describeStorageError(e))
     }
   }, [authUser, authToken])
+
+  // On mobile the sidebar is an overlay drawer, not a permanent rail — close
+  // it after any navigation so picking a chat/persona doesn't leave the
+  // drawer covering the screen. No-op on desktop widths.
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 860px)').matches) setSidebarExpanded(false)
+  }, [activeView, selectedChatId])
 
   function openLoginModal() {
     setLoginEmail('')
@@ -482,6 +501,10 @@ export default function App() {
         </div>
       </aside>
 
+      {sidebarExpanded && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarExpanded(false)} aria-hidden />
+      )}
+
       <button
         className="sidebar-toggle"
         onClick={() => setSidebarExpanded((v) => !v)}
@@ -645,7 +668,7 @@ export default function App() {
                     accept=".pptx,.pdf,.docx"
                     multiple
                     onChange={handlePersonaFileChange}
-                    style={{ display: 'none' }}
+                    className="visually-hidden"
                   />
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   <span>{newPersonaFiles.length > 0 ? `${newPersonaFiles.length}개 파일 선택됨` : 'PPTX, PDF, DOCX 자료 올리기 (여러 개 선택 가능)'}</span>
@@ -690,7 +713,16 @@ export default function App() {
                   </div>
                 )}
                 {personas.map((p, idx) => (
-                    <div key={p.id} className="persona-card" style={{ animationDelay: `${Math.min(idx, 8) * 40}ms` }} onClick={() => setPersona(p.id)}>
+                    <div
+                      key={p.id}
+                      className="persona-card"
+                      style={{ animationDelay: `${Math.min(idx, 8) * 40}ms` }}
+                      onClick={() => setPersona(p.id)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${p.name} 페르소나 선택`}
+                      onKeyDown={activateOnKey(() => setPersona(p.id))}
+                    >
                     <button
                       className="persona-card-remove"
                       aria-label={`${p.name} 삭제`}
@@ -709,7 +741,14 @@ export default function App() {
                   </div>
                 ))}
                 {personas.length > 0 && (
-                  <div className="persona-card add" onClick={() => openNewPersona()}>
+                  <div
+                    className="persona-card add"
+                    onClick={() => openNewPersona()}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="새 페르소나 추가"
+                    onKeyDown={activateOnKey(() => openNewPersona())}
+                  >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
                     <span>새 페르소나 추가</span>
                   </div>
