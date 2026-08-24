@@ -647,7 +647,7 @@ export default function App() {
                     onChange={handlePersonaFileChange}
                     style={{ display: 'none' }}
                   />
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="#C15F3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="#C15F3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   <span>{newPersonaFiles.length > 0 ? `${newPersonaFiles.length}개 파일 선택됨` : 'PPTX, PDF, DOCX 자료 올리기 (여러 개 선택 가능)'}</span>
                 </label>
                 {newPersonaFiles.length > 0 && (
@@ -673,13 +673,11 @@ export default function App() {
           {activeView === 'personas' && (
             <div className="persona-rail">
               <div className="persona-rail-intro">
-                <div className="view-icon view-icon-inline">
+                <div className="view-icon">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.4"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
                 </div>
-                <div>
-                  <h3>페르소나 {personas.length > 0 && <span className="persona-count">{personas.length}</span>}</h3>
-                  <p className="panel-intro">만들어둔 페르소나 목록이에요. 카드를 클릭하면 선택돼요.</p>
-                </div>
+                <h3>페르소나 {personas.length > 0 && <span className="persona-count">{personas.length}</span>}</h3>
+                <p className="panel-intro">만들어둔 페르소나 목록이에요. 카드를 클릭하면 선택돼요.</p>
               </div>
               <div className="persona-grid">
                 {personas.length === 0 && (
@@ -691,8 +689,8 @@ export default function App() {
                     <button type="button" className="empty-cta" onClick={() => openNewPersona()}>+ 첫 페르소나 만들기</button>
                   </div>
                 )}
-                {personas.map((p) => (
-                    <div key={p.id} className="persona-card" onClick={() => setPersona(p.id)}>
+                {personas.map((p, idx) => (
+                    <div key={p.id} className="persona-card" style={{ animationDelay: `${Math.min(idx, 8) * 40}ms` }} onClick={() => setPersona(p.id)}>
                     <button
                       className="persona-card-remove"
                       aria-label={`${p.name} 삭제`}
