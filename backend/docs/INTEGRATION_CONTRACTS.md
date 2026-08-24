@@ -61,15 +61,19 @@ Backend 서비스는 특정 DB 라이브러리를 직접 사용하지 않고 Rep
 
 ```python
 class AgentRepository(Protocol):
-    def save(self, agent: Agent) -> Agent: ...
-    def find_by_id(self, agent_id: UUID) -> Agent | None: ...
+    async def save(self, persona: PersonaProfile) -> None: ...
+    async def get(self, agent_id: UUID) -> PersonaProfile | None: ...
 
 class DocumentRepository(Protocol):
-    def save(self, document: Document) -> Document: ...
-    def find_by_id(self, document_id: UUID) -> Document | None: ...
+    async def save(self, document: DocumentParseResponse) -> None: ...
+    async def get(self, document_id: UUID) -> DocumentParseResponse | None: ...
+
+class ReviewRepository(Protocol):
+    async def save(self, review: ReviewResult) -> None: ...
+    async def get(self, review_id: UUID) -> ReviewResult | None: ...
 ```
 
-Review와 Chat 저장 기능도 구현 전에 같은 방식으로 Repository 계약을 합의합니다.
+세 Repository 모두 `app/repositories/`에 실제로 구현되어 있고 (`InMemory*Repository`, `Postgres*Repository`), 위 시그니처는 그 실제 구현과 일치합니다. Chat 저장 기능은 아직 Repository 계약이 합의되지 않았습니다.
 
 ### Repository 구현 규칙
 
@@ -115,8 +119,8 @@ Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 - Backend의 LLM HTTP 클라이언트와 `/health/llm`은 구현되어 있습니다.
 - LLM 작업 브랜치는 legacy API와 정식 `/api/v1` Persona·Review·Chat을 모두 구현했습니다.
 - Backend v1 mock 계약 테스트는 통과했으며 PR #17의 `LLM-main` 병합 후 실제 Ollama 통합 테스트가 필요합니다.
-- Agent와 Document는 메모리 Repository를 사용하므로 Backend 재시작 시 사라집니다.
-- 실제 DB Repository와 Review·Chat 저장은 아직 연결되지 않았습니다.
+- Agent, Document, Review는 `PostgresAgentRepository`/`PostgresDocumentRepository`/`PostgresReviewRepository`가 구현되어 있고, `REPOSITORY_MODE=postgres`로 전환할 수 있습니다. 기본값(`memory`)에서는 여전히 메모리 Repository를 사용하므로 Backend 재시작 시 사라집니다.
+- Chat 저장 기능은 Repository 계약이 아직 합의되지 않아 연결되지 않았습니다.
 - 버전 차이와 팀별 수정 항목은 [버전 호환성 안내](./VERSION_COMPATIBILITY.md)를 확인합니다.
 
 ## 9. 연동 전 확인 목록
@@ -130,10 +134,10 @@ Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 
 ### DB 팀
 
-- [ ] Repository 인터페이스와 필드 매핑 합의
-- [ ] 스키마와 마이그레이션 제공
-- [ ] 조회 실패 시 `None` 반환
-- [ ] 비밀 정보 환경 변수 처리
+- [x] Repository 인터페이스와 필드 매핑 합의 (`app/repositories/`의 Agent·Document·Review Postgres 구현이 위 계약과 일치)
+- [ ] 스키마와 마이그레이션 제공 (테이블 정의는 있으나 버전 관리되는 마이그레이션은 미확인)
+- [x] 조회 실패 시 `None` 반환
+- [x] 비밀 정보 환경 변수 처리
 
 ### Backend 팀
 
