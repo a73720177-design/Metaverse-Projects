@@ -1,12 +1,16 @@
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_frontend_origin_regex, get_frontend_origins
 from app.controllers.agent_controller import router as agent_router
+from app.controllers.auth_controller import router as auth_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.dependencies import get_llm_client
+from app.db.database import close_db
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -15,9 +19,16 @@ from app.integrations.llm.client import (
 )
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await close_db()
+
+
 app = FastAPI(
     title="로컬 AI 발표자료 평가 백엔드",
     version="0.2.0",
+    lifespan=lifespan,
     description=(
         "PPTX·PDF·DOCX 문서를 처리하고 평가자 페르소나 기반 리뷰와 대화를 "
         "제공하는 API입니다. Backend는 요청 검증과 서비스 조합을 담당하고, "
@@ -25,6 +36,7 @@ app = FastAPI(
     ),
     openapi_tags=[
         {"name": "시스템", "description": "Backend와 LLM 서비스 상태를 확인합니다."},
+        {"name": "로그인", "description": "로컬 계정을 생성하고 로그인합니다."},
         {"name": "평가자", "description": "평가자 페르소나를 생성하고 조회합니다."},
         {"name": "문서", "description": "발표 자료를 업로드하고 텍스트를 추출합니다."},
         {"name": "리뷰", "description": "평가자 관점의 문서 리뷰를 생성하고 조회합니다."},
@@ -42,6 +54,7 @@ app.add_middleware(
 )
 
 app.include_router(agent_router)
+app.include_router(auth_router)
 app.include_router(document_router)
 app.include_router(review_router)
 app.include_router(chat_router)

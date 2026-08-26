@@ -45,3 +45,30 @@ def get_frontend_origin_regex() -> str | None:
         return DEFAULT_FRONTEND_ORIGIN_REGEX
 
     return configured_regex.strip() or None
+
+
+def get_database_url() -> str:
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("backend/.env의 DATABASE_URL을 설정해야 합니다.")
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
+def get_jwt_secret_key() -> str:
+    secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
+    if len(secret_key) < 32:
+        raise RuntimeError("backend/.env의 JWT_SECRET_KEY를 32자 이상으로 설정해야 합니다.")
+    return secret_key
+
+
+def get_jwt_access_token_expire_minutes() -> int:
+    value = os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60").strip()
+    try:
+        minutes = int(value)
+    except ValueError as exc:
+        raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES는 정수여야 합니다.") from exc
+    if minutes <= 0:
+        raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES는 1 이상이어야 합니다.")
+    return minutes
