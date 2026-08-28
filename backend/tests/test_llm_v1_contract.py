@@ -24,6 +24,9 @@ from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
 
 
+OWNER_ID = uuid4()
+
+
 def _persona() -> PersonaProfile:
     return PersonaProfile(
         agent_id=uuid4(),
@@ -83,7 +86,8 @@ def test_v1_persona_contract_builds_backend_profile() -> None:
     )
     result = asyncio.run(
         service.create(
-            PersonaCreateRequest(name="Professor", description="Evidence focused")
+            PersonaCreateRequest(name="Professor", description="Evidence focused"),
+            OWNER_ID,
         )
     )
     assert result.name == "Professor"
@@ -134,8 +138,8 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
     review_repository = InMemoryReviewRepository()
 
     async def run_contract():
-        await agent_repository.save(persona)
-        await document_repository.save(document)
+        await agent_repository.save(persona, OWNER_ID)
+        await document_repository.save(document, OWNER_ID)
         service = ReviewService(
             HttpReviewGenerator(HttpLlmClient(httpx.MockTransport(handler))),
             review_repository,
@@ -148,6 +152,7 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
                 document_id=document.document_id,
                 instructions="출처를 확인해 주세요.",
             ),
+            OWNER_ID,
         )
 
     result = asyncio.run(run_contract())
@@ -176,9 +181,9 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     document_repository = InMemoryDocumentRepository()
 
     async def run_contract():
-        await agent_repository.save(persona)
+        await agent_repository.save(persona, OWNER_ID)
         if with_document:
-            await document_repository.save(document)
+            await document_repository.save(document, OWNER_ID)
         service = ChatService(
             HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
             agent_repository,
@@ -190,6 +195,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
                 message="핵심 문제는 무엇인가요?",
                 document_id=document.document_id if with_document else None,
             ),
+            OWNER_ID,
         )
 
     result = asyncio.run(run_contract())

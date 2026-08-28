@@ -10,6 +10,7 @@ from app.config import (
     get_repository_mode,
 )
 from app.controllers.agent_controller import router as agent_router
+from app.controllers.auth_controller import router as auth_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
@@ -46,6 +47,7 @@ app = FastAPI(
     ),
     openapi_tags=[
         {"name": "시스템", "description": "Backend와 LLM 서비스 상태를 확인합니다."},
+        {"name": "로그인", "description": "로컬 계정을 생성하고 JWT로 로그인합니다."},
         {"name": "평가자", "description": "평가자 페르소나를 생성하고 조회합니다."},
         {"name": "문서", "description": "발표 자료를 업로드하고 텍스트를 추출합니다."},
         {"name": "리뷰", "description": "평가자 관점의 문서 리뷰를 생성하고 조회합니다."},
@@ -63,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(agent_router)
+app.include_router(auth_router)
 app.include_router(document_router)
 app.include_router(review_router)
 app.include_router(chat_router)
@@ -131,3 +134,70 @@ async def llm_health(
     except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"status": "ok", "llm_service": detail}
+
+
+@app.get(
+    "/health/services",
+    tags=["시스템"],
+    summary="팀 서비스 통합 상태 확인",
+    description=(
+        "Frontend 상태 화면에서 Backend, DB, LLM 연결 상태를 한 번에 확인합니다. "
+        "내부 주소와 예외 원문은 반환하지 않습니다."
+    ),
+)
+async def services_health(
+    client: HttpLlmClient = Depends(get_llm_client),
+) -> dict[str, object]:
+    services: dict[str, dict[str, object]] = {
+        "backend": {"status": "ok", "label": "Backend"}
+    }
+
+    repository_mode = get_repository_mode()
+    if repository_mode == "memory":
+        services["database"] = {
+            "status": "development",
+            "label": "DB",
+            "mode": "memory",
+            "message": "외부 PostgreSQL을 사용하지 않는 개발 모드입니다.",
+        }
+    else:
+        try:
+            await check_db()
+        except Exception:
+            services["database"] = {
+                "status": "unavailable",
+                "label": "DB",
+                "mode": "postgres",
+                "message": "PostgreSQL에 연결할 수 없습니다.",
+            }
+        else:
+            services["database"] = {
+                "status": "ok",
+                "label": "DB",
+                "mode": "postgres",
+                "message": "PostgreSQL 연결이 정상입니다.",
+            }
+
+    try:
+        detail = await client.get_json("/health")
+    except (LlmServiceConnectionError, LlmServiceResponseError):
+        services["llm"] = {
+            "status": "unavailable",
+            "label": "LLM",
+            "message": "LLM 서비스에 연결할 수 없습니다.",
+        }
+    else:
+        services["llm"] = {
+            "status": "ok",
+            "label": "LLM",
+            "message": "LLM 서비스 연결이 정상입니다.",
+            "service_status": detail.get("status", "unknown"),
+        }
+
+    degraded = any(
+        service["status"] == "unavailable" for service in services.values()
+    )
+    return {
+        "status": "degraded" if degraded else "ok",
+        "services": services,
+    }

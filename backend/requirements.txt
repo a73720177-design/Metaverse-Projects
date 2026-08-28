@@ -13,3 +13,5 @@ SQLAlchemy==2.0.43
 greenlet==3.5.5
 asyncpg==0.31.0
 minio==7.2.20
+PyJWT==2.10.1
+pwdlib[argon2]==0.3.0

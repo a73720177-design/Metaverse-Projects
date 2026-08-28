@@ -2,9 +2,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies import get_review_service
+from app.dependencies import get_current_user, get_review_service
 from app.models.error import ErrorResponse
 from app.models.review import ReviewCreateRequest, ReviewResult
+from app.models.user import UserResponse
 from app.services.review_service import ReviewResourceNotFoundError, ReviewService, ReviewServiceError
 
 router = APIRouter(tags=["리뷰"])
@@ -18,9 +19,10 @@ async def create_review(
     agent_id: UUID,
     request: ReviewCreateRequest,
     service: ReviewService = Depends(get_review_service),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> ReviewResult:
     try:
-        return await service.create(agent_id, request)
+        return await service.create(agent_id, request, current_user.user_id)
     except ReviewResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ReviewServiceError as exc:
@@ -33,8 +35,9 @@ async def create_review(
 async def get_review(
     review_id: UUID,
     service: ReviewService = Depends(get_review_service),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> ReviewResult:
-    review = await service.get(review_id)
+    review = await service.get(review_id, current_user.user_id)
     if review is None:
         raise HTTPException(status_code=404, detail="리뷰를 찾을 수 없습니다.")
     return review

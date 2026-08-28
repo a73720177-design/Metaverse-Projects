@@ -21,11 +21,16 @@ from app.models.review import ReviewFeedback, ReviewResult
 from app.repositories.agent_repository import PostgresAgentRepository
 from app.repositories.document_repository import PostgresDocumentRepository
 from app.repositories.review_repository import PostgresReviewRepository
+from app.repositories.user_repository import PostgresUserRepository
 
 
 @pytest.mark.asyncio
 async def test_postgres_repositories_save_and_get() -> None:
     await init_db()
+    user = await PostgresUserRepository().create(
+        f"repocheck_{uuid4().hex[:8]}",
+        "test-password-hash",
+    )
 
     agent = PersonaProfile(agent_id=uuid4(), name="DB 테스트 평가자")
     document = DocumentParseResponse(
@@ -47,10 +52,10 @@ async def test_postgres_repositories_save_and_get() -> None:
     document_repository = PostgresDocumentRepository()
     review_repository = PostgresReviewRepository()
 
-    await agent_repository.save(agent)
-    await document_repository.save(document)
-    await review_repository.save(review)
+    await agent_repository.save(agent, user.user_id)
+    await document_repository.save(document, user.user_id)
+    await review_repository.save(review, user.user_id)
 
-    assert await agent_repository.get(agent.agent_id) == agent
-    assert await document_repository.get(document.document_id) == document
-    assert await review_repository.get(review.review_id) == review
+    assert await agent_repository.get(agent.agent_id, user.user_id) == agent
+    assert await document_repository.get(document.document_id, user.user_id) == document
+    assert await review_repository.get(review.review_id, user.user_id) == review
