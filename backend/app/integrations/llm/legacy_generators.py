@@ -15,24 +15,6 @@ from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
 
 
-def _validate_concepts(body: dict[str, Any]) -> list[dict[str, str]]:
-    raw_concepts = body.get("concepts")
-    if not isinstance(raw_concepts, list) or not raw_concepts:
-        raise ReviewGeneratorError("LLM 응답에 concepts 배열이 없습니다.")
-    concepts: list[dict[str, str]] = []
-    for item in raw_concepts:
-        if not isinstance(item, dict):
-            raise ReviewGeneratorError("LLM concept 항목은 JSON 객체여야 합니다.")
-        name = item.get("name")
-        definition = item.get("definition")
-        if not isinstance(name, str) or not name.strip():
-            raise ReviewGeneratorError("LLM concept의 name이 올바르지 않습니다.")
-        if not isinstance(definition, str) or not definition.strip():
-            raise ReviewGeneratorError("LLM concept의 definition이 올바르지 않습니다.")
-        concepts.append({"name": name.strip(), "definition": definition.strip()})
-    return concepts
-
-
 class LocalPersonaGenerator:
     """현재 LLM 서비스에 persona API가 없을 때 입력 정보를 그대로 사용합니다."""
 
@@ -70,7 +52,7 @@ class LegacyQuestionReviewGenerator:
             question_result = await self.client.post_json(
                 "/generate-questions",
                 {
-                    "concepts": _validate_concepts(concept_result),
+                    "concepts": concept_result.get("concepts", []),
                     "critical_points": critical_points,
                     "script_text": document.full_text,
                 },
@@ -83,14 +65,10 @@ class LegacyQuestionReviewGenerator:
             raise ReviewGeneratorError("LLM 응답에 questions 배열이 없습니다.")
 
         questions = [
-            item["question"].strip()
+            item["question"]
             for item in raw_questions
-            if isinstance(item, dict)
-            and isinstance(item.get("question"), str)
-            and item["question"].strip()
+            if isinstance(item, dict) and isinstance(item.get("question"), str)
         ]
-        if len(questions) != len(raw_questions):
-            raise ReviewGeneratorError("LLM question 항목의 형식이 올바르지 않습니다.")
         if not questions:
             raise ReviewGeneratorError("LLM이 유효한 질문을 반환하지 않았습니다.")
 

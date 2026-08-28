@@ -1,7 +1,6 @@
 from functools import lru_cache
 import os
 
-from app.config import get_object_storage_mode, get_repository_mode
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import (
     HttpChatGenerator,
@@ -13,15 +12,12 @@ from app.integrations.llm.legacy_generators import (
     LocalPersonaGenerator,
     UnsupportedLegacyChatGenerator,
 )
-from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
-from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
-from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
+from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository
+from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository
+from app.repositories.review_repository import ReviewRepository, InMemoryReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
-from app.storage.minio_storage import MinioStorage
-from app.storage.local_storage import LocalStorage
-from app.storage.object_storage import ObjectStorage
 
 
 @lru_cache
@@ -40,22 +36,17 @@ def get_llm_contract_mode() -> str:
 
 @lru_cache
 def get_agent_repository() -> AgentRepository:
-    return PostgresAgentRepository() if get_repository_mode() == "postgres" else InMemoryAgentRepository()
+    return InMemoryAgentRepository()
 
 
 @lru_cache
 def get_document_repository() -> DocumentRepository:
-    return PostgresDocumentRepository() if get_repository_mode() == "postgres" else InMemoryDocumentRepository()
+    return InMemoryDocumentRepository()
 
 
 @lru_cache
 def get_review_repository() -> ReviewRepository:
-    return PostgresReviewRepository() if get_repository_mode() == "postgres" else InMemoryReviewRepository()
-
-
-@lru_cache
-def get_object_storage() -> ObjectStorage:
-    return MinioStorage() if get_object_storage_mode() == "minio" else LocalStorage()
+    return InMemoryReviewRepository()
 
 
 @lru_cache

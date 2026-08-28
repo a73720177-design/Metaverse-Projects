@@ -2,15 +2,15 @@
 
 ## 현재 팀 코드 호환 모드
 
-LLM 팀의 최신 `kunhee-workspace`는 legacy API와 아래 정식 `/api/v1` 계약을 모두 제공합니다. PR #17이 아직 `LLM-main`에 병합되지 않았으므로 Backend 기본값은 다음 임시 모드를 유지합니다.
+LLM 팀의 현재 `kunhee-workspace` 코드는 아래 정식 `/api/v1` 계약이 아니라 `/health`, `/extract-concepts`, `/generate-questions`를 제공합니다. 공통 main에서 먼저 연결할 수 있도록 Backend는 다음 임시 모드를 지원합니다.
 
 ```env
 LLM_CONTRACT_MODE=legacy_questions
 ```
 
-이 모드에서는 페르소나 입력을 Backend가 저장하고, 리뷰 요청 시 `/extract-concepts`와 `/generate-questions`를 순서대로 호출한 뒤 `ReviewResult`로 변환합니다. legacy 모드의 Chat은 `503`을 반환합니다.
+이 모드에서는 페르소나 입력을 Backend가 저장하고, 리뷰 요청 시 `/extract-concepts`와 `/generate-questions`를 순서대로 호출한 뒤 `ReviewResult`로 변환합니다. 현재 LLM에 chat API가 없으므로 Chat은 `503`을 반환합니다.
 
-PR #17 병합과 실제 서비스 통합 테스트가 끝나면 `LLM_CONTRACT_MODE=v1`로 전환합니다. Backend는 Persona·Review·Chat의 v1 요청·응답을 mock 계약 테스트로 검증합니다.
+LLM 팀이 아래 정식 API를 구현한 후에는 `LLM_CONTRACT_MODE=v1`로 전환합니다. 임시 모드는 기존 팀 코드를 연결하기 위한 어댑터이며 정식 계약을 대체하지 않습니다.
 
 백엔드는 Ollama를 직접 호출하지 않고 LLM 팀의 독립 FastAPI 서비스만 호출합니다.
 

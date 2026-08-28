@@ -5,17 +5,12 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Node / Vite
-node_modules/
-dist/
-
 # Virtual environments and local configuration
 .venv/
 venv/
 .env
 .env.*
 !.env.example
-!.env.test.example
 
 # Runtime data
 backend/uploads/*

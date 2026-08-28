@@ -19,13 +19,12 @@
 현재 브랜치는 FastAPI 0.115.0, Pydantic 2.9.2, Uvicorn 0.30.6과
 unversioned `/extract-concepts`, `/generate-questions`를 사용합니다.
 
-Backend의 `LLM_CONTRACT_MODE=legacy_questions`는 두 legacy API를 Persona·Review 흐름에 임시 연결합니다. 최신 LLM 작업 브랜치에는 정식 v1도 구현되어 있지만 `LLM-main` 병합 전까지 기본 모드는 변경하지 않습니다.
+Backend의 `LLM_CONTRACT_MODE=legacy_questions`는 이 두 API를 Persona·Review 흐름에 임시 연결합니다. 따라서 팀 코드를 먼저 합쳐 통합 테스트할 수 있지만 Chat은 지원되지 않고 정식 v1 계약도 완성된 상태가 아닙니다.
 
 필수 변경:
 
-1. PR #17을 최신 구현 내용으로 수정하고 `LLM-main`에 병합
-2. 자동화 테스트와 `.env` 적용 방법 보완
-3. `docs/LLM_HTTP_CONTRACT.md` 요청/응답 스키마 유지
+1. `/api/v1/health`, `/api/v1/personas`, `/api/v1/reviews`, `/api/v1/chat` 구현
+2. `docs/LLM_HTTP_CONTRACT.md` 요청/응답 스키마 준수
 3. Python 3.14를 사용한다면 Pydantic 2.13.4 이상으로 변경
 4. Ollama 테스트 버전과 모델(`qwen3:14b`)을 README에 기록
 5. Ollama structured output(`format: json` 또는 JSON schema) 사용
