@@ -43,6 +43,9 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState(null)
+  const [chatFile, setChatFile] = useState(null)
+  const [chatFileError, setChatFileError] = useState(null)
+  const [chatDropActive, setChatDropActive] = useState(false)
   const streamAbortRef = useRef(null)
   const initStorageErrorsRef = useRef([])
   const [chats, setChats] = useState(() => {
@@ -196,7 +199,7 @@ export default function App() {
 
   async function handleAdd(e) {
     e.preventDefault()
-    if (!content) return
+    if (!content.trim() && !chatFile) return
 
     const existingChat = chats.find((c) => c.id === selectedChatId) || null
     const personaIdForRequest = existingChat ? existingChat.persona : persona
@@ -207,8 +210,12 @@ export default function App() {
       return
     }
 
-    const userMessage = { role: 'user', content }
-    const messageText = content
+    const messageText = content.trim() || '첨부한 자료의 핵심 내용을 분석해 주세요.'
+    const userMessage = {
+      role: 'user',
+      content: messageText,
+      attachment: chatFile ? { name: chatFile.name, size: chatFile.size } : null,
+    }
 
     let chatId
     if (existingChat) {
@@ -239,22 +246,70 @@ export default function App() {
     setSendError(null)
 
     try {
+      let documentId = activePersona.documentId || null
+      if (chatFile) {
+        const document = await uploadDocument(chatFile, authToken, controller.signal)
+        documentId = document.document_id
+      }
       const { answer } = await sendChat({
         agentId: activePersona.id,
         message: messageText,
-        documentId: activePersona.documentId,
+        documentId,
         token: authToken,
         signal: controller.signal,
       })
       setChats((s) => s.map((c) => (
         c.id === chatId ? { ...c, messages: [...c.messages, { role: 'assistant', content: answer }] } : c
       )))
+      setChatFile(null)
+      setChatFileError(null)
     } catch (err) {
       if (err.name === 'AbortError') return
       setSendError(err?.message || 'Backend에 연결할 수 없어요. src/api.js의 API 주소가 실제 Backend와 맞는지 확인해주세요.')
     } finally {
       setSending(false)
     }
+  }
+
+  function validateChatFile(file) {
+    if (!file) return null
+    const extension = fileExtension(file.name)
+    if (!ALLOWED_PERSONA_EXTENSIONS.includes(extension)) {
+      setChatFileError('PPTX, PDF, DOCX 파일만 첨부할 수 있어요.')
+      return null
+    }
+    if (file.size > MAX_PERSONA_FILE_SIZE) {
+      setChatFileError(`파일 크기는 25MB 이하여야 해요. 현재 파일: ${formatFileSize(file.size)}`)
+      return null
+    }
+    if (file.size === 0) {
+      setChatFileError('빈 파일은 첨부할 수 없어요.')
+      return null
+    }
+    setChatFileError(null)
+    setChatFile(file)
+    return file
+  }
+
+  function handleChatFileChange(e) {
+    validateChatFile(e.target.files?.[0])
+    e.target.value = ''
+  }
+
+  function handleChatDrop(e) {
+    e.preventDefault()
+    setChatDropActive(false)
+    validateChatFile(e.dataTransfer.files?.[0])
+  }
+
+  function handleChatDragOver(e) {
+    e.preventDefault()
+    if (e.dataTransfer.types.includes('Files')) setChatDropActive(true)
+  }
+
+  function removeChatFile() {
+    setChatFile(null)
+    setChatFileError(null)
   }
 
   function deleteChat(id) {
@@ -663,6 +718,9 @@ export default function App() {
               <div className="thread-messages">
                 {activeChat.messages.map((m, i) => (
                   <div key={i} className={`thread-msg thread-msg-${m.role}`}>
+                    {m.attachment && (
+                      <div className="thread-attachment">📎 {m.attachment.name} · {formatFileSize(m.attachment.size)}</div>
+                    )}
                     <div className="thread-msg-bubble">{m.content}</div>
                   </div>
                 ))}
@@ -674,17 +732,34 @@ export default function App() {
                 {sendError && <p className="assistant-reply-error">{sendError}</p>}
               </div>
 
-              <form className="add-form hero-form thread-composer" onSubmit={handleAdd}>
+              <form
+                className={`add-form hero-form thread-composer chat-file-dropzone${chatDropActive ? ' is-dragging' : ''}`}
+                onSubmit={handleAdd}
+                onDrop={handleChatDrop}
+                onDragOver={handleChatDragOver}
+                onDragLeave={() => setChatDropActive(false)}
+              >
                 <textarea
-                  placeholder="메시지를 입력하세요"
+                  placeholder="메시지를 입력하거나 PPTX, PDF, DOCX 자료를 여기에 드래그하세요"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                 />
                 <div className="hero-form-actions">
-                  <button type="submit" className="hero-send-btn" disabled={sending || !content} aria-label="전송">
+                  <label className="chat-attach-btn" title="자료 첨부">
+                    <input type="file" accept=".pptx,.pdf,.docx" onChange={handleChatFileChange} className="visually-hidden" />
+                    <span aria-hidden>＋</span><span className="chat-attach-label">자료 첨부</span>
+                  </label>
+                  <button type="submit" className="hero-send-btn" disabled={sending || (!content.trim() && !chatFile)} aria-label="전송">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   </button>
                 </div>
+                {chatFile && (
+                  <div className="chat-file-chip">
+                    <span>📎 {chatFile.name} · {formatFileSize(chatFile.size)}</span>
+                    <button type="button" onClick={removeChatFile} aria-label={`${chatFile.name} 제거`}>×</button>
+                  </div>
+                )}
+                {chatFileError && <p className="persona-file-error">{chatFileError}</p>}
               </form>
             </div>
           ) : (
@@ -697,18 +772,35 @@ export default function App() {
                 <p className="muted-hint">아직 선택된 페르소나가 없어요. 페르소나를 먼저 만들어야 대화를 시작할 수 있어요.</p>
               )}
 
-              <form className="add-form hero-form" onSubmit={handleAdd}>
+              <form
+                className={`add-form hero-form chat-file-dropzone${chatDropActive ? ' is-dragging' : ''}`}
+                onSubmit={handleAdd}
+                onDrop={handleChatDrop}
+                onDragOver={handleChatDragOver}
+                onDragLeave={() => setChatDropActive(false)}
+              >
                 <textarea
-                  placeholder={persona ? '메시지를 입력하세요' : '먼저 페르소나를 만들거나 선택해주세요'}
+                  placeholder={persona ? '메시지를 입력하거나 PPTX, PDF, DOCX 자료를 여기에 드래그하세요' : '먼저 페르소나를 만들거나 선택해주세요'}
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                   disabled={!persona}
                 />
                 <div className="hero-form-actions">
-                  <button type="submit" className="hero-send-btn" disabled={sending || !content || !persona} aria-label="전송">
+                  <label className={`chat-attach-btn${!persona ? ' is-disabled' : ''}`} title="자료 첨부">
+                    <input type="file" accept=".pptx,.pdf,.docx" onChange={handleChatFileChange} className="visually-hidden" disabled={!persona} />
+                    <span aria-hidden>＋</span><span className="chat-attach-label">자료 첨부</span>
+                  </label>
+                  <button type="submit" className="hero-send-btn" disabled={sending || (!content.trim() && !chatFile) || !persona} aria-label="전송">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   </button>
                 </div>
+                {chatFile && (
+                  <div className="chat-file-chip">
+                    <span>📎 {chatFile.name} · {formatFileSize(chatFile.size)}</span>
+                    <button type="button" onClick={removeChatFile} aria-label={`${chatFile.name} 제거`}>×</button>
+                  </div>
+                )}
+                {chatFileError && <p className="persona-file-error">{chatFileError}</p>}
               </form>
               {!persona && (
                 <button type="button" className="empty-cta" onClick={() => openNewPersona()} style={{ marginTop: 12 }}>

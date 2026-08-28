@@ -552,6 +552,18 @@ p.muted-hint{ color:var(--faint); }
 .hero-form input, .hero-form textarea{ padding:10px; border-radius:8px; border:1px solid var(--line); width:100%; background:var(--surface-2); color:var(--ink); }
 .hero-form input{ height:40px }
 .hero-form textarea{ min-height:80px; max-height:160px; resize:vertical }
+.chat-file-dropzone{ position:relative; padding:10px; border:1px dashed transparent; border-radius:12px; transition:border-color .15s, background .15s; }
+.chat-file-dropzone.is-dragging{ border-color:var(--accent-border); background:var(--accent-soft-bg); }
+.chat-file-dropzone.is-dragging::before{ content:'자료를 놓으면 채팅의 소스 파일로 사용합니다'; position:absolute; inset:0; z-index:3; display:flex; align-items:center; justify-content:center; border-radius:11px; background:color-mix(in srgb, var(--surface) 88%, transparent); color:var(--accent-hover); font-size:13px; font-weight:700; pointer-events:none; }
+.hero-form-actions{ display:flex; align-items:center; gap:8px; }
+.chat-attach-btn{ display:inline-flex; align-items:center; gap:5px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:12px; cursor:pointer; }
+.chat-attach-btn:hover{ color:var(--accent-hover); border-color:var(--accent-border); background:var(--accent-soft-bg); }
+.chat-attach-btn.is-disabled{ opacity:.45; cursor:not-allowed; }
+.chat-file-chip{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border:1px solid var(--accent-border); border-radius:8px; background:var(--accent-soft-bg); color:var(--ink); font-size:12px; }
+.chat-file-chip span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-file-chip button{ flex:none; border:0; background:none; color:var(--muted); font-size:16px; }
+.chat-file-chip button:hover{ color:var(--danger); }
+.thread-attachment{ align-self:flex-end; max-width:min(76%, 620px); margin:0 4px 4px; color:var(--muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .persona-grid{
   display:grid;
   grid-template-columns:repeat(3, 1fr);
