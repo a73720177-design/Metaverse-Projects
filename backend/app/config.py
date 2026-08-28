@@ -76,3 +76,21 @@ def get_max_upload_size_bytes() -> int:
     if megabytes < 1:
         raise RuntimeError("MAX_UPLOAD_SIZE_MB must be at least 1.")
     return megabytes * 1024 * 1024
+
+
+def get_jwt_secret_key() -> str:
+    secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
+    if len(secret_key.encode("utf-8")) < 32:
+        raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes.")
+    return secret_key
+
+
+def get_jwt_access_token_expire_minutes() -> int:
+    value = os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60").strip()
+    try:
+        minutes = int(value)
+    except ValueError as exc:
+        raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be an integer.") from exc
+    if minutes < 1:
+        raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be at least 1.")
+    return minutes

@@ -15,13 +15,30 @@ CREATE TABLE IF NOT EXISTS documents (
     document_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
     document_type TEXT NOT NULL,
+    full_text TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS document_files (
+    document_id UUID PRIMARY KEY REFERENCES documents(document_id) ON DELETE CASCADE,
     bucket TEXT NOT NULL,
     object_key TEXT NOT NULL,
-    sections JSONB NOT NULL DEFAULT '[]'::jsonb,
-    full_text TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_documents_object UNIQUE (bucket, object_key)
+    content_type TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS document_chunks (
+    chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_document_chunks_index UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS ix_document_chunks_document_id
+ON document_chunks(document_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
     review_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

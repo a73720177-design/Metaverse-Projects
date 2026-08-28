@@ -27,13 +27,15 @@ class ChatService:
         self.agent_repository = agent_repository
         self.document_repository = document_repository
 
-    async def reply(self, agent_id: UUID, request: ChatRequest) -> ChatResponse:
-        persona = await self.agent_repository.get(agent_id)
+    async def reply(
+        self, agent_id: UUID, request: ChatRequest, owner_id: UUID
+    ) -> ChatResponse:
+        persona = await self.agent_repository.get(agent_id, owner_id)
         if persona is None:
             raise ChatResourceNotFoundError("Agent not found")
         document = None
         if request.document_id is not None:
-            document = await self.document_repository.get(request.document_id)
+            document = await self.document_repository.get(request.document_id, owner_id)
             if document is None:
                 raise ChatResourceNotFoundError("Document not found")
         try:

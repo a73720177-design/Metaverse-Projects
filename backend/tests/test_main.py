@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -8,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.dependencies import (
     get_chat_service,
+    get_current_user,
     get_llm_client,
     get_persona_service,
     get_review_service,
@@ -28,12 +30,25 @@ from app.integrations.llm.legacy_generators import (
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
+from app.models.user import UserResponse
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
 
 
 client = TestClient(app)
+TEST_USER = UserResponse(
+    user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+    username="testuser",
+    created_at=datetime.now(timezone.utc),
+)
+
+
+@pytest.fixture(autouse=True)
+def authenticated_user_override():
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_root() -> None:
@@ -151,6 +166,27 @@ def test_create_and_get_agent_through_contracts() -> None:
         app.dependency_overrides.clear()
 
 
+def test_agent_is_hidden_from_another_user() -> None:
+    service = PersonaService(FakePersonaGenerator(), InMemoryAgentRepository())
+    app.dependency_overrides[get_persona_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    try:
+        created = client.post(
+            "/agents",
+            json={"name": "Private", "description": "Owner only"},
+        )
+        assert created.status_code == 201
+
+        other_user = TEST_USER.model_copy(
+            update={"user_id": UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")}
+        )
+        app.dependency_overrides[get_current_user] = lambda: other_user
+        response = client.get(f"/agents/{created.json()['agent_id']}")
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 class FakeReviewGenerator:
     async def generate(self, persona, document, instructions) -> dict:
         return {
@@ -181,7 +217,8 @@ def test_review_contract() -> None:
         import asyncio
         asyncio.run(
             agent_repository.save(
-                PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict")
+                PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
+                TEST_USER.user_id,
             )
         )
         asyncio.run(
@@ -193,7 +230,8 @@ def test_review_contract() -> None:
                     saved_path=Path("uploads/slides.pptx"),
                     sections=[],
                     full_text="Presentation text",
-                )
+                ),
+                TEST_USER.user_id,
             )
         )
         created = client.post(
@@ -218,7 +256,8 @@ def test_chat_contract() -> None:
     import asyncio
     asyncio.run(
         agent_repository.save(
-            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict")
+            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
+            TEST_USER.user_id,
         )
     )
     app.dependency_overrides[get_chat_service] = lambda: ChatService(
@@ -270,6 +309,46 @@ def test_llm_health_uses_versioned_http_service() -> None:
         app.dependency_overrides.clear()
 
 
+def test_services_health_reports_all_backend_dependencies() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/health"
+        return httpx.Response(200, json={"status": "ok"})
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["services"]["backend"]["status"] == "ok"
+        assert payload["services"]["database"]["status"] == "development"
+        assert payload["services"]["database"]["mode"] == "memory"
+        assert payload["services"]["llm"]["status"] == "ok"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("private-host:8001 secret detail")
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/services")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "degraded"
+        assert payload["services"]["llm"]["status"] == "unavailable"
+        assert "private-host" not in response.text
+        assert "secret" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
@@ -283,10 +362,10 @@ def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
 
 def test_database_failure_uses_safe_common_error_response() -> None:
     class FailingAgentRepository:
-        async def save(self, persona: PersonaProfile) -> None:
+        async def save(self, persona: PersonaProfile, owner_id: UUID) -> None:
             raise SQLAlchemyError("sensitive database detail")
 
-        async def get(self, agent_id: UUID) -> PersonaProfile | None:
+        async def get(self, agent_id: UUID, owner_id: UUID) -> PersonaProfile | None:
             return None
 
     service = PersonaService(LocalPersonaGenerator(), FailingAgentRepository())
