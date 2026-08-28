@@ -20,6 +20,7 @@ from app.models.persona import PersonaCreateRequest
 from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository
+from app.repositories.chat_repository import InMemoryChatRepository
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import HttpPersonaGenerator
 from app.integrations.llm.contracts import ReviewGeneratorError
@@ -260,13 +261,34 @@ def test_chat_contract() -> None:
             TEST_USER.user_id,
         )
     )
+    chat_repository = InMemoryChatRepository()
     app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        FakeChatGenerator(), agent_repository, document_repository
+        FakeChatGenerator(), agent_repository, document_repository, chat_repository
     )
     try:
         response = client.post(f"/agents/{agent_id}/chat", json={"message": "Hello"})
         assert response.status_code == 200
         assert response.json()["answer"] == "Evaluator response: Hello"
+        assert response.json()["message"] == "Hello"
+
+        message_id = response.json()["message_id"]
+        assert client.get("/chats").json()[0]["message_id"] == message_id
+
+        moved = client.delete(f"/chats/{message_id}")
+        assert moved.status_code == 200
+        assert moved.json()["deleted_at"] is not None
+        assert client.get("/chats").json() == []
+        assert client.get("/trash/chats").json()[0]["message_id"] == message_id
+
+        restored = client.post(f"/trash/chats/{message_id}/restore")
+        assert restored.status_code == 200
+        assert restored.json()["deleted_at"] is None
+        assert client.get("/trash/chats").json() == []
+
+        assert client.delete(f"/chats/{message_id}").status_code == 200
+        assert client.delete(f"/trash/chats/{message_id}").status_code == 204
+        assert client.get("/trash/chats").json() == []
+        assert client.post(f"/trash/chats/{message_id}/restore").status_code == 404
     finally:
         app.dependency_overrides.clear()
 

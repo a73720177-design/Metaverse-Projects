@@ -23,6 +23,7 @@ from app.integrations.llm.legacy_generators import (
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
+from app.repositories.chat_repository import ChatRepository, InMemoryChatRepository, PostgresChatRepository
 from app.repositories.user_repository import (
     InMemoryUserRepository,
     PostgresUserRepository,
@@ -69,6 +70,11 @@ def get_document_repository() -> DocumentRepository:
 @lru_cache
 def get_review_repository() -> ReviewRepository:
     return PostgresReviewRepository() if get_repository_mode() == "postgres" else InMemoryReviewRepository()
+
+
+@lru_cache
+def get_chat_repository() -> ChatRepository:
+    return PostgresChatRepository() if get_repository_mode() == "postgres" else InMemoryChatRepository()
 
 
 @lru_cache
@@ -145,6 +151,7 @@ def get_review_service() -> ReviewService:
         repository=get_review_repository(),
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        chat_repository=get_chat_repository(),
     )
 
 
