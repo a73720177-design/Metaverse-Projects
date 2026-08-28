@@ -2,6 +2,8 @@ from typing import Protocol
 from uuid import UUID
 
 from app.models.persona import PersonaProfile
+from app.db.database import get_session_factory
+from app.db.tables import AgentTable
 
 
 class AgentRepository(Protocol):
@@ -22,3 +24,35 @@ class InMemoryAgentRepository:
 
     async def get(self, agent_id: UUID) -> PersonaProfile | None:
         return self._agents.get(agent_id)
+
+
+class PostgresAgentRepository:
+    async def save(self, persona: PersonaProfile) -> None:
+        data = persona.model_dump(mode="json")
+        row = AgentTable(
+            agent_id=persona.agent_id,
+            name=persona.name,
+            description=persona.description,
+            role=persona.role,
+            expertise=data["expertise"],
+            evaluation_style=data["evaluation_style"],
+        )
+        async with get_session_factory()() as session:
+            await session.merge(row)
+            await session.commit()
+
+    async def get(self, agent_id: UUID) -> PersonaProfile | None:
+        async with get_session_factory()() as session:
+            row = await session.get(AgentTable, agent_id)
+        if row is None:
+            return None
+        return PersonaProfile.model_validate(
+            {
+                "agent_id": row.agent_id,
+                "name": row.name,
+                "description": row.description,
+                "role": row.role,
+                "expertise": row.expertise,
+                "evaluation_style": row.evaluation_style,
+            }
+        )
