@@ -18,9 +18,10 @@ Ollama(qwen3:14b)를 로컬에서 호출합니다.
 
 ## 사전 준비
 
-1. [Ollama](https://ollama.com/download) 설치
-2. 모델 다운로드: `ollama pull qwen3:14b`
-3. Ollama 서버 실행 확인 (기본적으로 설치 시 자동 실행됨, 안 되어 있으면 `ollama serve`)
+1. Python 3.11~3.13 사용 (`pydantic==2.9.2`의 `pydantic-core`는 Python 3.14 설치를 지원하지 않음)
+2. [Ollama](https://ollama.com/download) 설치
+3. 모델 다운로드: `ollama pull qwen3:14b`
+4. Ollama 서버 실행 확인 (기본적으로 설치 시 자동 실행됨, 안 되어 있으면 `ollama serve`)
 
 ### 테스트한 버전
 

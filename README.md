@@ -1,6 +1,6 @@
 # Metaverse Projects
 
-발표자료를 업로드하고 평가자 페르소나의 관점에서 리뷰와 질문·답변을 제공하는 팀 프로젝트입니다. 현재 공통 `main`에는 Backend 통합 코드만 유지하며 Frontend 애플리케이션 코드는 아직 포함하지 않습니다. 향후 Frontend는 Backend API만 호출하고 Backend가 LLM 서비스, PostgreSQL, MinIO를 연결합니다.
+발표자료를 업로드하고 평가자 페르소나의 관점에서 리뷰와 질문·답변을 제공하는 팀 프로젝트입니다. 공통 `main`에는 React + Vite Frontend, FastAPI Backend, LLM 서비스와 DB migration이 포함되어 있습니다. Frontend는 Backend API만 호출하고 Backend가 LLM 서비스, PostgreSQL, MinIO를 연결합니다.
 
 ## 전체 구성
 
