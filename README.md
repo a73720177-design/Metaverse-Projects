@@ -1,6 +1,6 @@
 # Metaverse Projects
 
-발표자료를 업로드하고 평가자 페르소나의 관점에서 리뷰와 질문·답변을 제공하는 팀 프로젝트입니다. Frontend는 Backend API만 호출하며 Backend가 LLM 서비스, PostgreSQL, MinIO를 연결합니다.
+발표자료를 업로드하고 평가자 페르소나의 관점에서 리뷰와 질문·답변을 제공하는 팀 프로젝트입니다. 현재 공통 `main`에는 Backend 통합 코드만 유지하며 Frontend 애플리케이션 코드는 아직 포함하지 않습니다. 향후 Frontend는 Backend API만 호출하고 Backend가 LLM 서비스, PostgreSQL, MinIO를 연결합니다.
 
 ## 전체 구성
 
@@ -64,26 +64,9 @@ CYCL DB 작업을 기준으로 문서 저장 구조를 다음과 같이 분리�
 
 ### Frontend 연동
 
-React/Vite 최신 연동 수정은 `imjae-frontend-integration`에 정리되어 있습니다.
+Frontend 애플리케이션과 Frontend CI는 아직 공통 브랜치에 포함하지 않습니다. Backend는 향후 연동을 위한 HTTP API와 CORS 설정만 제공합니다. Frontend를 통합할 때는 `/agents`, `/documents/parse`, `/agents/{agent_id}/chat` 계약과 Backend 공통 오류 응답을 기준으로 별도 PR에서 검증합니다.
 
-- 실제 Backend API인 `/agents`, `/documents/parse`, `/agents/{agent_id}/chat` 사용
-- Backend가 발급한 `agent_id`, `document_id` 저장
-- 현재 존재하지 않는 로그인과 SSE API 가정 제거
-- Backend 공통 오류 응답 처리
-- 업로드 형식·25MB 제한과 메시지 5,000자 제한
-- Vite 8.2.2 보안 업데이트
-- 외부 CDN 폰트 제거
-- Frontend build 및 dependency audit CI 추가
-
-검증 결과:
-
-```text
-Frontend production build: success
-npm audit: 0 vulnerabilities
-Frontend CI: success
-```
-
-현재 Backend는 JSON 단일 채팅 응답을 사용합니다. 화면은 대화 기록을 보관하지만 Backend에는 현재 질문 한 건과 선택적 `document_id`를 전달합니다. 로그인, SSE, Backend 멀티턴은 별도 계약이 확정된 뒤 추가합니다.
+현재 Backend는 JSON 단일 채팅 응답을 사용합니다. 로그인, SSE, Backend 멀티턴은 별도 계약과 보안 정책이 확정된 뒤 추가합니다.
 
 ### LLM 연동
 
@@ -200,12 +183,11 @@ skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository �
 - [ ] LLM PR #17 변경 요청 해결과 재리뷰
 - [ ] 실제 LLM/Ollama persona·review·chat 연동 테스트
 - [ ] DB migration을 별도 테스트 DB에서 검증
-- [ ] Frontend와 Backend의 Persona → Document → Chat 전체 흐름 검증
+- [ ] Frontend 통합 전 Persona → Document → Chat API 흐름 검증
 
 ### P1
 
 - [ ] PostgreSQL·MinIO 실패 및 rollback 통합 테스트
-- [ ] Frontend 컴포넌트·API 클라이언트 자동 테스트와 ESLint 추가
 - [ ] Backend 삭제 API와 Frontend 페르소나·문서 삭제 연결
 - [ ] 채팅 timeout, 메시지 개수와 요청 크기 정책 확정
 
@@ -213,7 +195,7 @@ skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository �
 
 - [ ] Backend 멀티턴 계약 확정
 - [ ] 필요할 경우 인증과 SSE를 별도 보안 검토 후 구현
-- [ ] 모바일 Frontend 사이드바 개선
+- [ ] Frontend 통합 범위와 일정 확정
 
 ## 보안 기준
 
