@@ -96,8 +96,8 @@ export function uploadDocument(file, token, signal) {
   })
 }
 
-// Requires auth — Backend only lets you chat with agents/documents you own.
-// -> { message_id, agent_id, answer, sources }
+// Requires auth — uploadDocument() can first turn a dropped PPTX/PDF/DOCX
+// into documentId, which this request then uses as the LLM source context.
 export function sendChat({ agentId, message, documentId = null, token, signal }) {
   if (!agentId) throw new Error('먼저 Backend에 등록된 페르소나를 선택해주세요.')
   return apiFetch(`/agents/${encodeURIComponent(agentId)}/chat`, {

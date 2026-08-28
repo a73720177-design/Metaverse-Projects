@@ -18,6 +18,7 @@ from app.models.persona import PersonaCreateRequest, PersonaProfile
 from app.models.review import ReviewCreateRequest
 from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
+from app.repositories.chat_repository import InMemoryChatRepository
 from app.repositories.review_repository import InMemoryReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
@@ -188,6 +189,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
             HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
             agent_repository,
             document_repository,
+            InMemoryChatRepository(),
         )
         return await service.reply(
             persona.agent_id,

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -50,3 +51,9 @@ class PersonaProfile(BaseModel):
     role: str = "Evaluator"
     expertise: list[PersonaTrait] = Field(default_factory=list)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list)
+
+
+class PersonaHistoryItem(PersonaProfile):
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None
