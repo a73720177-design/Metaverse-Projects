@@ -42,6 +42,8 @@ Ollama :11434
 - DB 또는 저장소 실패 시 업로드 객체 정리
 - Python 3.14 호환 의존성
 - Backend CI
+- 로컬 계정 회원가입·로그인과 Argon2 비밀번호 해시
+- `memory|postgres` 사용자 저장과 만료 시간이 있는 JWT access token
 
 ### DB 연동
 
@@ -55,12 +57,15 @@ CYCL DB 작업을 기준으로 문서 저장 구조를 다음과 같이 분리�
 
 - 신규 DB 스키마: `backend/database/001_initial_schema.sql`
 - 기존 DB 전환: `backend/database/002_split_document_storage.sql`
+- 사용자 테이블 추가: `backend/database/003_add_users.sql`
 - 원본 파일 object key: `{document_id}/original{suffix}`
 - 문서·파일·청크를 한 트랜잭션으로 저장·조회
 - 기존 `memory/postgres`, `local/minio` 실행 모드와 시작 시 환경변수 검증 유지
 - 별도 테스트 DB 설정 예시: `backend/.env.test.example`
 
 `002_split_document_storage.sql`은 기존 파일 정보와 sections를 새 테이블로 이전한 뒤 예전 컬럼을 제거합니다. 공유 DB에 적용하기 전에 반드시 백업하고 별도 테스트 DB에서 데이터 이전과 재실행을 검증해야 합니다.
+
+`003_add_users.sql`은 인증용 `users` 테이블을 추가합니다. 신규 DB는 `001` → `002` → `003` 순서로 적용하고, 기존 통합 DB에는 백업 후 `003`을 적용합니다.
 
 ### Frontend 연동
 
@@ -137,6 +142,8 @@ MINIO_ACCESS_KEY=접근키
 MINIO_SECRET_KEY=비밀키
 MINIO_BUCKET=documents
 MINIO_SECURE=false
+JWT_SECRET_KEY=32바이트-이상의-임의-문자열
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 ```
 
 - `postgresql://` 주소는 Backend에서 `postgresql+asyncpg://`로 변환합니다.
@@ -151,6 +158,9 @@ MINIO_SECURE=false
 | GET | `/health/db` | Repository 모드와 PostgreSQL 상태 |
 | GET | `/health/llm` | LLM 서비스 상태 |
 | GET | `/health/services` | Backend·DB·LLM 통합 연결 상태 |
+| POST | `/auth/signup` | 로컬 계정 생성 |
+| POST | `/auth/login` | JWT access token 발급 |
+| GET | `/auth/me` | Bearer token의 현재 사용자 조회 |
 | POST | `/agents` | 평가자 페르소나 생성 |
 | GET | `/agents/{agent_id}` | 평가자 조회 |
 | POST | `/documents/parse` | 문서 업로드와 텍스트 추출 |
@@ -159,6 +169,8 @@ MINIO_SECURE=false
 | POST | `/agents/{agent_id}/chat` | 평가자 관점 채팅 |
 
 정확한 필드와 오류 응답은 실행 중인 `/docs`를 기준으로 합니다.
+
+현재 인증은 계정 생성·로그인·현재 사용자 확인까지만 제공합니다. Agent·Document·Review·Chat API의 사용자별 소유권과 접근 제어는 아직 적용하지 않았으므로, 외부 공개 전에 리소스 소유권 정책과 로그인 rate limit을 별도 구현해야 합니다.
 
 ## 테스트
 
@@ -183,6 +195,7 @@ skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository �
 - [ ] LLM PR #17 변경 요청 해결과 재리뷰
 - [ ] 실제 LLM/Ollama persona·review·chat 연동 테스트
 - [ ] DB migration을 별도 테스트 DB에서 검증
+- [ ] `003_add_users.sql`과 PostgreSQL 인증 흐름을 별도 테스트 DB에서 검증
 - [ ] Frontend 통합 전 Persona → Document → Chat API 흐름 검증
 
 ### P1
@@ -190,6 +203,7 @@ skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository �
 - [ ] PostgreSQL·MinIO 실패 및 rollback 통합 테스트
 - [ ] Backend 삭제 API와 Frontend 페르소나·문서 삭제 연결
 - [ ] 채팅 timeout, 메시지 개수와 요청 크기 정책 확정
+- [ ] 로그인 rate limit과 JWT 폐기·교체 정책 확정
 
 ### P2
 
