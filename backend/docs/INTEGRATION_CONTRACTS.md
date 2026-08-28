@@ -61,15 +61,21 @@ Backend 서비스는 특정 DB 라이브러리를 직접 사용하지 않고 Rep
 
 ```python
 class AgentRepository(Protocol):
-    def save(self, agent: Agent) -> Agent: ...
-    def find_by_id(self, agent_id: UUID) -> Agent | None: ...
+    async def save(self, persona: PersonaProfile, owner_id: UUID) -> None: ...
+    async def get(self, agent_id: UUID, owner_id: UUID) -> PersonaProfile | None: ...
 
 class DocumentRepository(Protocol):
-    def save(self, document: Document) -> Document: ...
-    def find_by_id(self, document_id: UUID) -> Document | None: ...
+    async def save(self, document: DocumentParseResponse, owner_id: UUID) -> None: ...
+    async def get(
+        self, document_id: UUID, owner_id: UUID
+    ) -> DocumentParseResponse | None: ...
+
+class ReviewRepository(Protocol):
+    async def save(self, review: ReviewResult, owner_id: UUID) -> None: ...
+    async def get(self, review_id: UUID, owner_id: UUID) -> ReviewResult | None: ...
 ```
 
-Review와 Chat 저장 기능도 구현 전에 같은 방식으로 Repository 계약을 합의합니다.
+`owner_id`는 API 응답에 노출하지 않는 내부 소유권 경계입니다. 다른 사용자의 UUID를 조회하면 Repository는 `None`을 반환합니다. Chat은 별도 저장하지 않고 소유권이 확인된 Agent와 선택적 Document만 사용합니다.
 
 ### Repository 구현 규칙
 
@@ -78,6 +84,7 @@ Review와 Chat 저장 기능도 구현 전에 같은 방식으로 Repository 계
 - 연결 문자열과 비밀번호는 환경 변수로 관리합니다.
 - DB 전용 객체를 API에 직접 반환하지 않고 Backend 도메인 모델로 변환합니다.
 - 스키마 변경 전 Backend 팀과 필드 변환 방법을 합의합니다.
+- Agent·Document·Review 생성과 조회에는 인증된 `owner_id`를 반드시 전달합니다.
 
 ## 5. 공통 오류 응답
 
@@ -115,8 +122,9 @@ Frontend에 공개되는 오류는 다음 형식을 사용합니다.
 - Backend의 LLM HTTP 클라이언트와 `/health/llm`은 구현되어 있습니다.
 - LLM 작업 브랜치는 legacy API와 정식 `/api/v1` Persona·Review·Chat을 모두 구현했습니다.
 - Backend v1 mock 계약 테스트는 통과했으며 PR #17의 `LLM-main` 병합 후 실제 Ollama 통합 테스트가 필요합니다.
-- Agent와 Document는 메모리 Repository를 사용하므로 Backend 재시작 시 사라집니다.
-- 실제 DB Repository와 Review·Chat 저장은 아직 연결되지 않았습니다.
+- Agent·Document·Review는 `REPOSITORY_MODE=memory|postgres`에 따라 저장소를 선택합니다.
+- 인증된 사용자는 본인이 생성한 Agent·Document·Review만 조회할 수 있습니다.
+- PostgreSQL은 `003_add_users.sql`과 `004_add_resource_ownership.sql` 적용이 필요합니다.
 - 버전 차이와 팀별 수정 항목은 [버전 호환성 안내](./VERSION_COMPATIBILITY.md)를 확인합니다.
 
 ## 9. 연동 전 확인 목록

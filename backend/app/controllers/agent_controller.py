@@ -2,8 +2,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies import get_persona_service
+from app.dependencies import get_current_user, get_persona_service
 from app.models.persona import PersonaCreateRequest, PersonaProfile
+from app.models.user import UserResponse
 from app.services.persona_service import PersonaService, UpstreamServiceError
 
 router = APIRouter(prefix="/agents", tags=["평가자"])
@@ -15,9 +16,10 @@ router = APIRouter(prefix="/agents", tags=["평가자"])
 async def create_agent(
     request: PersonaCreateRequest,
     service: PersonaService = Depends(get_persona_service),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> PersonaProfile:
     try:
-        return await service.create(request)
+        return await service.create(request, current_user.user_id)
     except UpstreamServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -28,8 +30,9 @@ async def create_agent(
 async def get_agent(
     agent_id: UUID,
     service: PersonaService = Depends(get_persona_service),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> PersonaProfile:
-    persona = await service.get(agent_id)
+    persona = await service.get(agent_id, current_user.user_id)
     if persona is None:
         raise HTTPException(status_code=404, detail="평가자를 찾을 수 없습니다.")
     return persona

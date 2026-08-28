@@ -58,6 +58,7 @@ CYCL DB 작업을 기준으로 문서 저장 구조를 다음과 같이 분리�
 - 신규 DB 스키마: `backend/database/001_initial_schema.sql`
 - 기존 DB 전환: `backend/database/002_split_document_storage.sql`
 - 사용자 테이블 추가: `backend/database/003_add_users.sql`
+- Agent·Document·Review 소유권 추가: `backend/database/004_add_resource_ownership.sql`
 - 원본 파일 object key: `{document_id}/original{suffix}`
 - 문서·파일·청크를 한 트랜잭션으로 저장·조회
 - 기존 `memory/postgres`, `local/minio` 실행 모드와 시작 시 환경변수 검증 유지
@@ -65,7 +66,9 @@ CYCL DB 작업을 기준으로 문서 저장 구조를 다음과 같이 분리�
 
 `002_split_document_storage.sql`은 기존 파일 정보와 sections를 새 테이블로 이전한 뒤 예전 컬럼을 제거합니다. 공유 DB에 적용하기 전에 반드시 백업하고 별도 테스트 DB에서 데이터 이전과 재실행을 검증해야 합니다.
 
-`003_add_users.sql`은 인증용 `users` 테이블을 추가합니다. 신규 DB는 `001` → `002` → `003` 순서로 적용하고, 기존 통합 DB에는 백업 후 `003`을 적용합니다.
+`003_add_users.sql`은 인증용 `users` 테이블을 추가하고 `004_add_resource_ownership.sql`은 Agent·Document·Review에 `owner_id`를 연결합니다. 신규 DB는 `001` → `002` → `003` → `004` 순서로 적용합니다.
+
+`004` 적용 전 존재하던 리소스는 소유자를 임의로 배정하지 않고 `owner_id=NULL`로 보존합니다. 이 데이터는 인증 API에서 조회되지 않으므로 필요한 경우 DB 담당자와 실제 소유자를 확인한 뒤 별도 migration으로 배정합니다.
 
 ### Frontend 연동
 
@@ -170,7 +173,7 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 
 정확한 필드와 오류 응답은 실행 중인 `/docs`를 기준으로 합니다.
 
-현재 인증은 계정 생성·로그인·현재 사용자 확인까지만 제공합니다. Agent·Document·Review·Chat API의 사용자별 소유권과 접근 제어는 아직 적용하지 않았으므로, 외부 공개 전에 리소스 소유권 정책과 로그인 rate limit을 별도 구현해야 합니다.
+`/auth/signup`, `/auth/login`을 제외한 Agent·Document·Review·Chat API는 `Authorization: Bearer <token>`을 요구합니다. 생성된 리소스에는 현재 사용자의 `user_id`가 내부 소유자로 저장되며, 다른 사용자의 UUID를 요청하면 존재 여부를 노출하지 않고 404를 반환합니다. 로그인 rate limit과 JWT 폐기·교체 정책은 외부 공개 전에 추가해야 합니다.
 
 ## 테스트
 
@@ -196,6 +199,7 @@ skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository �
 - [ ] 실제 LLM/Ollama persona·review·chat 연동 테스트
 - [ ] DB migration을 별도 테스트 DB에서 검증
 - [ ] `003_add_users.sql`과 PostgreSQL 인증 흐름을 별도 테스트 DB에서 검증
+- [ ] `004_add_resource_ownership.sql` 적용과 기존 데이터 소유자 배정 여부 결정
 - [ ] Frontend 통합 전 Persona → Document → Chat API 흐름 검증
 
 ### P1

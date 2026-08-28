@@ -51,9 +51,11 @@ Python 3.14에서는 빌드 오류가 있는 `asyncpg 0.30.0` 대신 3.14 wheel�
 1. 대상 DB를 백업합니다.
 2. 별도 테스트 DB에 `002_split_document_storage.sql`을 먼저 실행합니다.
 3. 인증 기능을 사용할 DB에는 `003_add_users.sql`을 실행합니다.
-4. 이전된 `document_files`, `document_chunks`의 개수와 내용을 확인합니다.
-5. 동일 SQL을 한 번 더 실행해 재실행 안전성을 확인합니다.
-6. 검증 후 공유 DB에 적용합니다.
+4. 리소스 소유권을 적용할 DB에는 `004_add_resource_ownership.sql`을 실행합니다.
+5. 이전된 `document_files`, `document_chunks`의 개수와 내용을 확인합니다.
+6. 기존 리소스의 `owner_id=NULL` 유지 또는 소유자 배정 정책을 확인합니다.
+7. 동일 SQL을 한 번 더 실행해 재실행 안전성을 확인합니다.
+8. 검증 후 공유 DB에 적용합니다.
 
 ## MinIO 연결
 
