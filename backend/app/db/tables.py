@@ -41,6 +41,7 @@ class AgentTable(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class DocumentTable(Base):
@@ -111,7 +112,7 @@ class ReviewTable(Base):
         PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), index=True
     )
     agent_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="RESTRICT"), nullable=False
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="CASCADE"), nullable=False
     )
     document_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -138,7 +139,7 @@ class ChatMessageTable(Base):
         PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
     )
     agent_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="RESTRICT"), nullable=False
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="CASCADE"), nullable=False
     )
     document_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="SET NULL")

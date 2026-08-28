@@ -163,6 +163,27 @@ def test_create_and_get_agent_through_contracts() -> None:
         fetched = client.get(f"/agents/{payload['agent_id']}")
         assert fetched.status_code == 200
         assert fetched.json() == payload
+
+        active = client.get("/agents")
+        assert active.status_code == 200
+        assert active.json()[0]["agent_id"] == payload["agent_id"]
+
+        moved = client.delete(f"/agents/{payload['agent_id']}")
+        assert moved.status_code == 200
+        assert moved.json()["deleted_at"] is not None
+        assert client.get(f"/agents/{payload['agent_id']}").status_code == 404
+        assert client.get("/agents").json() == []
+        assert client.get("/agents/trash").json()[0]["agent_id"] == payload["agent_id"]
+
+        restored = client.post(f"/agents/trash/{payload['agent_id']}/restore")
+        assert restored.status_code == 200
+        assert restored.json()["deleted_at"] is None
+        assert client.get(f"/agents/{payload['agent_id']}").status_code == 200
+
+        assert client.delete(f"/agents/{payload['agent_id']}").status_code == 200
+        assert client.delete(f"/agents/trash/{payload['agent_id']}").status_code == 204
+        assert client.get("/agents/trash").json() == []
+        assert client.post(f"/agents/trash/{payload['agent_id']}/restore").status_code == 404
     finally:
         app.dependency_overrides.clear()
 
