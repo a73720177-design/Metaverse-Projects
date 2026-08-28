@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.dependencies import get_auth_service
+from app.dependencies import get_auth_service, get_current_user
 from app.models.user import TokenResponse, UserCredentials, UserResponse
 from app.repositories.user_repository import UsernameAlreadyExistsError
 from app.services.auth_service import AuthService, InvalidCredentialsError
 
 
 router = APIRouter(prefix="/auth", tags=["로그인"])
-bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -39,16 +37,6 @@ async def login(
 
 @router.get("/me", response_model=UserResponse)
 async def me(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    service: AuthService = Depends(get_auth_service),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> UserResponse:
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    try:
-        return await service.get_user_from_token(credentials.credentials)
-    except InvalidCredentialsError as exc:
-        raise HTTPException(
-            status_code=401,
-            detail="유효하지 않거나 만료된 로그인입니다.",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+    return current_user

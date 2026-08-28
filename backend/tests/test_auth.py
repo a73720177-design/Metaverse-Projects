@@ -1,9 +1,14 @@
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import pytest
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_auth_service
 from app.main import app
+from app.models.user import UserCredentials
 from app.repositories.user_repository import InMemoryUserRepository
-from app.services.auth_service import AuthService
+from app.services.auth_service import AuthService, InvalidCredentialsError
 
 
 client = TestClient(app)
@@ -80,3 +85,29 @@ def test_invalid_login_and_missing_token_are_rejected() -> None:
         assert me.status_code == 401
     finally:
         app.dependency_overrides.clear()
+
+
+def test_expired_and_tampered_tokens_are_rejected() -> None:
+    service, _ = make_service()
+    created = __import__("asyncio").run(
+        service.signup(UserCredentials(username="tokenuser", password="password123"))
+    )
+    expired = jwt.encode(
+        {
+            "sub": str(created.user_id),
+            "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
+        },
+        service.secret_key,
+        algorithm="HS256",
+    )
+    with pytest.raises(InvalidCredentialsError):
+        __import__("asyncio").run(service.get_user_from_token(expired))
+
+    valid = __import__("asyncio").run(
+        service.login(UserCredentials(username="tokenuser", password="password123"))
+    ).access_token
+    parts = valid.split(".")
+    parts[2] = f"{'a' if parts[2][0] != 'a' else 'b'}{parts[2][1:]}"
+    tampered = ".".join(parts)
+    with pytest.raises(InvalidCredentialsError):
+        __import__("asyncio").run(service.get_user_from_token(tampered))

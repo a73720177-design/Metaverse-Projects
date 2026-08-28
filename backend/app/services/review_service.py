@@ -30,11 +30,13 @@ class ReviewService:
         self.agent_repository = agent_repository
         self.document_repository = document_repository
 
-    async def create(self, agent_id: UUID, request: ReviewCreateRequest) -> ReviewResult:
-        persona = await self.agent_repository.get(agent_id)
+    async def create(
+        self, agent_id: UUID, request: ReviewCreateRequest, owner_id: UUID
+    ) -> ReviewResult:
+        persona = await self.agent_repository.get(agent_id, owner_id)
         if persona is None:
             raise ReviewResourceNotFoundError("Agent not found")
-        document = await self.document_repository.get(request.document_id)
+        document = await self.document_repository.get(request.document_id, owner_id)
         if document is None:
             raise ReviewResourceNotFoundError("Document not found")
         try:
@@ -51,8 +53,8 @@ class ReviewService:
             )
         except (ReviewGeneratorError, ValidationError) as exc:
             raise ReviewServiceError("Review generator returned an invalid response") from exc
-        await self.repository.save(review)
+        await self.repository.save(review, owner_id)
         return review
 
-    async def get(self, review_id: UUID) -> ReviewResult | None:
-        return await self.repository.get(review_id)
+    async def get(self, review_id: UUID, owner_id: UUID) -> ReviewResult | None:
+        return await self.repository.get(review_id, owner_id)

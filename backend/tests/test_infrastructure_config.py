@@ -11,7 +11,14 @@ from app.config import (
 from app.controllers.document_controller import build_document_object_key
 from app.dependencies import get_user_repository
 from app.db.database import normalize_database_url
-from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable, UserTable
+from app.db.tables import (
+    AgentTable,
+    DocumentChunkTable,
+    DocumentFileTable,
+    DocumentTable,
+    ReviewTable,
+    UserTable,
+)
 from app.repositories.user_repository import InMemoryUserRepository, PostgresUserRepository
 
 
@@ -42,6 +49,7 @@ def test_upload_limit_is_read_from_environment(monkeypatch: pytest.MonkeyPatch) 
 def test_document_storage_schema_is_split() -> None:
     assert set(DocumentTable.__table__.columns.keys()) == {
         "document_id",
+        "owner_id",
         "filename",
         "document_type",
         "full_text",
@@ -69,6 +77,12 @@ def test_user_schema_contains_auth_fields() -> None:
         "password_hash",
         "created_at",
     }
+
+
+def test_resource_tables_contain_owner_id() -> None:
+    assert "owner_id" in AgentTable.__table__.columns
+    assert "owner_id" in DocumentTable.__table__.columns
+    assert "owner_id" in ReviewTable.__table__.columns
 
 
 def test_jwt_settings_are_validated(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,6 +1,8 @@
 from functools import lru_cache
 import os
 
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import (
     get_jwt_access_token_expire_minutes,
     get_jwt_secret_key,
@@ -30,9 +32,14 @@ from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
+from app.models.user import UserResponse
+from app.services.auth_service import InvalidCredentialsError
 from app.storage.minio_storage import MinioStorage
 from app.storage.local_storage import LocalStorage
 from app.storage.object_storage import ObjectStorage
+
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @lru_cache
@@ -80,6 +87,32 @@ def get_auth_service() -> AuthService:
         secret_key=get_jwt_secret_key(),
         access_token_expire_minutes=get_jwt_access_token_expire_minutes(),
     )
+
+
+def require_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="로그인이 필요합니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return credentials.credentials
+
+
+async def get_current_user(
+    token: str = Depends(require_bearer_token),
+    service: AuthService = Depends(get_auth_service),
+) -> UserResponse:
+    try:
+        return await service.get_user_from_token(token)
+    except InvalidCredentialsError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="유효하지 않거나 만료된 로그인입니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
 
 
 @lru_cache

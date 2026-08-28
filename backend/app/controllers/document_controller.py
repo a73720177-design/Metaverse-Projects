@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_max_upload_size_bytes
-from app.dependencies import get_document_repository, get_object_storage
+from app.dependencies import get_current_user, get_document_repository, get_object_storage
 from app.models.document import DocumentParseResponse
+from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
 from app.storage.object_storage import ObjectStorage, ObjectStorageError
@@ -28,6 +29,7 @@ async def upload_and_parse(
     file: UploadFile = File(...),
     repository: DocumentRepository = Depends(get_document_repository),
     storage: ObjectStorage = Depends(get_object_storage),
+    current_user: UserResponse = Depends(get_current_user),
 ) -> DocumentParseResponse:
     filename = file.filename or ""
     if not filename or Path(filename).name != filename:
@@ -61,7 +63,7 @@ async def upload_and_parse(
         await storage.upload(saved_path, object_key, file.content_type)
         uploaded = True
         document.saved_path = Path(object_key)
-        await repository.save(document)
+        await repository.save(document, current_user.user_id)
         return document
     except HTTPException:
         raise
