@@ -1,10 +1,18 @@
 import pytest
 from uuid import UUID
 
-from app.config import get_max_upload_size_bytes, get_object_storage_mode, get_repository_mode
+from app.config import (
+    get_jwt_access_token_expire_minutes,
+    get_jwt_secret_key,
+    get_max_upload_size_bytes,
+    get_object_storage_mode,
+    get_repository_mode,
+)
 from app.controllers.document_controller import build_document_object_key
+from app.dependencies import get_user_repository
 from app.db.database import normalize_database_url
-from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable
+from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable, UserTable
+from app.repositories.user_repository import InMemoryUserRepository, PostgresUserRepository
 
 
 def test_default_infrastructure_modes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,3 +60,38 @@ def test_original_document_object_key_contract() -> None:
     assert build_document_object_key(document_id, ".PDF") == (
         "12345678-1234-5678-1234-567812345678/original.pdf"
     )
+
+
+def test_user_schema_contains_auth_fields() -> None:
+    assert set(UserTable.__table__.columns.keys()) == {
+        "user_id",
+        "username",
+        "password_hash",
+        "created_at",
+    }
+
+
+def test_jwt_settings_are_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JWT_SECRET_KEY", "x" * 32)
+    monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+    assert get_jwt_secret_key() == "x" * 32
+    assert get_jwt_access_token_expire_minutes() == 30
+
+    monkeypatch.setenv("JWT_SECRET_KEY", "too-short")
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        get_jwt_secret_key()
+
+
+def test_user_repository_follows_repository_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        monkeypatch.setenv("REPOSITORY_MODE", "memory")
+        get_user_repository.cache_clear()
+        assert isinstance(get_user_repository(), InMemoryUserRepository)
+
+        monkeypatch.setenv("REPOSITORY_MODE", "postgres")
+        get_user_repository.cache_clear()
+        assert isinstance(get_user_repository(), PostgresUserRepository)
+    finally:
+        get_user_repository.cache_clear()

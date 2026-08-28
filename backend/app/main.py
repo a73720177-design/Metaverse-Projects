@@ -10,6 +10,7 @@ from app.config import (
     get_repository_mode,
 )
 from app.controllers.agent_controller import router as agent_router
+from app.controllers.auth_controller import router as auth_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
@@ -46,6 +47,7 @@ app = FastAPI(
     ),
     openapi_tags=[
         {"name": "시스템", "description": "Backend와 LLM 서비스 상태를 확인합니다."},
+        {"name": "로그인", "description": "로컬 계정을 생성하고 JWT로 로그인합니다."},
         {"name": "평가자", "description": "평가자 페르소나를 생성하고 조회합니다."},
         {"name": "문서", "description": "발표 자료를 업로드하고 텍스트를 추출합니다."},
         {"name": "리뷰", "description": "평가자 관점의 문서 리뷰를 생성하고 조회합니다."},
@@ -63,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(agent_router)
+app.include_router(auth_router)
 app.include_router(document_router)
 app.include_router(review_router)
 app.include_router(chat_router)

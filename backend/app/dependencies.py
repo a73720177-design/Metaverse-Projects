@@ -1,7 +1,12 @@
 from functools import lru_cache
 import os
 
-from app.config import get_object_storage_mode, get_repository_mode
+from app.config import (
+    get_jwt_access_token_expire_minutes,
+    get_jwt_secret_key,
+    get_object_storage_mode,
+    get_repository_mode,
+)
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import (
     HttpChatGenerator,
@@ -16,6 +21,12 @@ from app.integrations.llm.legacy_generators import (
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
+from app.repositories.user_repository import (
+    InMemoryUserRepository,
+    PostgresUserRepository,
+    UserRepository,
+)
+from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
@@ -51,6 +62,24 @@ def get_document_repository() -> DocumentRepository:
 @lru_cache
 def get_review_repository() -> ReviewRepository:
     return PostgresReviewRepository() if get_repository_mode() == "postgres" else InMemoryReviewRepository()
+
+
+@lru_cache
+def get_user_repository() -> UserRepository:
+    return (
+        PostgresUserRepository()
+        if get_repository_mode() == "postgres"
+        else InMemoryUserRepository()
+    )
+
+
+@lru_cache
+def get_auth_service() -> AuthService:
+    return AuthService(
+        repository=get_user_repository(),
+        secret_key=get_jwt_secret_key(),
+        access_token_expire_minutes=get_jwt_access_token_expire_minutes(),
+    )
 
 
 @lru_cache
