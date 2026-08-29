@@ -1,189 +1,186 @@
-// Thin client for the separately-running backend (LLM + DB).
-// Point VITE_API_BASE_URL at your backend — see .env.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// Thin client for the real Backend (see backend/docs/INTEGRATION_CONTRACTS.md
+// and backend/app/controllers/*.py in the Metaverse-Projects repo for the
+// authoritative contract). SSE streaming and multi-turn history are not
+// supported by Backend yet.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000')
+  .replace(/\/$/, '')
 
-// Assumed request/response shape — adjust once you wire this up to your real
-// backend's auth endpoint:
-//   POST {API_BASE_URL}/api/auth/login   body: { email, password }
-//   200  -> { token: string, user: { name: string, email: string } }
-//   401  -> { message: string }  (bad credentials)
-export async function login({ email, password }) {
-  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+// Backend errors are `{ error: { code, message } }`; some paths (validation,
+// FastAPI defaults) instead send `{ detail }` or `{ message }`.
+async function describeHttpError(response) {
+  try {
+    const payload = await response.json()
+    return payload?.error?.message || payload?.detail || payload?.message || response.statusText
+  } catch {
+    return response.statusText || '서버 응답을 처리하지 못했습니다.'
+  }
+}
+
+function authHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function apiFetch(path, options = {}) {
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, options)
+  } catch (error) {
+    if (error.name === 'AbortError') throw error
+    throw new Error('Backend에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인해주세요.')
+  }
+
+  if (!response.ok) {
+    const message = await describeHttpError(response)
+    throw new Error(`${message} (${response.status})`)
+  }
+  if (response.status === 204) return null
+  return response.json()
+}
+
+export function checkServices(signal) {
+  return apiFetch('/health/services', { signal })
+}
+
+// Backend validates: username 3-32 chars [A-Za-z0-9_] (lowercased server-side),
+// password 8-128 chars. Signup only creates the account — it does NOT return
+// a token, so callers must follow up with login().
+// -> { user_id, username, created_at }
+export function signup({ username, password }, signal) {
+  return apiFetch('/auth/signup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ username, password }),
+    signal,
   })
-
-  let data = null
-  try {
-    data = await res.json()
-  } catch (e) {
-    // non-JSON error body — fall through to the generic message below
-  }
-
-  if (!res.ok) {
-    throw new Error((data && data.message) || `로그인에 실패했어요 (${res.status}).`)
-  }
-  if (!data || !data.token) {
-    throw new Error('서버 응답에 인증 토큰이 없어요.')
-  }
-  return data
 }
 
-// Reads a failed response's body (JSON `{message}` or plain text) so callers
-// get more than just a bare status code.
-async function describeHttpError(res) {
-  let detail = ''
-  try {
-    const text = await res.text()
-    try {
-      const json = JSON.parse(text)
-      detail = json.message || text
-    } catch (e) {
-      detail = text
-    }
-  } catch (e) {
-    // body already consumed / unreadable — fall back to the status alone
-  }
-  return detail ? `서버 응답 오류 (${res.status}): ${detail}` : `서버 응답 오류: ${res.status}`
+// -> { access_token, token_type }
+export function login({ username, password }, signal) {
+  return apiFetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+    signal,
+  })
 }
 
-// SSE-style stream, one event per line: `field: value` lines, most commonly
-// `data: {"delta": "..."}`. We dispatch each `data:` line the moment it
-// arrives (rather than batching until a blank line) because most minimal
-// LLM-streaming backends — including the one this client assumes — write
-// `data: {...}\n` per chunk without the blank-line event separator that the
-// full SSE spec technically requires. `event:` tags the type of the *next*
-// `data:` line (default "message"); `event: error` + `data: {"message":...}`
-// reports a mid-stream failure instead of a delta. `id:`/`retry:` are kept
-// for reconnect. Adjust below if your backend's format differs.
-async function readEventStream(res, { onDelta, onServerError }) {
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let finished = false
-  let lastEventId = null
-  let retryMs = null
-  let eventType = 'message'
-
-  const handlePayload = (payload) => {
-    const type = eventType
-    eventType = 'message'
-    if (!payload) return
-
-    if (type === 'error') {
-      let message = payload
-      try {
-        message = JSON.parse(payload).message || payload
-      } catch (e) {
-        // plain-text error payload — used as-is
-      }
-      onServerError(new Error(message))
-      finished = true
-      return
-    }
-
-    if (payload === '[DONE]') {
-      finished = true
-      return
-    }
-
-    // Must be `{"delta": "..."}` JSON — anything else is a protocol error,
-    // not text to silently show the user as if the model said it.
-    try {
-      const json = JSON.parse(payload)
-      if (typeof json.delta === 'string') onDelta(json.delta)
-    } catch (e) {
-      onServerError(new Error(`서버에서 알 수 없는 형식의 응답을 받았어요: ${payload.slice(0, 200)}`))
-      finished = true
-    }
-  }
-
-  const handleLine = (line) => {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith(':')) return // blank / comment line
-    const sep = trimmed.indexOf(':')
-    const field = sep === -1 ? trimmed : trimmed.slice(0, sep)
-    let value = sep === -1 ? '' : trimmed.slice(sep + 1)
-    if (value.startsWith(' ')) value = value.slice(1)
-
-    if (field === 'data') handlePayload(value)
-    else if (field === 'event') eventType = value || 'message'
-    else if (field === 'id') lastEventId = value
-    else if (field === 'retry') { const n = Number(value); if (!Number.isNaN(n)) retryMs = n }
-  }
-
-  while (!finished) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? '' // last line may still be incomplete — keep buffering
-
-    for (const line of lines) {
-      handleLine(line)
-      if (finished) break
-    }
-  }
-
-  // Flush the decoder and process whatever line the server didn't
-  // newline-terminate before closing the stream.
-  buffer += decoder.decode()
-  if (!finished && buffer.trim()) handleLine(buffer)
-
-  return { finished, lastEventId, retryMs }
+// -> { user_id, username, created_at }
+export function getCurrentUser(token, signal) {
+  return apiFetch('/auth/me', {
+    headers: authHeaders(token),
+    signal,
+  })
 }
 
-// `messages` is the full conversation so far (including the new user
-// message), as [{ role: 'user' | 'assistant', content: string }] — this lets
-// the backend answer with the prior turns as context instead of only the
-// latest message.
-export async function streamChat({ messages, persona, token, signal, onDelta, onDone, onError }) {
-  const MAX_RECONNECTS = 2
-  let attempt = 0
-  let lastEventId = null
-
-  while (true) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
-        },
-        body: JSON.stringify({ messages, persona }),
-        signal,
-      })
-
-      if (!res.ok) throw new Error(await describeHttpError(res))
-      if (!res.body) throw new Error('서버가 스트리밍 응답을 지원하지 않아요.')
-
-      let serverError = null
-      const result = await readEventStream(res, {
-        onDelta,
-        onServerError: (err) => { serverError = err },
-      })
-
-      if (serverError) { onError && onError(serverError); return }
-      if (result.finished) { onDone && onDone(); return }
-
-      // Stream closed without [DONE] or an error event — a dropped
-      // connection. Reconnect only if the server told us it's safe to
-      // (sent a `retry:` field) and we haven't retried too many times.
-      if (result.retryMs == null || attempt >= MAX_RECONNECTS) {
-        onDone && onDone()
-        return
-      }
-      lastEventId = result.lastEventId || lastEventId
-      attempt += 1
-      await new Promise((resolve) => setTimeout(resolve, result.retryMs))
-      // loop and reconnect
-    } catch (err) {
-      if (err.name === 'AbortError') return
-      onError && onError(err)
-      return
-    }
-  }
+// Requires auth — Backend scopes agents to the caller. ->
+// { agent_id, name, description, role, expertise, evaluation_style }
+export function createAgent({ name, description }, token, signal) {
+  return apiFetch('/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ name, description }),
+    signal,
+  })
 }
+
+// Requires auth — Backend scopes documents to the caller. ->
+// { document_id, filename, document_type, sections, full_text }
+export function uploadDocument(file, token, signal) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return apiFetch('/documents/parse', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: formData,
+    signal,
+  })
+}
+
+// Requires auth — Backend only lets you chat with agents/documents you own.
+// Each call is stored server-side as one Q&A record (see ChatHistoryItem). ->
+// { message_id, agent_id, answer, sources, message, document_id, created_at, deleted_at }
+export function sendChat({ agentId, message, documentId = null, token, signal }) {
+  if (!agentId) throw new Error('먼저 Backend에 등록된 페르소나를 선택해주세요.')
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ message, document_id: documentId }),
+    signal,
+  })
+}
+
+// -> PersonaHistoryItem[] (active personas only — Backend excludes trashed ones)
+export function listAgents(token, signal) {
+  return apiFetch('/agents', { headers: authHeaders(token), signal })
+}
+
+// Moves a persona to Backend's trash (soft delete) -> PersonaHistoryItem
+export function trashAgent(agentId, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+// -> PersonaHistoryItem[]
+export function listTrashedAgents(token, signal) {
+  return apiFetch('/agents/trash', { headers: authHeaders(token), signal })
+}
+
+// -> PersonaHistoryItem (restored, deleted_at cleared)
+export function restoreAgent(agentId, token, signal) {
+  return apiFetch(`/agents/trash/${encodeURIComponent(agentId)}/restore`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+// Only works on an already-trashed persona. -> null (204 No Content)
+export function permanentlyDeleteAgent(agentId, token, signal) {
+  return apiFetch(`/agents/trash/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+// -> ChatHistoryItem[] (active chat messages only, across all of the caller's personas)
+export function listChats(token, signal) {
+  return apiFetch('/chats', { headers: authHeaders(token), signal })
+}
+
+// Moves one Q&A record to Backend's trash (soft delete) -> ChatHistoryItem
+export function trashChat(messageId, token, signal) {
+  return apiFetch(`/chats/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+// -> ChatHistoryItem[]
+export function listTrashedChats(token, signal) {
+  return apiFetch('/trash/chats', { headers: authHeaders(token), signal })
+}
+
+// -> ChatHistoryItem (restored, deleted_at cleared)
+export function restoreChat(messageId, token, signal) {
+  return apiFetch(`/trash/chats/${encodeURIComponent(messageId)}/restore`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+// Only works on an already-trashed chat. -> null (204 No Content)
+export function permanentlyDeleteChat(messageId, token, signal) {
+  return apiFetch(`/trash/chats/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+export { API_BASE_URL }
