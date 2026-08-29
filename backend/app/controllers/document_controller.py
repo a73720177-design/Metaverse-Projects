@@ -6,7 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_max_upload_size_bytes
 from app.dependencies import get_current_user, get_document_repository, get_object_storage
-from app.models.document import DocumentParseResponse
+from app.models.document import DocumentListItem, DocumentParseResponse
 from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
@@ -19,6 +19,47 @@ UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 def build_document_object_key(document_id: UUID, suffix: str) -> str:
     """Return the shared DB/MinIO key for an original uploaded document."""
     return f"{document_id}/original{suffix.lower()}"
+
+
+@router.get("", response_model=list[DocumentListItem], summary="내 문서 목록 조회")
+async def list_documents(
+    repository: DocumentRepository = Depends(get_document_repository),
+    current_user: UserResponse = Depends(get_current_user),
+) -> list[DocumentListItem]:
+    return await repository.list(current_user.user_id)
+
+
+@router.get(
+    "/{document_id}",
+    response_model=DocumentParseResponse,
+    summary="내 문서 조회",
+)
+async def get_document(
+    document_id: UUID,
+    repository: DocumentRepository = Depends(get_document_repository),
+    current_user: UserResponse = Depends(get_current_user),
+) -> DocumentParseResponse:
+    document = await repository.get(document_id, current_user.user_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    return document
+
+
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="내 문서 삭제",
+)
+async def delete_document(
+    document_id: UUID,
+    repository: DocumentRepository = Depends(get_document_repository),
+    storage: ObjectStorage = Depends(get_object_storage),
+    current_user: UserResponse = Depends(get_current_user),
+) -> None:
+    document = await repository.delete(document_id, current_user.user_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    await storage.delete(str(document.saved_path))
 
 
 @router.post("/parse", response_model=DocumentParseResponse,

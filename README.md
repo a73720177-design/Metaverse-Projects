@@ -36,7 +36,7 @@ Ollama :11434
 - LLM legacy 호환 API와 정식 `/api/v1` 계약
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
 
-현재 코드의 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade를 운영 PostgreSQL에 반영할 후속 migration이 필요합니다. 기존 migration은 `backend/database/001_initial_schema.sql`부터 `004_add_resource_ownership.sql`까지이며 공유 DB 적용 전 별도 테스트 DB에서 검증해야 합니다.
+`backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. Migration `001`부터 `005`까지 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
 
 ## 빠른 실행
 
@@ -118,7 +118,7 @@ python integration\check_services.py
 | 인증 | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me` |
 | Persona | `POST/GET /agents`, `GET/DELETE /agents/{agent_id}` |
 | Persona 휴지통 | `GET /agents/trash`, `POST /agents/trash/{agent_id}/restore`, `DELETE /agents/trash/{agent_id}` |
-| 문서 | `POST /documents/parse` |
+| 문서 | `POST /documents/parse`, `GET /documents`, `GET/DELETE /documents/{document_id}` |
 | Review | `POST /agents/{agent_id}/reviews`, `GET /reviews/{review_id}` |
 | Chat | `POST /agents/{agent_id}/chat`, `POST /agents/{agent_id}/chat/stream`, `GET /chats` |
 | Chat 휴지통 | `DELETE /chats/{message_id}`, `GET /trash/chats`, 복원·완전 삭제 |
@@ -141,6 +141,15 @@ npm run build
 ```
 
 실제 PostgreSQL Repository 테스트는 데이터가 생성되므로 공유 DB 대신 별도 `TEST_DATABASE_URL`에서만 실행합니다.
+
+개발용 PostgreSQL과 테스트 DB migration 준비:
+
+```powershell
+docker compose up -d postgres
+$env:TEST_DATABASE_URL="postgresql+asyncpg://qwen:dev_postgres_password@localhost:5432/qwendb_test"
+$env:TEST_DATABASE_ADMIN_URL="postgresql+asyncpg://qwen:dev_postgres_password@localhost:5432/postgres"
+python -m backend.scripts.setup_test_db
+```
 
 ## 문서 운영
 

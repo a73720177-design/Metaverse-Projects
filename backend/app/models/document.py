@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -16,3 +17,10 @@ class DocumentParseResponse(BaseModel):
     saved_path: Path
     sections: list[DocumentSection]
     full_text: str
+
+
+class DocumentListItem(BaseModel):
+    document_id: UUID
+    filename: str
+    document_type: str
+    created_at: datetime
