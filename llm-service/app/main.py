@@ -82,9 +82,13 @@ def _build_question_prompt(request: QuestionGenerationRequest) -> str:
     )
 
 
-def _call_llm_as_json(prompt: str, response_schema: dict) -> dict:
+def _call_llm_as_json(
+    prompt: str, response_schema: dict, max_tokens: int | None = None
+) -> dict:
     try:
-        raw = call_llm(prompt, response_schema=response_schema)
+        raw = call_llm(
+            prompt, response_schema=response_schema, max_tokens=max_tokens
+        )
     except LLMError:
         # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
         # 클라이언트에는 일반화된 메시지만 반환한다.
@@ -100,8 +104,12 @@ def _call_llm_as_json(prompt: str, response_schema: dict) -> dict:
         raise HTTPException(status_code=502, detail="LLM 응답을 해석할 수 없습니다.")
 
 
-def _generate(prompt: str, response_model: type[T]) -> T:
-    data = _call_llm_as_json(prompt, response_model.model_json_schema())
+def _generate(
+    prompt: str, response_model: type[T], max_tokens: int | None = None
+) -> T:
+    data = _call_llm_as_json(
+        prompt, response_model.model_json_schema(), max_tokens=max_tokens
+    )
     try:
         return response_model.model_validate(data)
     except ValidationError:
@@ -140,7 +148,7 @@ def _build_review_prompt(request: ReviewGenerationRequest) -> str:
 
 def _build_chat_prompt(request: ChatGenerationRequest) -> str:
     document_block = (
-        json.dumps(request.document.model_dump(mode="json"), ensure_ascii=False)
+        f"파일명: {request.document.filename}\n{request.document.full_text}"
         if request.document is not None
         else "(제공된 문서 없음)"
     )
@@ -179,7 +187,9 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)
 def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
-    return _generate(_build_chat_prompt(request), ChatGenerationResponse)
+    return _generate(
+        _build_chat_prompt(request), ChatGenerationResponse, max_tokens=160
+    )
 
 
 app.include_router(v1_router)

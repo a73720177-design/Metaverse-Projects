@@ -7,6 +7,7 @@ from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
+from app.services.rag_service import DocumentContextSelector, should_use_document
 
 
 class ChatServiceError(RuntimeError):
@@ -24,11 +25,13 @@ class ChatService:
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
         chat_repository: ChatRepository,
+        context_selector: DocumentContextSelector | None = None,
     ) -> None:
         self.generator = generator
         self.agent_repository = agent_repository
         self.document_repository = document_repository
         self.chat_repository = chat_repository
+        self.context_selector = context_selector or DocumentContextSelector()
 
     async def reply(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
@@ -38,9 +41,15 @@ class ChatService:
             raise ChatResourceNotFoundError("Agent not found")
         document = None
         if request.document_id is not None:
-            document = await self.document_repository.get(request.document_id, owner_id)
-            if document is None:
+            source_document = await self.document_repository.get(
+                request.document_id, owner_id
+            )
+            if source_document is None:
                 raise ChatResourceNotFoundError("Document not found")
+            if should_use_document(request.message, request.document_id):
+                document = self.context_selector.select(
+                    source_document, request.message
+                )
         try:
             generated = await self.generator.generate(persona, request, document)
             chat = ChatHistoryItem.model_validate(

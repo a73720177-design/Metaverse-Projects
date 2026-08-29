@@ -134,3 +134,25 @@ def test_v1_health_503_when_ollama_unreachable(monkeypatch):
     monkeypatch.setattr("app.main.check_ollama_health", lambda: False)
     response = client.get("/api/v1/health")
     assert response.status_code == 503
+
+
+def test_chat_uses_short_output_limit_and_deduplicated_document_prompt(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return '{"answer": "짧은 답변", "sources": []}'
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    payload = {
+        "persona": _persona_payload(),
+        "message": "매출은 얼마인가요?",
+        "document": _document_payload(),
+    }
+    response = client.post("/api/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    assert captured["max_tokens"] == 160
+    assert captured["prompt"].count("본문") == 1
+    assert '"sections"' not in captured["prompt"]
