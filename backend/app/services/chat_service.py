@@ -6,6 +6,7 @@ from app.models.chat import ChatRequest, ChatResponse
 from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
+from app.services.rag_service import RagService
 
 
 class ChatServiceError(RuntimeError):
@@ -22,10 +23,12 @@ class ChatService:
         generator: ChatGenerator,
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
+        rag_service: RagService | None = None,
     ) -> None:
         self.generator = generator
         self.agent_repository = agent_repository
         self.document_repository = document_repository
+        self.rag_service = rag_service or RagService()
 
     async def reply(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
@@ -38,6 +41,7 @@ class ChatService:
             document = await self.document_repository.get(request.document_id, owner_id)
             if document is None:
                 raise ChatResourceNotFoundError("Document not found")
+            document = self.rag_service.build_context(document, request.message)
         try:
             generated = await self.generator.generate(persona, request, document)
             return ChatResponse.model_validate(

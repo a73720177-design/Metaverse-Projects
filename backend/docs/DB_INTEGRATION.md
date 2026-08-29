@@ -92,7 +92,15 @@ Repository 통합 테스트는 별도의 테스트 DB 주소를 지정했을 때
 
 ```powershell
 $env:TEST_DATABASE_URL="postgresql://사용자:비밀번호@localhost:5432/qwendb_test"
+python -m scripts.setup_test_db
 python -m pytest tests/test_postgres_repositories.py -q
+python -m pytest tests/test_auth_postgres.py -q
 ```
+
+`scripts.setup_test_db`는 `test`가 명확히 포함된 DB 이름만 허용합니다. DB가 없으면 같은
+서버의 `postgres` 관리 DB를 통해 생성하고, `database` 폴더의 번호가 붙은 SQL 파일을
+순서대로 적용합니다. 권한이나 관리 DB 주소가 다르면 `TEST_DATABASE_ADMIN_URL`을 별도로
+설정합니다. 적용 이력은 테스트 DB의 `schema_migrations` 테이블에 체크섬과 함께 저장되며,
+이미 적용된 migration 파일의 내용이 변경되면 실행을 중단합니다.
 
 공유 DB나 운영 DB를 `TEST_DATABASE_URL`로 사용하지 마세요. 이 테스트는 데이터를 생성합니다.

@@ -271,6 +271,59 @@ def test_chat_contract() -> None:
         app.dependency_overrides.clear()
 
 
+def test_chat_uses_relevant_document_sections_only() -> None:
+    captured_document = None
+
+    class CapturingChatGenerator:
+        async def generate(self, persona, request: ChatRequest, document) -> dict:
+            nonlocal captured_document
+            captured_document = document
+            return {"answer": "ok", "sources": []}
+
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    agent_id = UUID("11111111-1111-1111-1111-111111111111")
+    document_id = UUID("22222222-2222-2222-2222-222222222222")
+    import asyncio
+
+    asyncio.run(
+        agent_repository.save(
+            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
+            TEST_USER.user_id,
+        )
+    )
+    asyncio.run(
+        document_repository.save(
+            DocumentParseResponse(
+                document_id=document_id,
+                filename="slides.pdf",
+                document_type="pdf",
+                saved_path=Path("uploads/slides.pdf"),
+                sections=[
+                    {"index": 1, "text": "무관한 도입"},
+                    {"index": 2, "text": "검색 증강 생성 RAG는 관련 문맥만 보낸다."},
+                ],
+                full_text="전체 문서를 모두 보내면 느리다.",
+            ),
+            TEST_USER.user_id,
+        )
+    )
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        CapturingChatGenerator(), agent_repository, document_repository
+    )
+    try:
+        response = client.post(
+            f"/agents/{agent_id}/chat",
+            json={"message": "RAG 관련 문맥", "document_id": str(document_id)},
+        )
+        assert response.status_code == 200
+        assert captured_document is not None
+        assert [section.index for section in captured_document.sections] == [2]
+        assert "전체 문서" not in captured_document.full_text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_http_llm_persona_adapter_uses_service_contract() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/personas"

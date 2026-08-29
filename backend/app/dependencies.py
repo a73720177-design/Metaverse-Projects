@@ -31,6 +31,7 @@ from app.repositories.user_repository import (
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
+from app.services.rag_service import RagService
 from app.services.review_service import ReviewService
 from app.models.user import UserResponse
 from app.services.auth_service import InvalidCredentialsError
@@ -159,4 +160,5 @@ def get_chat_service() -> ChatService:
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        rag_service=RagService(),
     )
