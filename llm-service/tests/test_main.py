@@ -183,3 +183,16 @@ def test_chat_stream_returns_token_and_done_events(monkeypatch):
     assert 'data: {"token": "안녕"}' in response.text
     assert 'data: {"token": "하세요"}' in response.text
     assert "event: done" in response.text
+
+
+def test_structured_response_accepts_trailing_model_text(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.call_llm",
+        lambda *a, **k: '{"role":"평가자","expertise":[],"evaluation_style":[]}\n추가 설명',
+    )
+    response = client.post(
+        "/api/v1/personas",
+        json={"name": "평가자", "description": "근거를 확인한다."},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "평가자"

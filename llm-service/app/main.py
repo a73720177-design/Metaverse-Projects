@@ -104,7 +104,10 @@ def _call_llm_as_json(
 
     cleaned = _CODE_FENCE_RE.sub("", raw).strip()
     try:
-        return json.loads(cleaned)
+        data, _end = json.JSONDecoder().raw_decode(cleaned)
+        if not isinstance(data, dict):
+            raise json.JSONDecodeError("root is not an object", cleaned, 0)
+        return data
     except json.JSONDecodeError:
         # 모델 원본 출력 전체를 로그에 남기지 않는다 (문서 내용이 섞여 있을 수 있음).
         logger.error("LLM 응답이 JSON 형식이 아님 (길이=%d)", len(raw))
@@ -197,7 +200,9 @@ def health_check_v1():
 
 @v1_router.post("/personas", response_model=PersonaGenerationResponse)
 def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
-    return _generate(_build_persona_prompt(request), PersonaGenerationResponse)
+    return _generate(
+        _build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
+    )
 
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
