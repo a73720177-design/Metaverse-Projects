@@ -1,7 +1,5 @@
-// Thin client for the real Backend (see backend/docs/INTEGRATION_CONTRACTS.md
-// and backend/app/controllers/*.py in the Metaverse-Projects repo for the
-// authoritative contract). SSE streaming and multi-turn history are not
-// supported by Backend yet.
+// Thin client for the Backend. The running OpenAPI document and controller
+// tests are the authoritative API contract.
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000')
   .replace(/\/$/, '')
 
@@ -35,10 +33,6 @@ async function apiFetch(path, options = {}) {
   }
   if (response.status === 204) return null
   return response.json()
-}
-
-export function checkServices(signal) {
-  return apiFetch('/health/services', { signal })
 }
 
 // Backend validates: username 3-32 chars [A-Za-z0-9_] (lowercased server-side),
@@ -107,5 +101,3 @@ export function sendChat({ agentId, message, documentId = null, token, signal })
     signal,
   })
 }
-
-export { API_BASE_URL }
