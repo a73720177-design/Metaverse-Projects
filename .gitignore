@@ -1,6 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vite
 node_modules/
 dist/
-/.idea
-/.vscode
+
+# Virtual environments and local configuration
+.venv/
+venv/
 .env
-.env.local
+.env.*
+!.env.example
+!.env.test.example
+
+# Runtime data
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/chroma_db/*
+!backend/chroma_db/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,112 +1,234 @@
-# React Sidebar App
+# Metaverse Projects
 
-발표 도우미 컨셉의 Vite + React 예제 앱입니다. 좌측 사이드바 + 채팅형 입력 화면 +
-페르소나(발표 스타일) 관리 기능으로 구성되어 있습니다.
+발표자료를 업로드하고 평가자 페르소나의 관점에서 리뷰와 질문·답변을 제공하는 팀 프로젝트입니다. 공통 `main`에는 React + Vite Frontend, FastAPI Backend, LLM 서비스와 DB migration이 포함되어 있습니다. Frontend는 Backend API만 호출하고 Backend가 LLM 서비스, PostgreSQL, MinIO를 연결합니다.
 
-## 설치 및 실행 (처음부터)
+## 전체 구성
 
-### 1. Node.js 설치
-
-이 프로젝트는 Node.js가 있어야 실행할 수 있습니다 (npm이 함께 설치됩니다).
-
-1. https://nodejs.org 에서 **LTS 버전**을 내려받아 설치합니다. (Windows는 설치 파일
-   실행 후 계속 다음을 눌러 기본값으로 설치하면 됩니다.)
-2. 설치가 끝나면 터미널(PowerShell 등)을 새로 열고 아래로 정상 설치됐는지 확인합니다.
-
-   ```bash
-   node -v
-   npm -v
-   ```
-
-   버전 번호가 출력되면 설치가 된 것입니다. (안 되면 터미널을 완전히 새로 열거나
-   PC를 재시작해보세요 — 방금 설치한 PATH가 아직 반영되지 않은 것일 수 있습니다.)
-
-### 2. 프로젝트 의존성 설치 (Vite 포함)
-
-Vite는 따로 설치할 필요 없이, 이 프로젝트의 `package.json`에 개발 의존성으로
-포함되어 있어서 아래 한 줄이면 함께 설치됩니다.
-
-```bash
-npm install
+```text
+React + Vite :5173
+        |
+        | HTTP
+        v
+FastAPI Backend :8000
+   |                    |
+   | HTTP               | Repository / Object Storage
+   v                    v
+LLM Service :8001     PostgreSQL :5432 / MinIO :9000
+   |
+   v
+Ollama :11434
 ```
 
-### 3. 개발 서버 실행
+- Frontend는 DB, LLM, Ollama에 직접 접근하지 않습니다.
+- Backend Controller는 Service를 호출하고, Service는 Repository 계약을 사용합니다.
+- DB와 파일 저장소 구현은 환경변수로 교체합니다.
+- 실제 비밀번호, DB URL, MinIO secret은 로컬 `.env`에만 저장합니다.
 
-```bash
-npm run dev
+## 현재 구현 상태
+
+### Backend
+
+- FastAPI Controller → Service → Repository 구조
+- 평가자 생성·조회 API
+- PPTX·PDF·DOCX 업로드와 텍스트 추출
+- 문서 리뷰와 페르소나 채팅 API
+- 독립 LLM FastAPI 서비스 HTTP 연동
+- legacy 및 정식 `/api/v1` LLM 계약 모드
+- `memory|postgres` Repository 모드
+- `local|minio` Object Storage 모드
+- React/Vite localhost 및 Hamachi CORS
+- 공통 오류 응답 `{error: {code, message}}`
+- 업로드 파일명·형식·빈 파일·25MB 크기 검증
+- DB 또는 저장소 실패 시 업로드 객체 정리
+- Python 3.14 호환 의존성
+- Backend CI
+- 로컬 계정 회원가입·로그인과 Argon2 비밀번호 해시
+- `memory|postgres` 사용자 저장과 만료 시간이 있는 JWT access token
+
+### DB 연동
+
+CYCL DB 작업을 기준으로 문서 저장 구조를 다음과 같이 분리했습니다.
+
+| 테이블 | 역할 |
+|---|---|
+| `documents` | 문서 기본 정보와 전체 텍스트 |
+| `document_files` | bucket, object key, content type |
+| `document_chunks` | 순서가 있는 추출 구간과 metadata |
+
+- 신규 DB 스키마: `backend/database/001_initial_schema.sql`
+- 기존 DB 전환: `backend/database/002_split_document_storage.sql`
+- 사용자 테이블 추가: `backend/database/003_add_users.sql`
+- Agent·Document·Review 소유권 추가: `backend/database/004_add_resource_ownership.sql`
+- 원본 파일 object key: `{document_id}/original{suffix}`
+- 문서·파일·청크를 한 트랜잭션으로 저장·조회
+- 기존 `memory/postgres`, `local/minio` 실행 모드와 시작 시 환경변수 검증 유지
+- 별도 테스트 DB 설정 예시: `backend/.env.test.example`
+
+`002_split_document_storage.sql`은 기존 파일 정보와 sections를 새 테이블로 이전한 뒤 예전 컬럼을 제거합니다. 공유 DB에 적용하기 전에 반드시 백업하고 별도 테스트 DB에서 데이터 이전과 재실행을 검증해야 합니다.
+
+`003_add_users.sql`은 인증용 `users` 테이블을 추가하고 `004_add_resource_ownership.sql`은 Agent·Document·Review에 `owner_id`를 연결합니다. 신규 DB는 `001` → `002` → `003` → `004` 순서로 적용합니다.
+
+`004` 적용 전 존재하던 리소스는 소유자를 임의로 배정하지 않고 `owner_id=NULL`로 보존합니다. 이 데이터는 인증 API에서 조회되지 않으므로 필요한 경우 DB 담당자와 실제 소유자를 확인한 뒤 별도 migration으로 배정합니다.
+
+### Frontend 연동
+
+Frontend 애플리케이션과 Frontend CI는 아직 공통 브랜치에 포함하지 않습니다. Backend는 향후 연동을 위한 HTTP API와 CORS 설정만 제공합니다. Frontend를 통합할 때는 `/agents`, `/documents/parse`, `/agents/{agent_id}/chat` 계약과 Backend 공통 오류 응답을 기준으로 별도 PR에서 검증합니다.
+
+현재 Backend는 JSON 단일 채팅 응답을 사용합니다. 로그인, SSE, Backend 멀티턴은 별도 계약과 보안 정책이 확정된 뒤 추가합니다.
+
+### LLM 연동
+
+LLM 작업은 `kunhee-workspace`의 PR #17을 기준으로 확인합니다.
+
+- legacy API와 `/api/v1/personas`, `/api/v1/reviews`, `/api/v1/chat` 구현
+- Ollama 상태 확인과 LLM 단위 테스트 추가
+- Backend v1 mock 계약 테스트 구현
+
+PR #17이 승인·병합되고 실제 Ollama 연동 테스트가 끝나기 전까지 기본값은 다음과 같습니다.
+
+```env
+LLM_CONTRACT_MODE=legacy_questions
 ```
 
-터미널에 뜨는 `Local: http://localhost:5173/` 같은 주소를 브라우저로 열면 됩니다.
+실제 v1 연동이 성공하면 다음 설정으로 전환합니다.
 
-### 그 외 명령어
-
-```bash
-npm run build     # 배포용 정적 파일 빌드 (dist/ 폴더 생성)
-npm run preview   # build 결과물을 로컬에서 미리보기
+```env
+LLM_CONTRACT_MODE=v1
+LLM_API_PREFIX=/api/v1
 ```
 
-## 기능
+## Backend 실행
 
-### 사이드바
-- 로고/브랜드 영역, 접기·펼치기 버튼 (화면 크기와 무관하게 버튼 클릭으로만 동작)
-- 새 채팅 시작 버튼
-- 채팅 검색
-- "자료" / "페르소나" 탭 이동 아이콘
-- 최근 채팅 목록 — 클릭 시 해당 대화 불러오기, 항목별 삭제, "전체 삭제"
-- 페르소나 선택 점(dot) — 선택/삭제, "+"로 새 페르소나 추가
-- 하단 계정 영역 — 비로그인 시 "로그인" 버튼, 로그인 시 이름·이메일 표시 + "로그아웃"
+Windows PowerShell 기준입니다.
 
-### 메인 화면 — 대화(멀티턴)
-- 새 대화를 시작하기 전에는 페르소나 안내 문구 + 메시지 입력창만 보이는
-  시작 화면(hero)이 표시됨
-- 메시지를 보내면 그 순간 대화창(스레드)으로 전환되고, 좌측 "최근 채팅"에
-  기록됨. 이후 같은 대화에서 계속 메시지를 보내면 지금까지의 대화 전체가
-  이어지는 문맥으로 백엔드에 함께 전달됨 (한 번 보낸 메시지에만 답하는 게
-  아니라 이전 턴을 참고해서 답함)
-- 좌측 "최근 채팅"에서 과거 대화를 클릭하면 그 대화 전체 스레드가 열리고,
-  거기서 이어서 메시지를 보낼 수 있음 (예전 질문을 입력창에 다시 채워 넣던
-  방식이 아니라 실제로 대화를 이어감)
-- 사용자/AI 메시지가 말풍선으로 구분되어 쌓이고, AI 응답은 실시간
-  스트리밍으로 표시(타이핑 커서 효과), 백엔드 연결 실패 시 에러 안내
-- 대화는 그 대화를 시작할 때 선택돼 있던 페르소나를 계속 사용함 (대화 도중
-  사이드바에서 다른 페르소나를 눌러도 이미 열려있는 대화에는 영향 없음 —
-  새 대화부터 적용됨)
-- "자료" 탭: 각 페르소나에 업로드된 자료 목록, 클릭하면 그 페르소나로 새
-  대화 시작
-- "페르소나" 탭 하단: 생성된 페르소나 카드 그리드(선택/삭제), 새 페르소나
-  추가 카드
+```powershell
+cd C:\meta_project\backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-### 페르소나 만들기
-- 이름 입력
-- PPTX / PDF / DOCX 자료를 **여러 개** 업로드 가능 (파일당 최대 20MB)
-- 허용되지 않는 형식이나 용량 초과 파일은 걸러지고, 어떤 파일이 왜 거부됐는지
-  화면에 오류 메시지로 표시
-- 선택한 파일은 목록으로 보여주며 개별적으로 제거 가능
-- 업로드한 파일 내용 자체를 분석하지는 않고, 파일명만 템플릿에 참고용으로 표시
+확인 주소:
 
-### 로그인
-- 이메일/비밀번호 로그인 모달
-- 로그인 정보는 `localStorage`에 저장되어 새로고침해도 유지
-- "로그아웃"으로 로그인 정보 삭제
+- API 문서: <http://localhost:8000/docs>
+- Backend 상태: <http://localhost:8000/health>
+- DB 상태: <http://localhost:8000/health/db>
+- LLM 상태: <http://localhost:8000/health/llm>
+- 통합 상태: <http://localhost:8000/health/services>
 
-### 데이터 저장 / 오류 안내
-- 채팅 기록, 페르소나, 로그인 정보를 모두 `localStorage`에 저장
-- 저장 공간 부족, 브라우저 보안 설정(시크릿 모드 등)으로 인한 차단, 저장된 데이터
-  손상 등의 문제가 생기면 화면 상단에 원인을 설명하는 안내 배너 표시(닫기 가능)
+## 개발 모드
 
-### 반응형
-- 화면이 좁아지면(860px 이하) 페르소나 카드 그리드가 1열로, 여백이 재조정됨
-- 사이드바 자체는 화면 크기에 영향받지 않고 항상 접기·펼치기 버튼으로만 제어됨
+PostgreSQL과 MinIO가 없어도 Backend를 실행할 수 있습니다.
 
-## 백엔드(LLM/DB) 연동
+```env
+REPOSITORY_MODE=memory
+OBJECT_STORAGE_MODE=local
+DB_AUTO_CREATE=false
+MAX_UPLOAD_SIZE_MB=25
+```
 
-`src/api.js`가 백엔드와 통신하는 유일한 곳입니다. `.env`의 `VITE_API_BASE_URL`을
-실제 백엔드 주소로 바꾸면 됩니다. 프론트엔드가 기대하는 API 요청/응답 형식은
-[requirement.txt](requirement.txt)에 정리되어 있습니다 — 백엔드를 그 스펙에
-맞추거나, 스펙이 다르면 `src/api.js`의 `login()` / `streamChat()`을 그에 맞게
-고치면 됩니다.
+로컬 데이터는 Backend를 재시작하면 초기화되며 업로드 원본은 기본적으로 `backend/uploads/objects`에 저장됩니다.
 
-각 대화(채팅)는 `localStorage`에 `{ id, title, persona, messages: [{role, content}, ...] }`
-형태로 저장됩니다. 메시지를 보낼 때마다 그 대화의 `messages` 전체(과거 턴 포함)를
-백엔드로 함께 보내고, 스트리밍으로 받은 응답을 `assistant` 메시지로 그 대화에
-이어붙입니다.
+## PostgreSQL·MinIO 모드
+
+실제 값은 Git에 포함되지 않는 `backend/.env`에만 입력합니다.
+
+```env
+REPOSITORY_MODE=postgres
+OBJECT_STORAGE_MODE=minio
+DB_AUTO_CREATE=false
+DATABASE_URL=postgresql://사용자:비밀번호@호스트:5432/qwendb
+MINIO_ENDPOINT=호스트:9000
+MINIO_ACCESS_KEY=접근키
+MINIO_SECRET_KEY=비밀키
+MINIO_BUCKET=documents
+MINIO_SECURE=false
+JWT_SECRET_KEY=32바이트-이상의-임의-문자열
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+```
+
+- `postgresql://` 주소는 Backend에서 `postgresql+asyncpg://`로 변환합니다.
+- 공유 DB에서는 `DB_AUTO_CREATE=true` 대신 버전 관리 SQL을 사용합니다.
+- MinIO 기본 관리자 계정을 코드나 문서에 입력하지 않습니다.
+
+## 주요 Backend API
+
+| 메서드 | 경로 | 용도 |
+|---|---|---|
+| GET | `/health` | Backend 프로세스 상태 |
+| GET | `/health/db` | Repository 모드와 PostgreSQL 상태 |
+| GET | `/health/llm` | LLM 서비스 상태 |
+| GET | `/health/services` | Backend·DB·LLM 통합 연결 상태 |
+| POST | `/auth/signup` | 로컬 계정 생성 |
+| POST | `/auth/login` | JWT access token 발급 |
+| GET | `/auth/me` | Bearer token의 현재 사용자 조회 |
+| POST | `/agents` | 평가자 페르소나 생성 |
+| GET | `/agents/{agent_id}` | 평가자 조회 |
+| POST | `/documents/parse` | 문서 업로드와 텍스트 추출 |
+| POST | `/agents/{agent_id}/reviews` | 문서 리뷰 생성 |
+| GET | `/reviews/{review_id}` | 리뷰 조회 |
+| POST | `/agents/{agent_id}/chat` | 평가자 관점 채팅 |
+
+정확한 필드와 오류 응답은 실행 중인 `/docs`를 기준으로 합니다.
+
+`/auth/signup`, `/auth/login`을 제외한 Agent·Document·Review·Chat API는 `Authorization: Bearer <token>`을 요구합니다. 생성된 리소스에는 현재 사용자의 `user_id`가 내부 소유자로 저장되며, 다른 사용자의 UUID를 요청하면 존재 여부를 노출하지 않고 404를 반환합니다. 로그인 rate limit과 JWT 폐기·교체 정책은 외부 공개 전에 추가해야 합니다.
+
+## 테스트
+
+```powershell
+cd C:\meta_project\backend
+.\.venv\Scripts\python.exe -m compileall -q app tests
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+현재 기본 테스트 결과:
+
+```text
+31 passed, 1 skipped
+```
+
+skip된 테스트는 실제 PostgreSQL에 데이터를 생성하는 Repository 통합 테스트입니다. 공유 DB가 아닌 별도 테스트 DB에 `TEST_DATABASE_URL`을 설정했을 때만 실행합니다.
+
+## 통합 전 남은 작업
+
+### P0
+
+- [ ] LLM PR #17 변경 요청 해결과 재리뷰
+- [ ] 실제 LLM/Ollama persona·review·chat 연동 테스트
+- [ ] DB migration을 별도 테스트 DB에서 검증
+- [ ] `003_add_users.sql`과 PostgreSQL 인증 흐름을 별도 테스트 DB에서 검증
+- [ ] `004_add_resource_ownership.sql` 적용과 기존 데이터 소유자 배정 여부 결정
+- [ ] Frontend 통합 전 Persona → Document → Chat API 흐름 검증
+
+### P1
+
+- [ ] PostgreSQL·MinIO 실패 및 rollback 통합 테스트
+- [ ] Backend 삭제 API와 Frontend 페르소나·문서 삭제 연결
+- [ ] 채팅 timeout, 메시지 개수와 요청 크기 정책 확정
+- [ ] 로그인 rate limit과 JWT 폐기·교체 정책 확정
+
+### P2
+
+- [ ] Backend 멀티턴 계약 확정
+- [ ] 필요할 경우 인증과 SSE를 별도 보안 검토 후 구현
+- [ ] Frontend 통합 범위와 일정 확정
+
+## 보안 기준
+
+- `.env`, 실제 DB URL, 비밀번호, token, MinIO secret을 커밋하지 않습니다.
+- Frontend에는 Backend 주소만 공개합니다.
+- 실패 응답과 로그에 stack trace, 내부 주소, 문서 본문을 남기지 않습니다.
+- 의존성 audit와 CodeQL 경고를 PR 병합 전에 확인합니다.
+- 업로드 확장자와 크기는 Frontend와 Backend 양쪽에서 검사합니다.
+
+## 문서
+
+- [팀 통합 현황과 Backend 작업](./backend.md)
+- [팀 통합 계약](./backend/docs/INTEGRATION_CONTRACTS.md)
+- [LLM HTTP 계약](./backend/docs/LLM_HTTP_CONTRACT.md)
+- [DB 연동 안내](./backend/docs/DB_INTEGRATION.md)
+- [Frontend 연동 안내](./backend/docs/FRONTEND_INTEGRATION.md)
+- [버전 호환성](./backend/docs/VERSION_COMPATIBILITY.md)
+- [팀 코드 확인 안내](./backend/docs/TEAM_CODE_GUIDE.md)
