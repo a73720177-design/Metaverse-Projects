@@ -174,6 +174,8 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         if with_document:
             assert payload["document"]["document_id"] == str(document.document_id)
             assert "saved_path" not in payload["document"]
+            assert "sections" not in payload["document"]
+            assert payload["document"]["full_text"]
         else:
             assert payload["document"] is None
         return httpx.Response(200, json={"answer": "답변", "sources": []})
@@ -203,6 +205,39 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     result = asyncio.run(run_contract())
     assert result.agent_id == persona.agent_id
     assert result.answer == "답변"
+
+
+def test_v1_chat_omits_linked_document_for_greeting() -> None:
+    persona = _persona()
+    document = _document()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["message"] == "안녕"
+        assert payload["document"] is None
+        return httpx.Response(200, json={"answer": "안녕하세요!", "sources": []})
+
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+
+    async def run_contract():
+        await agent_repository.save(persona, OWNER_ID)
+        await document_repository.save(document, OWNER_ID)
+        service = ChatService(
+            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            agent_repository,
+            document_repository,
+            InMemoryChatRepository(),
+        )
+        return await service.reply(
+            persona.agent_id,
+            ChatRequest(message="안녕", document_id=document.document_id),
+            OWNER_ID,
+        )
+
+    result = asyncio.run(run_contract())
+    assert result.answer == "안녕하세요!"
+    assert result.document_id == document.document_id
 
 
 @pytest.mark.parametrize(

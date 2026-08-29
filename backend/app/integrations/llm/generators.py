@@ -44,7 +44,11 @@ class HttpChatGenerator:
         payload = {
             "persona": persona.model_dump(mode="json"),
             "message": request.message,
-            "document": document.model_dump(mode="json", exclude={"saved_path"}) if document else None,
+            # full_text already contains only selected RAG chunks. Omitting
+            # sections prevents the same source text from being sent twice.
+            "document": document.model_dump(
+                mode="json", exclude={"saved_path", "sections"}
+            ) if document else None,
         }
         try:
             return await self.client.post_json("/chat", payload)
