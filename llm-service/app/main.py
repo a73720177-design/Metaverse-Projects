@@ -20,9 +20,16 @@ import re
 from typing import TypeVar
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
-from app.llm_client import LLMError, call_llm, check_ollama_health
+from app.llm_client import (
+    LLMError,
+    OLLAMA_CHAT_MODEL,
+    call_llm,
+    check_ollama_health,
+    stream_llm,
+)
 from app.prompts import (
     CHAT_PROMPT,
     CONCEPT_EXTRACTION_PROMPT,
@@ -117,6 +124,19 @@ def _generate(
         raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
 
 
+def _call_llm_as_text(
+    prompt: str, *, model: str | None = None, max_tokens: int | None = None
+) -> str:
+    try:
+        answer = call_llm(prompt, model=model, max_tokens=max_tokens).strip()
+    except LLMError:
+        logger.exception("Ollama 채팅 호출 실패")
+        raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
+    if not answer:
+        raise HTTPException(status_code=502, detail="LLM이 빈 답변을 반환했습니다.")
+    return answer
+
+
 @app.post("/extract-concepts", response_model=ConceptExtractionResponse)
 def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
     return _generate(_build_concept_prompt(request.paper_text), ConceptExtractionResponse)
@@ -187,8 +207,40 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)
 def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
-    return _generate(
-        _build_chat_prompt(request), ChatGenerationResponse, max_tokens=160
+    # Chat sources are selected and attached by Backend, which already owns
+    # document retrieval. Avoid JSON-schema generation here: on CPU Ollama it
+    # can consume the full output budget even for a one-line answer.
+    return ChatGenerationResponse(
+        answer=_call_llm_as_text(
+            _build_chat_prompt(request),
+            model=OLLAMA_CHAT_MODEL,
+            max_tokens=160,
+        ),
+        sources=[],
+    )
+
+
+@v1_router.post("/chat/stream")
+def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
+    def events():
+        try:
+            for token in stream_llm(
+                _build_chat_prompt(request),
+                model=OLLAMA_CHAT_MODEL,
+                max_tokens=160,
+            ):
+                data = json.dumps({"token": token}, ensure_ascii=False)
+                yield f"event: token\ndata: {data}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        except LLMError:
+            logger.exception("Ollama 채팅 스트리밍 실패")
+            data = json.dumps({"message": "LLM 서버에 연결할 수 없습니다."}, ensure_ascii=False)
+            yield f"event: error\ndata: {data}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

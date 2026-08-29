@@ -205,6 +205,12 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     result = asyncio.run(run_contract())
     assert result.agent_id == persona.agent_id
     assert result.answer == "답변"
+    if with_document:
+        assert result.sources
+        assert result.sources[0].document_id == document.document_id
+        assert result.sources[0].filename == document.filename
+    else:
+        assert result.sources == []
 
 
 def test_v1_chat_omits_linked_document_for_greeting() -> None:

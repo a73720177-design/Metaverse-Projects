@@ -1,8 +1,13 @@
+from collections.abc import AsyncIterator
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
 from app.models.chat import ChatHistoryItem, ChatRequest
+from app.models.document import DocumentParseResponse
+from app.models.persona import PersonaProfile
+from app.models.review import ReviewSource
 from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
@@ -33,9 +38,9 @@ class ChatService:
         self.chat_repository = chat_repository
         self.context_selector = context_selector or DocumentContextSelector()
 
-    async def reply(
+    async def _resolve_context(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
-    ) -> ChatHistoryItem:
+    ) -> tuple[PersonaProfile, DocumentParseResponse | None]:
         persona = await self.agent_repository.get(agent_id, owner_id)
         if persona is None:
             raise ChatResourceNotFoundError("Agent not found")
@@ -47,9 +52,27 @@ class ChatService:
             if source_document is None:
                 raise ChatResourceNotFoundError("Document not found")
             if should_use_document(request.message, request.document_id):
-                document = self.context_selector.select(
-                    source_document, request.message
-                )
+                document = self.context_selector.select(source_document, request.message)
+        return persona, document
+
+    @staticmethod
+    def _sources(document: DocumentParseResponse | None) -> list[ReviewSource]:
+        if document is None:
+            return []
+        return [
+            ReviewSource(
+                document_id=document.document_id,
+                filename=document.filename,
+                page=(section.index if document.document_type in {"pdf", "pptx"} else None),
+                excerpt=section.text[:500],
+            )
+            for section in document.sections
+        ]
+
+    async def reply(
+        self, agent_id: UUID, request: ChatRequest, owner_id: UUID
+    ) -> ChatHistoryItem:
+        persona, document = await self._resolve_context(agent_id, request, owner_id)
         try:
             generated = await self.generator.generate(persona, request, document)
             chat = ChatHistoryItem.model_validate(
@@ -66,6 +89,42 @@ class ChatService:
             return chat
         except (ChatGeneratorError, ValidationError) as exc:
             raise ChatServiceError("Chat generator returned an invalid response") from exc
+
+    async def open_stream(
+        self, agent_id: UUID, request: ChatRequest, owner_id: UUID
+    ) -> AsyncIterator[dict[str, Any]]:
+        persona, document = await self._resolve_context(agent_id, request, owner_id)
+        stream_method = getattr(self.generator, "stream", None)
+        if stream_method is None:
+            raise ChatServiceError("Streaming chat is unavailable")
+
+        async def events() -> AsyncIterator[dict[str, Any]]:
+            parts: list[str] = []
+            try:
+                async for token in stream_method(persona, request, document):
+                    parts.append(token)
+                    yield {"event": "token", "data": {"token": token}}
+                answer = "".join(parts).strip()
+                if not answer:
+                    raise ChatServiceError("Chat generator returned an empty response")
+                chat = ChatHistoryItem(
+                    message_id=uuid4(),
+                    owner_id=owner_id,
+                    agent_id=agent_id,
+                    document_id=request.document_id,
+                    message=request.message,
+                    answer=answer,
+                    sources=self._sources(document),
+                )
+                await self.chat_repository.save(chat)
+                yield {
+                    "event": "done",
+                    "data": chat.model_dump(mode="json", exclude={"owner_id"}),
+                }
+            except ChatGeneratorError as exc:
+                raise ChatServiceError("Chat stream failed") from exc
+
+        return events()
 
     async def list_active(self, owner_id: UUID) -> list[ChatHistoryItem]:
         return await self.chat_repository.list(owner_id, deleted=False)

@@ -223,6 +223,12 @@ class FakeChatGenerator:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
 
 
+class FakeStreamingChatGenerator(FakeChatGenerator):
+    async def stream(self, persona, request: ChatRequest, document):
+        yield "Evaluator "
+        yield f"response: {request.message}"
+
+
 def test_review_contract() -> None:
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()
@@ -310,6 +316,39 @@ def test_chat_contract() -> None:
         assert client.delete(f"/trash/chats/{message_id}").status_code == 204
         assert client.get("/trash/chats").json() == []
         assert client.post(f"/trash/chats/{message_id}/restore").status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_stream_contract_persists_completed_answer() -> None:
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    chat_repository = InMemoryChatRepository()
+    agent_id = UUID("11111111-1111-1111-1111-111111111111")
+    import asyncio
+    asyncio.run(
+        agent_repository.save(
+            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
+            TEST_USER.user_id,
+        )
+    )
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        FakeStreamingChatGenerator(),
+        agent_repository,
+        document_repository,
+        chat_repository,
+    )
+    try:
+        response = client.post(
+            f"/agents/{agent_id}/chat/stream", json={"message": "Hello"}
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "event: token" in response.text
+        assert "event: done" in response.text
+        stored = asyncio.run(chat_repository.list(TEST_USER.user_id, deleted=False))
+        assert len(stored) == 1
+        assert stored[0].answer == "Evaluator response: Hello"
     finally:
         app.dependency_overrides.clear()
 

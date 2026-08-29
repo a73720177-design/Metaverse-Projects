@@ -5,6 +5,7 @@ from app.integrations.llm.contracts import ChatGeneratorError, PersonaGeneratorE
 from app.models.chat import ChatRequest
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
+from app.models.review import ReviewSource
 
 
 class HttpPersonaGenerator:
@@ -51,6 +52,34 @@ class HttpChatGenerator:
             ) if document else None,
         }
         try:
-            return await self.client.post_json("/chat", payload)
+            generated = await self.client.post_json("/chat", payload)
+            if document is not None:
+                generated["sources"] = [
+                    ReviewSource(
+                        document_id=document.document_id,
+                        filename=document.filename,
+                        page=(section.index if document.document_type in {"pdf", "pptx"} else None),
+                        excerpt=section.text[:500],
+                    ).model_dump(mode="json")
+                    for section in document.sections
+                ]
+            else:
+                generated["sources"] = []
+            return generated
+        except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
+            raise ChatGeneratorError(str(exc)) from exc
+
+    async def stream(self, persona: PersonaProfile, request: ChatRequest,
+                     document: DocumentParseResponse | None):
+        payload = {
+            "persona": persona.model_dump(mode="json"),
+            "message": request.message,
+            "document": document.model_dump(
+                mode="json", exclude={"saved_path", "sections"}
+            ) if document else None,
+        }
+        try:
+            async for token in self.client.stream_sse("/chat/stream", payload):
+                yield token
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ChatGeneratorError(str(exc)) from exc
