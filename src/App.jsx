@@ -474,11 +474,17 @@ export default function App() {
   // Deletes a single question+answer record — Backend's actual unit of trash.
   async function deleteExchange(messageId) {
     if (!window.confirm('삭제하시겠습니까?')) return
+    const removed = chatHistory.find((m) => m.messageId === messageId)
     setTrashActionBusyId(messageId)
     setChatHistory((s) => s.filter((m) => m.messageId !== messageId))
     try {
       await trashChat(messageId, authToken)
     } catch (err) {
+      if (removed) {
+        setChatHistory((s) => (
+          s.some((m) => m.messageId === messageId) ? s : [...s, removed]
+        ))
+      }
       setSendError(err.message || '삭제하지 못했어요.')
     } finally {
       setTrashActionBusyId(null)
@@ -486,18 +492,33 @@ export default function App() {
   }
 
   // "최근 채팅" row delete — there's no session concept server-side, so this
-  // trashes every message this persona has (best-effort, in parallel).
+  // Trashes every persisted message for this persona in parallel. Failed
+  // records stay visible so UI and Backend never silently diverge.
   async function deleteConversation(personaId) {
     if (!window.confirm('삭제하시겠습니까?')) return
-    const ids = chatHistory.filter((m) => m.agentId === personaId && !m.pending).map((m) => m.messageId)
-    setChatHistory((s) => s.filter((m) => m.agentId !== personaId))
-    await Promise.allSettled(ids.map((id) => trashChat(id, authToken)))
+    const targets = chatHistory.filter((m) => m.agentId === personaId && !m.pending)
+    const results = await Promise.allSettled(
+      targets.map((item) => trashChat(item.messageId, authToken)),
+    )
+    const succeeded = new Set(
+      targets.filter((_, index) => results[index].status === 'fulfilled').map((m) => m.messageId),
+    )
+    setChatHistory((s) => s.filter((m) => !succeeded.has(m.messageId)))
+    const failedCount = results.length - succeeded.size
+    if (failedCount > 0) setSendError(`채팅 ${failedCount}개를 삭제하지 못했어요.`)
   }
 
   async function clearAllChats() {
-    const ids = chatHistory.filter((m) => !m.pending).map((m) => m.messageId)
-    setChatHistory([])
-    await Promise.allSettled(ids.map((id) => trashChat(id, authToken)))
+    const targets = chatHistory.filter((m) => !m.pending)
+    const results = await Promise.allSettled(
+      targets.map((item) => trashChat(item.messageId, authToken)),
+    )
+    const succeeded = new Set(
+      targets.filter((_, index) => results[index].status === 'fulfilled').map((m) => m.messageId),
+    )
+    setChatHistory((s) => s.filter((m) => !succeeded.has(m.messageId)))
+    const failedCount = results.length - succeeded.size
+    if (failedCount > 0) setSendError(`채팅 ${failedCount}개를 삭제하지 못했어요.`)
   }
 
   function formatTime(ts) {
@@ -593,9 +614,20 @@ export default function App() {
     setMaterialError(null)
 
     const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const previousMaterial = pendingChatMaterials[0] || null
     setUploadingMaterials((s) => [...s, { key, fileName: file.name, startedAt: Date.now() }])
     try {
       const doc = await uploadDocument(file, authToken)
+      if (previousMaterial && previousMaterial.documentId !== doc.document_id) {
+        try {
+          await deleteDocument(previousMaterial.documentId, authToken)
+          setDocuments((s) => s.filter(
+            (item) => item.document_id !== previousMaterial.documentId,
+          ))
+        } catch (cleanupError) {
+          setMaterialError('새 자료는 첨부했지만 이전 임시 자료를 정리하지 못했어요.')
+        }
+      }
       setDocuments((s) => [doc, ...s.filter((item) => item.document_id !== doc.document_id)])
       setPendingChatMaterials([{ documentId: doc.document_id, fileName: file.name }])
     } catch (err) {
@@ -649,10 +681,11 @@ export default function App() {
 
     setPersonaCreating(true)
     setPersonaCreateError(null)
+    const documentIds = []
+    let agentCreated = false
     try {
       // Uploaded one at a time (not in parallel) so the "N개 중 M번째" progress
       // readout below reflects real, meaningful steps rather than a guess.
-      const documentIds = []
       const fileNames = []
       for (let i = 0; i < newPersonaFiles.length; i++) {
         const file = newPersonaFiles[i]
@@ -663,6 +696,7 @@ export default function App() {
       }
       setPersonaUploadProgress(null)
       const agent = await createAgent({ name, description, documentIds }, authToken)
+      agentCreated = true
       setPersonas((s) => [...s, personaFromApi(agent)])
       setDocuments((s) => [
         ...newPersonaFiles.map((file, index) => ({
@@ -681,6 +715,11 @@ export default function App() {
       setSidebarMode('chat')
       setActiveView('chats')
     } catch (err) {
+      if (!agentCreated && documentIds.length > 0) {
+        await Promise.allSettled(
+          documentIds.map((documentId) => deleteDocument(documentId, authToken)),
+        )
+      }
       setPersonaCreateError(err.message || '페르소나를 만드는 중 문제가 발생했어요.')
     } finally {
       setPersonaCreating(false)
@@ -692,12 +731,16 @@ export default function App() {
   // reconciled with an error message if Backend rejects it.
   async function deletePersona(id) {
     if (!window.confirm('삭제하시겠습니까?')) return
+    const removed = personas.find((p) => p.id === id)
     setPersonas((s) => s.filter((p) => p.id !== id))
     if (persona === id) setPersona(null)
     if (viewingPersonaId === id) setActiveView('personas')
     try {
       await trashAgent(id, authToken)
     } catch (err) {
+      if (removed) {
+        setPersonas((s) => (s.some((p) => p.id === id) ? s : [...s, removed]))
+      }
       setPersonasError(err.message || '페르소나를 삭제하지 못했어요.')
     }
   }
