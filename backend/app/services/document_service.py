@@ -7,7 +7,7 @@ from app.parsers.pdf_parser import parse_pdf
 from app.parsers.ppt_parser import parse_ppt
 
 
-Parser = Callable[[Path], list[str]]
+Parser = Callable[[Path], list[tuple[int, str]]]
 PARSERS: dict[str, Parser] = {
     ".pptx": parse_ppt,
     ".pdf": parse_pdf,
@@ -21,12 +21,25 @@ def parse_document(path: Path, original_filename: str) -> DocumentParseResponse:
     if parser is None:
         raise ValueError(f"지원하지 않는 문서 형식: {path.suffix}")
 
-    texts = [text.strip() for text in parser(path) if text.strip()]
-    sections = [DocumentSection(index=index, text=text) for index, text in enumerate(texts, start=1)]
+    try:
+        parsed = parser(path)
+    except Exception as exc:
+        raise ValueError(
+            "파일이 손상됐거나 올바른 PDF, PPTX, DOCX 문서가 아닙니다."
+        ) from exc
+    sections = [
+        DocumentSection(index=index, text=text.strip())
+        for index, text in parsed
+        if text.strip()
+    ]
+    if not sections:
+        raise ValueError(
+            "문서에서 분석 가능한 텍스트를 찾지 못했습니다. 스캔 문서는 OCR이 필요합니다."
+        )
     return DocumentParseResponse(
         filename=original_filename,
         document_type=path.suffix.lower().lstrip("."),
         saved_path=path,
         sections=sections,
-        full_text="\n\n".join(texts),
+        full_text="\n\n".join(section.text for section in sections),
     )

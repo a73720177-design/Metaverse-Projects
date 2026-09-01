@@ -65,10 +65,15 @@ def test_document_list_get_delete_and_owner_isolation() -> None:
         assert listed.status_code == 200
         assert listed.json()[0]["document_id"] == str(document.document_id)
         assert listed.json()[0]["filename"] == "source.pdf"
+        assert listed.json()[0]["section_count"] == 1
+        assert listed.json()[0]["text_length"] == len("verification text")
 
         fetched = client.get(f"/documents/{document.document_id}")
         assert fetched.status_code == 200
         assert fetched.json()["full_text"] == "verification text"
+        assert fetched.json()["section_count"] == 1
+        assert fetched.json()["text_length"] == len("verification text")
+        assert "saved_path" not in fetched.json()
 
         app.dependency_overrides[get_current_user] = lambda: OTHER_USER
         assert client.get("/documents").json() == []

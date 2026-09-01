@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -8,7 +9,9 @@ from app.config import get_max_upload_size_bytes
 from app.dependencies import (
     get_agent_repository, get_current_user, get_document_repository, get_object_storage,
 )
-from app.models.document import DocumentListItem, DocumentParseResponse
+from app.models.document import (
+    DocumentDetailResponse, DocumentListItem, DocumentParseResponse,
+)
 from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.agent_repository import AgentRepository
@@ -34,18 +37,18 @@ async def list_documents(
 
 @router.get(
     "/{document_id}",
-    response_model=DocumentParseResponse,
+    response_model=DocumentDetailResponse,
     summary="내 문서 조회",
 )
 async def get_document(
     document_id: UUID,
     repository: DocumentRepository = Depends(get_document_repository),
     current_user: UserResponse = Depends(get_current_user),
-) -> DocumentParseResponse:
+) -> DocumentDetailResponse:
     document = await repository.get(document_id, current_user.user_id)
     if document is None:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
-    return document
+    return DocumentDetailResponse.from_document(document)
 
 
 @router.delete(
@@ -75,7 +78,7 @@ async def delete_document(
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
 
 
-@router.post("/parse", response_model=DocumentParseResponse,
+@router.post("/parse", response_model=DocumentDetailResponse,
              status_code=status.HTTP_201_CREATED,
              summary="문서 업로드 및 텍스트 추출",
              description="PPTX, PDF, DOCX 파일을 저장하고 구간별·전체 텍스트를 반환합니다.")
@@ -84,7 +87,7 @@ async def upload_and_parse(
     repository: DocumentRepository = Depends(get_document_repository),
     storage: ObjectStorage = Depends(get_object_storage),
     current_user: UserResponse = Depends(get_current_user),
-) -> DocumentParseResponse:
+) -> DocumentDetailResponse:
     filename = file.filename or ""
     if not filename or Path(filename).name != filename:
         raise HTTPException(status_code=422, detail="올바른 파일 이름이 필요합니다.")
@@ -109,16 +112,18 @@ async def upload_and_parse(
                 status_code=413,
                 detail=f"파일 크기는 {max_size // (1024 * 1024)}MB 이하여야 합니다.",
             )
-        saved_path.write_bytes(contents)
-        document = parse_document(
-            saved_path, original_filename=file.filename or saved_path.name
+        await asyncio.to_thread(saved_path.write_bytes, contents)
+        document = await asyncio.to_thread(
+            parse_document,
+            saved_path,
+            file.filename or saved_path.name,
         )
         object_key = build_document_object_key(document.document_id, suffix)
         await storage.upload(saved_path, object_key, file.content_type)
         uploaded = True
         document.saved_path = Path(object_key)
         await repository.save(document, current_user.user_id)
-        return document
+        return DocumentDetailResponse.from_document(document)
     except HTTPException:
         raise
     except ValueError as exc:

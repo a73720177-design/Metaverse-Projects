@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID, uuid4
@@ -47,12 +48,11 @@ class ChatService:
         effective_request = request
         source_document = None
         if request.document_id is None and persona.document_ids:
-            candidates = [
-                candidate
+            fetched = await asyncio.gather(*(
+                self.document_repository.get(document_id, owner_id)
                 for document_id in persona.document_ids
-                if (candidate := await self.document_repository.get(document_id, owner_id))
-                is not None
-            ]
+            ))
+            candidates = [candidate for candidate in fetched if candidate is not None]
             if candidates:
                 source_document = max(
                     candidates,
