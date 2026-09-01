@@ -1,7 +1,9 @@
 // Thin client for the Backend. The running OpenAPI document and controller
 // tests are the authoritative API contract.
-const browserBackendUrl = `http://${window.location.hostname || '127.0.0.1'}:8000`
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || browserBackendUrl)
+// In development, Vite proxies this same-origin prefix to Backend. This keeps
+// remote browsers from needing direct access to port 8000 and avoids CORS/PNA
+// differences between machines. Deployments can still set an absolute URL.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api-backend')
   .replace(/\/$/, '')
 
 // Backend errors are `{ error: { code, message } }`; some paths (validation,
