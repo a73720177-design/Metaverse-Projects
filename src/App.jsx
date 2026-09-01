@@ -459,8 +459,13 @@ export default function App() {
       setChatHistory((s) => s.map((m) => (m.messageId === pendingId ? chatFromApi(item) : m)))
     } catch (err) {
       if (err.name === 'AbortError') return
-      setChatHistory((s) => s.filter((m) => m.messageId !== pendingId))
-      setSendError(err?.message || 'Backend에 연결할 수 없어요. src/api.js의 API 주소가 실제 Backend와 맞는지 확인해주세요.')
+      const errorMessage = err?.message || 'Backend에 연결할 수 없어요.'
+      setChatHistory((s) => s.map((m) => (
+        m.messageId === pendingId
+          ? { ...m, pending: false, failed: true, answer: `응답 생성 실패: ${errorMessage}` }
+          : m
+      )))
+      setSendError(errorMessage)
     } finally {
       setSending(false)
     }
