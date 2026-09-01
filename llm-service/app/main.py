@@ -26,9 +26,11 @@ from app.llm_client import LLMError, call_llm, check_ollama_health
 from app.prompts import (
     CHAT_PROMPT,
     CONCEPT_EXTRACTION_PROMPT,
+    FREE_CHAT_PROMPT,
     PERSONA_GENERATION_PROMPT,
     QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
+    TOPIC_CLASSIFICATION_PROMPT,
 )
 from app.schemas import (
     ConceptExtractionRequest,
@@ -44,6 +46,7 @@ from app.schemas_v1 import (
     PersonaProfileIn,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    TopicClassification,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,10 @@ app = FastAPI(
 # response_schema로 구조화 출력을 강제해도, Ollama 버전에 따라 강제가 안 통하는
 # 경우를 대비한 방어적 처리로 코드펜스 제거는 남겨둔다.
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# think=True로 호출하는 자유 대화 경로에서, Ollama 버전에 따라 추론 과정이
+# <think>...</think> 형태로 response 필드에 섞여 나올 수 있어 방어적으로 제거한다.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 @app.get("/health")
@@ -151,6 +158,44 @@ def _build_chat_prompt(request: ChatGenerationRequest) -> str:
     )
 
 
+def _build_topic_classification_prompt(request: ChatGenerationRequest) -> str:
+    document_status = "첨부됨" if request.document is not None else "첨부되지 않음"
+    return TOPIC_CLASSIFICATION_PROMPT.format(
+        persona_json=_persona_json(request.persona),
+        document_status=document_status,
+        message=request.message,
+    )
+
+
+def _classify_topic(request: ChatGenerationRequest) -> bool:
+    try:
+        result = _generate(_build_topic_classification_prompt(request), TopicClassification)
+    except HTTPException:
+        # 분류 실패 시, 근거 없는 답을 사실처럼 말하는 상황을 막기 위해
+        # 기존 문서-근거 경로(on_topic=True)를 기본값으로 유지한다.
+        logger.warning("주제 분류 실패, on_topic=True로 폴백")
+        return True
+    return result.on_topic
+
+
+def _generate_free_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
+    prompt = FREE_CHAT_PROMPT.format(
+        persona_json=_persona_json(request.persona),
+        message=request.message,
+    )
+    try:
+        raw = call_llm(prompt, think=True)
+    except LLMError:
+        logger.exception("Ollama 호출 실패")
+        raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
+
+    answer = _THINK_TAG_RE.sub("", raw).strip()
+    if not answer:
+        logger.error("LLM 자유 응답이 비어 있음")
+        raise HTTPException(status_code=502, detail="LLM 응답을 해석할 수 없습니다.")
+    return ChatGenerationResponse(answer=answer, sources=[])
+
+
 v1_router = APIRouter(prefix="/api/v1")
 
 
@@ -179,7 +224,9 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)
 def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
-    return _generate(_build_chat_prompt(request), ChatGenerationResponse)
+    if _classify_topic(request):
+        return _generate(_build_chat_prompt(request), ChatGenerationResponse)
+    return _generate_free_chat(request)
 
 
 app.include_router(v1_router)
