@@ -1,6 +1,7 @@
 // Thin client for the Backend. The running OpenAPI document and controller
 // tests are the authoritative API contract.
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000')
+const browserBackendUrl = `http://${window.location.hostname || '127.0.0.1'}:8000`
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || browserBackendUrl)
   .replace(/\/$/, '')
 
 // Backend errors are `{ error: { code, message } }`; some paths (validation,
