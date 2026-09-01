@@ -140,6 +140,7 @@ def get_persona_service() -> PersonaService:
     return PersonaService(
         generator=generator,
         repository=get_agent_repository(),
+        document_repository=get_document_repository(),
     )
 
 

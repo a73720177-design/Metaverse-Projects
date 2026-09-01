@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 
 from app.models.document import DocumentListItem, DocumentParseResponse
 from app.db.database import get_session_factory
-from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable
+from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable, ReviewTable
 
 
 class DocumentRepository(Protocol):
@@ -16,6 +16,7 @@ class DocumentRepository(Protocol):
     async def save(self, document: DocumentParseResponse, owner_id: UUID) -> None: ...
     async def get(self, document_id: UUID, owner_id: UUID) -> DocumentParseResponse | None: ...
     async def list(self, owner_id: UUID) -> list[DocumentListItem]: ...
+    async def is_referenced(self, document_id: UUID, owner_id: UUID) -> bool: ...
     async def delete(
         self, document_id: UUID, owner_id: UUID
     ) -> DocumentParseResponse | None: ...
@@ -52,6 +53,9 @@ class InMemoryDocumentRepository:
             if stored_owner_id == owner_id
         ]
         return sorted(items, key=lambda item: item.created_at, reverse=True)
+
+    async def is_referenced(self, document_id: UUID, owner_id: UUID) -> bool:
+        return False
 
     async def delete(
         self, document_id: UUID, owner_id: UUID
@@ -158,6 +162,16 @@ class PostgresDocumentRepository:
             )
             for row in rows
         ]
+
+    async def is_referenced(self, document_id: UUID, owner_id: UUID) -> bool:
+        async with get_session_factory()() as session:
+            review_id = await session.scalar(
+                select(ReviewTable.review_id).where(
+                    ReviewTable.document_id == document_id,
+                    ReviewTable.owner_id == owner_id,
+                ).limit(1)
+            )
+        return review_id is not None
 
     async def delete(
         self, document_id: UUID, owner_id: UUID

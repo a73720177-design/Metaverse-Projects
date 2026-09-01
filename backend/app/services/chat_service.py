@@ -40,20 +40,43 @@ class ChatService:
 
     async def _resolve_context(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
-    ) -> tuple[PersonaProfile, DocumentParseResponse | None]:
+    ) -> tuple[PersonaProfile, ChatRequest, DocumentParseResponse | None]:
         persona = await self.agent_repository.get(agent_id, owner_id)
         if persona is None:
             raise ChatResourceNotFoundError("Agent not found")
-        document = None
-        if request.document_id is not None:
+        effective_request = request
+        source_document = None
+        if request.document_id is None and persona.document_ids:
+            candidates = [
+                candidate
+                for document_id in persona.document_ids
+                if (candidate := await self.document_repository.get(document_id, owner_id))
+                is not None
+            ]
+            if candidates:
+                source_document = max(
+                    candidates,
+                    key=lambda item: self.context_selector.relevance_score(
+                        item, request.message
+                    ),
+                )
+                effective_request = request.model_copy(
+                    update={"document_id": source_document.document_id}
+                )
+        elif effective_request.document_id is not None:
             source_document = await self.document_repository.get(
-                request.document_id, owner_id
+                effective_request.document_id, owner_id
             )
             if source_document is None:
                 raise ChatResourceNotFoundError("Document not found")
-            if should_use_document(request.message, request.document_id):
-                document = self.context_selector.select(source_document, request.message)
-        return persona, document
+
+        document = None
+        if source_document is not None:
+            if should_use_document(effective_request.message, effective_request.document_id):
+                document = self.context_selector.select(
+                    source_document, effective_request.message
+                )
+        return persona, effective_request, document
 
     @staticmethod
     def _sources(document: DocumentParseResponse | None) -> list[ReviewSource]:
@@ -72,16 +95,18 @@ class ChatService:
     async def reply(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
     ) -> ChatHistoryItem:
-        persona, document = await self._resolve_context(agent_id, request, owner_id)
+        persona, effective_request, document = await self._resolve_context(
+            agent_id, request, owner_id
+        )
         try:
-            generated = await self.generator.generate(persona, request, document)
+            generated = await self.generator.generate(persona, effective_request, document)
             chat = ChatHistoryItem.model_validate(
                 {
                     **generated,
                     "message_id": uuid4(),
                     "owner_id": owner_id,
                     "agent_id": agent_id,
-                    "document_id": request.document_id,
+                    "document_id": effective_request.document_id,
                     "message": request.message,
                 }
             )
@@ -93,7 +118,9 @@ class ChatService:
     async def open_stream(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
     ) -> AsyncIterator[dict[str, Any]]:
-        persona, document = await self._resolve_context(agent_id, request, owner_id)
+        persona, effective_request, document = await self._resolve_context(
+            agent_id, request, owner_id
+        )
         stream_method = getattr(self.generator, "stream", None)
         if stream_method is None:
             raise ChatServiceError("Streaming chat is unavailable")
@@ -101,7 +128,7 @@ class ChatService:
         async def events() -> AsyncIterator[dict[str, Any]]:
             parts: list[str] = []
             try:
-                async for token in stream_method(persona, request, document):
+                async for token in stream_method(persona, effective_request, document):
                     parts.append(token)
                     yield {"event": "token", "data": {"token": token}}
                 answer = "".join(parts).strip()
@@ -111,7 +138,7 @@ class ChatService:
                     message_id=uuid4(),
                     owner_id=owner_id,
                     agent_id=agent_id,
-                    document_id=request.document_id,
+                    document_id=effective_request.document_id,
                     message=request.message,
                     answer=answer,
                     sources=self._sources(document),

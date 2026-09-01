@@ -5,10 +5,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_max_upload_size_bytes
-from app.dependencies import get_current_user, get_document_repository, get_object_storage
+from app.dependencies import (
+    get_agent_repository, get_current_user, get_document_repository, get_object_storage,
+)
 from app.models.document import DocumentListItem, DocumentParseResponse
 from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
+from app.repositories.agent_repository import AgentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
 from app.storage.object_storage import ObjectStorage, ObjectStorageError
 
@@ -53,13 +56,23 @@ async def get_document(
 async def delete_document(
     document_id: UUID,
     repository: DocumentRepository = Depends(get_document_repository),
+    agent_repository: AgentRepository = Depends(get_agent_repository),
     storage: ObjectStorage = Depends(get_object_storage),
     current_user: UserResponse = Depends(get_current_user),
 ) -> None:
-    document = await repository.delete(document_id, current_user.user_id)
+    document = await repository.get(document_id, current_user.user_id)
     if document is None:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    if await repository.is_referenced(document_id, current_user.user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="리뷰에서 사용 중인 문서는 삭제할 수 없습니다.",
+        )
     await storage.delete(str(document.saved_path))
+    await agent_repository.unlink_document(document_id, current_user.user_id)
+    deleted = await repository.delete(document_id, current_user.user_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
 
 
 @router.post("/parse", response_model=DocumentParseResponse,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
-  streamChat, createAgent, uploadDocument, login, signup, getCurrentUser,
+  streamChat, createAgent, uploadDocument, listDocuments, deleteDocument,
+  login, signup, getCurrentUser,
   listAgents, trashAgent, listTrashedAgents, restoreAgent, permanentlyDeleteAgent,
   listChats, trashChat, listTrashedChats, restoreChat, permanentlyDeleteChat,
 } from './api'
@@ -63,7 +64,12 @@ function describeStorageError(e) {
 // Backend's persona field is `agent_id` — the rest of this file calls it
 // `id` throughout, so every persona coming from Backend is adapted here.
 function personaFromApi(item) {
-  return { id: item.agent_id, name: item.name, description: item.description }
+  return {
+    id: item.agent_id,
+    name: item.name,
+    description: item.description,
+    documentIds: item.document_ids || [],
+  }
 }
 
 // Backend stores one record per question+answer pair. There is no chat-session
@@ -93,6 +99,7 @@ export default function App() {
   const [historyQuery, setHistoryQuery] = useState('')
 
   const [pendingChatMaterials, setPendingChatMaterials] = useState([])
+  const [documents, setDocuments] = useState([])
   const [uploadingMaterials, setUploadingMaterials] = useState([])
   const [materialError, setMaterialError] = useState(null)
   const [personaUploadProgress, setPersonaUploadProgress] = useState(null)
@@ -197,6 +204,26 @@ export default function App() {
     }
   }, [authUser, authToken])
 
+  // A stored token is only a cache. Revalidate it at startup so an expired
+  // session cannot briefly expose stale authenticated UI.
+  useEffect(() => {
+    if (!authToken) return
+    let cancelled = false
+    getCurrentUser(authToken)
+      .then((user) => { if (!cancelled) setAuthUser(user) })
+      .catch(() => {
+        if (cancelled) return
+        setAuthToken(null)
+        setAuthUser(null)
+        setPersonas([])
+        setDocuments([])
+        setChatHistory([])
+        setPersona(null)
+        setLoginError('로그인이 만료되었습니다. 다시 로그인해주세요.')
+      })
+    return () => { cancelled = true }
+  }, [authToken])
+
   // Hydrate personas + chat history from Backend once logged in — these are
   // the authoritative lists now, not something this app invents locally.
   useEffect(() => {
@@ -206,6 +233,29 @@ export default function App() {
     listAgents(authToken)
       .then((items) => { if (!cancelled) setPersonas(items.map(personaFromApi)) })
       .catch((err) => { if (!cancelled) setPersonasError(err.message || '페르소나 목록을 불러오지 못했어요.') })
+    return () => { cancelled = true }
+  }, [authToken])
+
+  // Server-owned agent/document relationships replace the former
+  // localStorage-only association. The existing UI map remains an adapter.
+  useEffect(() => {
+    const byId = new Map(documents.map((item) => [item.document_id, item]))
+    const next = Object.fromEntries(personas.map((item) => {
+      const linked = (item.documentIds || []).map((id) => byId.get(id)).filter(Boolean)
+      return [item.id, {
+        documentIds: linked.map((doc) => doc.document_id),
+        fileNames: linked.map((doc) => doc.filename),
+      }]
+    }))
+    setPersonaMaterials(next)
+  }, [personas, documents])
+
+  useEffect(() => {
+    if (!authToken) return
+    let cancelled = false
+    listDocuments(authToken)
+      .then((items) => { if (!cancelled) setDocuments(items) })
+      .catch((err) => { if (!cancelled) setMaterialError(err.message || '자료 목록을 불러오지 못했어요.') })
     return () => { cancelled = true }
   }, [authToken])
 
@@ -274,6 +324,7 @@ export default function App() {
     const user = await getCurrentUser(access_token)
     setPersonas([])
     setChatHistory([])
+    setDocuments([])
     setPersona(null)
     setViewingPersonaId(null)
     setContent('')
@@ -331,6 +382,7 @@ export default function App() {
     setAuthUser(null)
     setPersonas([])
     setChatHistory([])
+    setDocuments([])
     setPersona(null)
     setViewingPersonaId(null)
     setActiveView('personas')
@@ -513,7 +565,9 @@ export default function App() {
   function handleChatFileDrop(e) {
     e.preventDefault()
     setChatDragOver(false)
-    Array.from(e.dataTransfer.files || []).forEach((file) => attachChatMaterial(file))
+    const files = Array.from(e.dataTransfer.files || [])
+    if (files.length > 1) setMaterialError('채팅에는 한 번에 자료 하나만 첨부할 수 있어요.')
+    if (files[0]) attachChatMaterial(files[0])
   }
 
   function removePersonaFile(index) {
@@ -537,7 +591,8 @@ export default function App() {
     setUploadingMaterials((s) => [...s, { key, fileName: file.name, startedAt: Date.now() }])
     try {
       const doc = await uploadDocument(file, authToken)
-      setPendingChatMaterials((s) => [...s, { documentId: doc.document_id, fileName: file.name }])
+      setDocuments((s) => [doc, ...s.filter((item) => item.document_id !== doc.document_id)])
+      setPendingChatMaterials([{ documentId: doc.document_id, fileName: file.name }])
     } catch (err) {
       setMaterialError(err.message || '자료를 분석하지 못했어요.')
     } finally {
@@ -548,30 +603,32 @@ export default function App() {
   function handleChatFileChange(e) {
     const files = Array.from(e.target.files || [])
     e.target.value = ''
-    files.forEach((file) => attachChatMaterial(file))
+    if (files.length > 1) setMaterialError('채팅에는 한 번에 자료 하나만 첨부할 수 있어요.')
+    if (files[0]) attachChatMaterial(files[0])
   }
 
   // Removes a staged/attached material — a persona's (local-only) material,
   // or a not-yet-sent pending chat attachment. Backend has no document
   // trash, so this is a direct, confirmed removal rather than a soft delete.
-  function deleteMaterial(documentId, { personaId = null } = {}) {
+  async function deleteMaterial(documentId, { personaId = null } = {}) {
     if (!window.confirm('삭제하시겠습니까?')) return
-    if (personaId) {
-      setPersonaMaterials((s) => {
-        const entry = s[personaId]
-        if (!entry) return s
-        const idx = (entry.documentIds || []).indexOf(documentId)
-        if (idx === -1) return s
-        return {
-          ...s,
-          [personaId]: {
-            documentIds: entry.documentIds.filter((id) => id !== documentId),
-            fileNames: entry.fileNames.filter((_, i) => i !== idx),
-          },
-        }
-      })
-    } else {
+    try {
+      await deleteDocument(documentId, authToken)
+      setDocuments((s) => s.filter((item) => item.document_id !== documentId))
       setPendingChatMaterials((s) => s.filter((m) => m.documentId !== documentId))
+      setPersonas((s) => s.map((item) => ({
+        ...item,
+        documentIds: (item.documentIds || []).filter((id) => id !== documentId),
+      })))
+      if (personaId) {
+        setPersonaMaterials((s) => {
+          const next = { ...s }
+          delete next[personaId]
+          return next
+        })
+      }
+    } catch (err) {
+      setMaterialError(err.message || '자료를 삭제하지 못했어요.')
     }
   }
 
@@ -600,8 +657,14 @@ export default function App() {
         fileNames.push(file.name)
       }
       setPersonaUploadProgress(null)
-      const agent = await createAgent({ name, description }, authToken)
-      setPersonas((s) => [...s, { id: agent.agent_id, name, description }])
+      const agent = await createAgent({ name, description, documentIds }, authToken)
+      setPersonas((s) => [...s, personaFromApi(agent)])
+      setDocuments((s) => [
+        ...newPersonaFiles.map((file, index) => ({
+          document_id: documentIds[index], filename: file.name,
+        })),
+        ...s.filter((item) => !documentIds.includes(item.document_id)),
+      ])
       if (documentIds.length > 0) {
         setPersonaMaterials((s) => ({ ...s, [agent.agent_id]: { documentIds, fileNames } }))
       }
@@ -1074,7 +1137,6 @@ export default function App() {
                     <input
                       type="file"
                       accept=".pptx,.pdf,.docx"
-                      multiple
                       onChange={handleChatFileChange}
                       className="visually-hidden"
                     />
@@ -1133,7 +1195,6 @@ export default function App() {
                     <input
                       type="file"
                       accept=".pptx,.pdf,.docx"
-                      multiple
                       onChange={handleChatFileChange}
                       className="visually-hidden"
                       disabled={!persona}

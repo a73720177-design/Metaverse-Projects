@@ -68,11 +68,23 @@ export function getCurrentUser(token, signal) {
 
 // Requires auth — Backend scopes agents to the caller. ->
 // { agent_id, name, description, role, expertise, evaluation_style }
-export function createAgent({ name, description }, token, signal) {
+export function createAgent({ name, description, documentIds = [] }, token, signal) {
   return apiFetch('/agents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description }),
+    body: JSON.stringify({ name, description, document_ids: documentIds }),
+    signal,
+  })
+}
+
+export function listDocuments(token, signal) {
+  return apiFetch('/documents', { headers: authHeaders(token), signal })
+}
+
+export function deleteDocument(documentId, token, signal) {
+  return apiFetch(`/documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
     signal,
   })
 }

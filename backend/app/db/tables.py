@@ -127,6 +127,25 @@ class ReviewTable(Base):
     )
 
 
+class AgentDocumentTable(Base):
+    __tablename__ = "agent_documents"
+    __table_args__ = (Index("ix_agent_documents_document_id", "document_id"),)
+
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.agent_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ChatMessageTable(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (

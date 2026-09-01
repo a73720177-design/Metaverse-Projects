@@ -14,7 +14,9 @@ class HttpPersonaGenerator:
 
     async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]:
         try:
-            return await self.client.post_json("/personas", request.model_dump(mode="json"))
+            return await self.client.post_json(
+                "/personas", request.model_dump(mode="json", exclude={"document_ids"})
+            )
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise PersonaGeneratorError(str(exc)) from exc
 

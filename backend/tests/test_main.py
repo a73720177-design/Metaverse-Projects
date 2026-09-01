@@ -320,6 +320,73 @@ def test_chat_contract() -> None:
         app.dependency_overrides.clear()
 
 
+def test_agent_persists_owned_document_contract() -> None:
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    service = PersonaService(
+        FakePersonaGenerator(), agent_repository, document_repository
+    )
+    document = DocumentParseResponse(
+        filename="source.pdf",
+        document_type="pdf",
+        saved_path=Path("source.pdf"),
+        sections=[{"index": 1, "text": "grounded content"}],
+        full_text="grounded content",
+    )
+    import asyncio
+    asyncio.run(document_repository.save(document, TEST_USER.user_id))
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        created = client.post(
+            "/agents",
+            json={
+                "name": "Grounded evaluator",
+                "description": "Uses linked material",
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert created.status_code == 201
+        assert created.json()["document_ids"] == [str(document.document_id)]
+        assert client.get("/agents").json()[0]["document_ids"] == [
+            str(document.document_id)
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_rejects_document_owned_by_another_user() -> None:
+    document_repository = InMemoryDocumentRepository()
+    service = PersonaService(
+        FakePersonaGenerator(), InMemoryAgentRepository(), document_repository
+    )
+    document = DocumentParseResponse(
+        filename="private.pdf",
+        document_type="pdf",
+        saved_path=Path("private.pdf"),
+        sections=[],
+        full_text="private",
+    )
+    import asyncio
+    asyncio.run(
+        document_repository.save(
+            document, UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        )
+    )
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "Invalid",
+                "description": "Cross-owner material",
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_chat_stream_contract_persists_completed_answer() -> None:
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()

@@ -77,3 +77,14 @@ class DocumentContextSelector:
         selected.sort(key=lambda chunk: chunk.index)
         context = "\n\n".join(f"[구간 {chunk.index}]\n{chunk.text}" for chunk in selected)
         return document.model_copy(update={"sections": selected, "full_text": context})
+
+    def relevance_score(self, document: DocumentParseResponse, query: str) -> int:
+        """Return a cheap cross-document score used for an agent's defaults."""
+        query_terms = set(_TOKEN_RE.findall(query.lower()))
+        return max(
+            (
+                len(query_terms & set(_TOKEN_RE.findall(chunk.text.lower())))
+                for chunk in self._chunks(document)
+            ),
+            default=0,
+        )

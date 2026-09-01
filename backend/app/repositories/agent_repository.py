@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import delete, select
 
 from app.db.database import get_session_factory
-from app.db.tables import AgentTable
+from app.db.tables import AgentDocumentTable, AgentTable
 from app.models.persona import PersonaHistoryItem, PersonaProfile
 
 
@@ -15,6 +15,7 @@ class AgentRepository(Protocol):
     async def list(self, owner_id: UUID, *, deleted: bool) -> list[PersonaHistoryItem]: ...
     async def set_deleted(self, agent_id: UUID, owner_id: UUID, *, deleted: bool) -> PersonaHistoryItem | None: ...
     async def permanently_delete(self, agent_id: UUID, owner_id: UUID) -> bool: ...
+    async def unlink_document(self, document_id: UUID, owner_id: UUID) -> None: ...
 
 
 class InMemoryAgentRepository:
@@ -59,6 +60,19 @@ class InMemoryAgentRepository:
         del self._agents[agent_id]
         return True
 
+    async def unlink_document(self, document_id: UUID, owner_id: UUID) -> None:
+        for agent_id, (stored_owner, persona) in list(self._agents.items()):
+            if stored_owner != owner_id or document_id not in persona.document_ids:
+                continue
+            self._agents[agent_id] = (
+                stored_owner,
+                persona.model_copy(update={
+                    "document_ids": [
+                        item for item in persona.document_ids if item != document_id
+                    ]
+                }),
+            )
+
 
 def _to_history(row: AgentTable) -> PersonaHistoryItem:
     return PersonaHistoryItem.model_validate(
@@ -72,11 +86,19 @@ def _to_history(row: AgentTable) -> PersonaHistoryItem:
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "deleted_at": row.deleted_at,
+            "document_ids": [],
         }
     )
 
 
 class PostgresAgentRepository:
+    async def _document_ids(self, session, agent_id: UUID) -> list[UUID]:
+        return list((await session.scalars(
+            select(AgentDocumentTable.document_id)
+            .where(AgentDocumentTable.agent_id == agent_id)
+            .order_by(AgentDocumentTable.created_at, AgentDocumentTable.document_id)
+        )).all())
+
     async def save(self, persona: PersonaProfile, owner_id: UUID) -> None:
         data = persona.model_dump(mode="json")
         row = AgentTable(
@@ -90,6 +112,13 @@ class PostgresAgentRepository:
         )
         async with get_session_factory()() as session:
             await session.merge(row)
+            await session.execute(
+                delete(AgentDocumentTable).where(AgentDocumentTable.agent_id == persona.agent_id)
+            )
+            session.add_all(
+                AgentDocumentTable(agent_id=persona.agent_id, document_id=document_id)
+                for document_id in persona.document_ids
+            )
             await session.commit()
 
     async def get(self, agent_id: UUID, owner_id: UUID) -> PersonaProfile | None:
@@ -101,7 +130,12 @@ class PostgresAgentRepository:
                     AgentTable.deleted_at.is_(None),
                 )
             )
-        return PersonaProfile.model_validate(_to_history(row).model_dump()) if row else None
+            document_ids = await self._document_ids(session, agent_id) if row else []
+        if row is None:
+            return None
+        return PersonaProfile.model_validate(
+            {**_to_history(row).model_dump(), "document_ids": document_ids}
+        )
 
     async def list(self, owner_id: UUID, *, deleted: bool) -> list[PersonaHistoryItem]:
         condition = AgentTable.deleted_at.is_not(None) if deleted else AgentTable.deleted_at.is_(None)
@@ -113,7 +147,13 @@ class PostgresAgentRepository:
                     .order_by(AgentTable.created_at.desc())
                 )
             ).all()
-        return [_to_history(row) for row in rows]
+            document_ids_by_agent = {
+                row.agent_id: await self._document_ids(session, row.agent_id) for row in rows
+            }
+        return [
+            _to_history(row).model_copy(update={"document_ids": document_ids_by_agent[row.agent_id]})
+            for row in rows
+        ]
 
     async def set_deleted(self, agent_id: UUID, owner_id: UUID, *, deleted: bool) -> PersonaHistoryItem | None:
         async with get_session_factory()() as session:
@@ -128,7 +168,8 @@ class PostgresAgentRepository:
             row.deleted_at = datetime.now(timezone.utc) if deleted else None
             await session.commit()
             await session.refresh(row)
-            return _to_history(row)
+            document_ids = await self._document_ids(session, row.agent_id)
+            return _to_history(row).model_copy(update={"document_ids": document_ids})
 
     async def permanently_delete(self, agent_id: UUID, owner_id: UUID) -> bool:
         async with get_session_factory()() as session:
@@ -141,3 +182,16 @@ class PostgresAgentRepository:
             )
             await session.commit()
             return bool(result.rowcount)
+
+    async def unlink_document(self, document_id: UUID, owner_id: UUID) -> None:
+        async with get_session_factory()() as session:
+            owned_agent_ids = select(AgentTable.agent_id).where(
+                AgentTable.owner_id == owner_id
+            )
+            await session.execute(
+                delete(AgentDocumentTable).where(
+                    AgentDocumentTable.document_id == document_id,
+                    AgentDocumentTable.agent_id.in_(owned_agent_ids),
+                )
+            )
+            await session.commit()
