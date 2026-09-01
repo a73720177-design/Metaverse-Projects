@@ -185,6 +185,62 @@ def test_chat_stream_returns_token_and_done_events(monkeypatch):
     assert "event: done" in response.text
 
 
+def test_chat_routes_general_conversation_without_document_context(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "안녕하세요."
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    response = client.post(
+        "/api/v1/chat",
+        json={"persona": _persona_payload(), "message": "안녕, 넌 누구야?"},
+    )
+
+    assert response.status_code == 200
+    assert "일반적인 대화" in captured["prompt"]
+    assert "[참고 문서]" not in captured["prompt"]
+
+
+def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "문서 기반 답변"
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    payload = {
+        "persona": _persona_payload(),
+        "message": "이 부분은 왜 그런가요?",
+        "document": _document_payload(),
+    }
+    response = client.post("/api/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    assert "[참고 문서]" in captured["prompt"]
+    assert "본문" in captured["prompt"]
+
+
+def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
+    captured = {}
+
+    def fake_stream(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return iter(["반갑", "습니다"])
+
+    monkeypatch.setattr("app.main.stream_llm", fake_stream)
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕하세요"},
+    )
+
+    assert response.status_code == 200
+    assert "일반적인 대화" in captured["prompt"]
+    assert 'data: {"token": "반갑"}' in response.text
+
+
 def test_structured_response_accepts_trailing_model_text(monkeypatch):
     monkeypatch.setattr(
         "app.main.call_llm",

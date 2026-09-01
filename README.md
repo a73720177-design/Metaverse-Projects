@@ -34,6 +34,7 @@ Ollama :11434
 - Chat JSON 응답 및 SSE 스트리밍
 - `memory|postgres` Repository, `local|minio` Object Storage
 - LLM legacy 호환 API와 정식 `/api/v1` 계약
+- 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
 
 `backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. Migration `001`부터 `005`까지 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.

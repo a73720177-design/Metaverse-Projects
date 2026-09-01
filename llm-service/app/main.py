@@ -33,6 +33,7 @@ from app.llm_client import (
 from app.prompts import (
     CHAT_PROMPT,
     CONCEPT_EXTRACTION_PROMPT,
+    FREE_CHAT_PROMPT,
     PERSONA_GENERATION_PROMPT,
     QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
@@ -205,6 +206,42 @@ def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResp
     )
 
 
+_DOCUMENT_TOPIC_MARKERS = (
+    "발표", "자료", "문서", "슬라이드", "첨부", "내용", "주장", "근거",
+    "평가", "요약", "분석", "페이지", "개선", "질문", "document", "slide",
+    "presentation", "evidence", "source", "summary",
+)
+_FREE_CHAT_MARKERS = (
+    "안녕", "반가", "고마", "너는 누구", "넌 누구", "정체가", "날씨", "농담",
+    "hello", "thank", "who are you", "weather", "tell me a joke",
+)
+
+
+def _is_off_topic(request: ChatGenerationRequest) -> bool:
+    """Classify obvious cases locally so chat latency does not double."""
+    message = " ".join(request.message.lower().split())
+    has_document_topic = any(marker in message for marker in _DOCUMENT_TOPIC_MARKERS)
+    if request.document is not None:
+        if has_document_topic:
+            return False
+        if any(marker in message for marker in _FREE_CHAT_MARKERS):
+            return True
+        # With selected context, ambiguous questions should stay grounded.
+        return False
+    # Without a document, explicit presentation questions retain the evaluator
+    # prompt while everything else uses concise free conversation.
+    return not has_document_topic
+
+
+def _build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
+    if not _is_off_topic(request):
+        return _build_chat_prompt(request)
+    return FREE_CHAT_PROMPT.format(
+        persona_json=_persona_json(request.persona),
+        message=request.message,
+    )
+
+
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
     return _generate(_build_review_prompt(request), ReviewGenerationResponse)
@@ -217,7 +254,7 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
     # can consume the full output budget even for a one-line answer.
     return ChatGenerationResponse(
         answer=_call_llm_as_text(
-            _build_chat_prompt(request),
+            _build_effective_chat_prompt(request),
             model=OLLAMA_CHAT_MODEL,
             max_tokens=160,
         ),
@@ -230,7 +267,7 @@ def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
     def events():
         try:
             for token in stream_llm(
-                _build_chat_prompt(request),
+                _build_effective_chat_prompt(request),
                 model=OLLAMA_CHAT_MODEL,
                 max_tokens=160,
             ):
