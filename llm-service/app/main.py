@@ -9,9 +9,8 @@ LLM 서비스 API 서버.
     - qwen3:14b 모델이 pull 되어 있어야 함
 
 /extract-concepts, /generate-questions는 Backend의 legacy_questions 호환
-모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약
-(docs/LLM_HTTP_CONTRACT.md)이며, Backend가 legacy_questions에서 v1으로
-전환하면 legacy 엔드포인트는 제거한다.
+모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약이며,
+Backend가 legacy_questions에서 v1으로 전환하면 legacy 엔드포인트는 제거한다.
 """
 
 import json
@@ -190,9 +189,8 @@ v1_router = APIRouter(prefix="/api/v1")
 def health_check_v1():
     """Backend가 LLM 서비스와 Ollama 상태를 확인할 때 호출.
 
-    INTEGRATION_CONTRACTS.md 계약대로 이 서비스 프로세스뿐 아니라 Ollama
-    연결까지 확인한다. legacy `/health`는 프로세스 생존만 확인하는 단순
-    버전으로 남겨둔다.
+    정식 서비스 계약에 따라 이 프로세스뿐 아니라 Ollama 연결까지 확인한다.
+    legacy `/health`는 프로세스 생존만 확인하는 단순 버전으로 남겨둔다.
     """
     if not check_ollama_health():
         raise HTTPException(status_code=503, detail="Ollama에 연결할 수 없습니다.")
