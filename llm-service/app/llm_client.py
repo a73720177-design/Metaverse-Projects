@@ -7,6 +7,8 @@ Schema로 강제하는 것(response_schema), 연결 오류 처리만 담당한�
 """
 
 import os
+import json
+from collections.abc import Iterator
 
 import requests
 from dotenv import load_dotenv
@@ -16,9 +18,12 @@ load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
 
 # 응답 생성이 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다 (초 단위)
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_MAX_OUTPUT_TOKENS = int(os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", "1024"))
 
 
 class LLMError(Exception):
@@ -30,6 +35,7 @@ def call_llm(
     model: str | None = None,
     response_schema: dict | None = None,
     think: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Ollama /api/generate를 호출하고 원본 응답 텍스트를 그대로 반환한다.
@@ -48,6 +54,8 @@ def call_llm(
         "prompt": prompt,
         "stream": False,
         "think": think,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS},
     }
     if response_schema is not None:
         payload["format"] = response_schema
@@ -65,6 +73,38 @@ def call_llm(
         ) from e
 
     return response.json().get("response", "")
+
+
+def stream_llm(
+    prompt: str,
+    model: str | None = None,
+    max_tokens: int | None = None,
+) -> Iterator[str]:
+    """Ollama token chunks for latency-sensitive chat responses."""
+    payload = {
+        "model": model or OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": True,
+        "think": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS},
+    }
+    try:
+        with requests.post(
+            f"{OLLAMA_HOST}/api/generate",
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                chunk = json.loads(line).get("response", "")
+                if chunk:
+                    yield chunk
+    except (requests.RequestException, ValueError) as exc:
+        raise LLMError("Ollama 스트리밍 호출 실패") from exc
 
 
 def check_ollama_health() -> bool:

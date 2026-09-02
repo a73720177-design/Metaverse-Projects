@@ -1,4 +1,6 @@
 import os
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -35,6 +37,43 @@ class HttpLlmClient:
 
     async def get_json(self, path: str) -> dict[str, Any]:
         return await self._request("GET", path)
+
+    async def stream_sse(
+        self, path: str, payload: dict[str, Any]
+    ) -> AsyncIterator[str]:
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, transport=self.transport
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}{self.api_prefix}{path}",
+                    json=payload,
+                    headers={"X-Backend-Contract-Version": "1"},
+                ) as response:
+                    if response.status_code >= 400:
+                        raise LlmServiceResponseError(
+                            f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다."
+                        )
+                    event = "message"
+                    async for line in response.aiter_lines():
+                        if line.startswith("event:"):
+                            event = line.removeprefix("event:").strip()
+                        elif line.startswith("data:"):
+                            data = json.loads(line.removeprefix("data:").strip())
+                            if event == "token" and isinstance(data.get("token"), str):
+                                yield data["token"]
+                            elif event == "error":
+                                raise LlmServiceResponseError(
+                                    "LLM 서비스 스트리밍 중 오류가 발생했습니다."
+                                )
+                            event = "message"
+        except LlmServiceResponseError:
+            raise
+        except (httpx.RequestError, ValueError) as exc:
+            raise LlmServiceConnectionError(
+                f"LLM 서비스를 사용할 수 없습니다: {self.base_url}"
+            ) from exc
 
     async def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None

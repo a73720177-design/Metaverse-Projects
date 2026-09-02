@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from app.models.persona import PersonaCreateRequest, PersonaHistoryItem, PersonaProfile
 from app.integrations.llm.contracts import PersonaGenerator, PersonaGeneratorError
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.document_repository import DocumentRepository
 
 
 class UpstreamServiceError(RuntimeError):
@@ -15,14 +16,28 @@ class PersonaNotFoundError(RuntimeError):
     pass
 
 
+class PersonaDocumentNotFoundError(RuntimeError):
+    pass
+
+
 class PersonaService:
     """Backend orchestration only; generation and persistence are delegated."""
 
-    def __init__(self, generator: PersonaGenerator, repository: AgentRepository) -> None:
+    def __init__(self, generator: PersonaGenerator, repository: AgentRepository,
+                 document_repository: DocumentRepository | None = None) -> None:
         self.generator = generator
         self.repository = repository
+        self.document_repository = document_repository
 
     async def create(self, request: PersonaCreateRequest, owner_id: UUID) -> PersonaProfile:
+        if len(set(request.document_ids)) != len(request.document_ids):
+            raise PersonaDocumentNotFoundError("Duplicate document IDs are not allowed")
+        if request.document_ids:
+            if self.document_repository is None:
+                raise PersonaDocumentNotFoundError("Document repository is not configured")
+            for document_id in request.document_ids:
+                if await self.document_repository.get(document_id, owner_id) is None:
+                    raise PersonaDocumentNotFoundError("Document not found")
         try:
             generated = await self.generator.generate(request)
             persona = PersonaProfile.model_validate(
@@ -31,6 +46,7 @@ class PersonaService:
                     "agent_id": uuid4(),
                     "name": request.name,
                     "description": request.description,
+                    "document_ids": request.document_ids,
                 }
             )
         except (PersonaGeneratorError, ValidationError) as exc:

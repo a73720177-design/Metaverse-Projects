@@ -39,6 +39,11 @@ class PersonaCreateRequest(BaseModel):
         description="전문 분야, 평가 기준 등 사용자가 알고 있는 평가자 정보",
         examples=["인공지능을 연구하며 발표의 근거와 비교 실험을 중요하게 평가한다."],
     )
+    document_ids: list[UUID] = Field(
+        default_factory=list,
+        max_length=20,
+        description="페르소나의 기본 대화 자료로 연결할 문서 UUID 목록",
+    )
 
 
 class PersonaProfile(BaseModel):
@@ -51,6 +56,7 @@ class PersonaProfile(BaseModel):
     role: str = "Evaluator"
     expertise: list[PersonaTrait] = Field(default_factory=list)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list)
+    document_ids: list[UUID] = Field(default_factory=list)
 
 
 class PersonaHistoryItem(PersonaProfile):
