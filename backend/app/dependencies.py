@@ -6,6 +6,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import (
     get_jwt_access_token_expire_minutes,
     get_jwt_secret_key,
+    get_login_rate_limit_attempts,
+    get_login_rate_limit_window_seconds,
     get_object_storage_mode,
     get_repository_mode,
 )
@@ -30,6 +32,7 @@ from app.repositories.user_repository import (
     UserRepository,
 )
 from app.services.auth_service import AuthService
+from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
@@ -92,6 +95,14 @@ def get_auth_service() -> AuthService:
         repository=get_user_repository(),
         secret_key=get_jwt_secret_key(),
         access_token_expire_minutes=get_jwt_access_token_expire_minutes(),
+    )
+
+
+@lru_cache
+def get_login_rate_limiter() -> LoginRateLimiter:
+    return LoginRateLimiter(
+        max_attempts=get_login_rate_limit_attempts(),
+        window_seconds=get_login_rate_limit_window_seconds(),
     )
 
 

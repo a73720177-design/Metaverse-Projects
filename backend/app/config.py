@@ -99,3 +99,22 @@ def get_jwt_access_token_expire_minutes() -> int:
     if minutes < 1:
         raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be at least 1.")
     return minutes
+
+
+def _get_positive_int(name: str, default: int) -> int:
+    value = os.getenv(name, str(default)).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer.") from exc
+    if parsed < 1:
+        raise RuntimeError(f"{name} must be at least 1.")
+    return parsed
+
+
+def get_login_rate_limit_attempts() -> int:
+    return _get_positive_int("LOGIN_RATE_LIMIT_ATTEMPTS", 5)
+
+
+def get_login_rate_limit_window_seconds() -> int:
+    return _get_positive_int("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)

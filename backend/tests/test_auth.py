@@ -4,11 +4,12 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from app.dependencies import get_auth_service
+from app.dependencies import get_auth_service, get_login_rate_limiter
 from app.main import app
 from app.models.user import UserCredentials
 from app.repositories.user_repository import InMemoryUserRepository
 from app.services.auth_service import AuthService, InvalidCredentialsError
+from app.services.login_rate_limiter import LoginRateLimiter
 
 
 client = TestClient(app)
@@ -83,6 +84,41 @@ def test_invalid_login_and_missing_token_are_rejected() -> None:
 
         me = client.get("/auth/me")
         assert me.status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rate_limit_returns_retry_after() -> None:
+    service, _ = make_service()
+    limiter = LoginRateLimiter(max_attempts=2, window_seconds=60)
+    app.dependency_overrides[get_auth_service] = lambda: service
+    app.dependency_overrides[get_login_rate_limiter] = lambda: limiter
+    try:
+        payload = {"username": "missing", "password": "wrongpass123"}
+        assert client.post("/auth/login", json=payload).status_code == 401
+        assert client.post("/auth/login", json=payload).status_code == 401
+
+        blocked = client.post("/auth/login", json=payload)
+        assert blocked.status_code == 429
+        assert blocked.json()["error"]["code"] == "http_429"
+        assert int(blocked.headers["retry-after"]) >= 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_successful_login_resets_failed_attempts() -> None:
+    service, _ = make_service()
+    limiter = LoginRateLimiter(max_attempts=2, window_seconds=60)
+    app.dependency_overrides[get_auth_service] = lambda: service
+    app.dependency_overrides[get_login_rate_limiter] = lambda: limiter
+    try:
+        signup_payload = {"username": "resetuser", "password": "password123"}
+        assert client.post("/auth/signup", json=signup_payload).status_code == 201
+        invalid_payload = {**signup_payload, "password": "wrongpass123"}
+        assert client.post("/auth/login", json=invalid_payload).status_code == 401
+        assert client.post("/auth/login", json=signup_payload).status_code == 200
+        assert client.post("/auth/login", json=invalid_payload).status_code == 401
+        assert client.post("/auth/login", json=invalid_payload).status_code == 401
     finally:
         app.dependency_overrides.clear()
 
