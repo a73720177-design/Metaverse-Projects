@@ -171,6 +171,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         assert request.url.path == "/api/v1/chat"
         payload = json.loads(request.content)
         assert payload["message"] == "핵심 문제는 무엇인가요?"
+        assert payload["max_output_tokens"] == 1024
         if with_document:
             assert payload["document"]["document_id"] == str(document.document_id)
             assert "saved_path" not in payload["document"]
@@ -198,6 +199,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
             ChatRequest(
                 message="핵심 문제는 무엇인가요?",
                 document_id=document.document_id if with_document else None,
+                response_detail="standard",
             ),
             OWNER_ID,
         )
@@ -244,6 +246,38 @@ def test_v1_chat_omits_linked_document_for_greeting() -> None:
     result = asyncio.run(run_contract())
     assert result.answer == "안녕하세요!"
     assert result.document_id == document.document_id
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected_tokens"),
+    [("concise", 512), ("standard", 1024), ("detailed", 1536)],
+)
+def test_v1_chat_maps_response_detail_to_safe_token_budget(
+    detail: str, expected_tokens: int
+) -> None:
+    persona = _persona()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["max_output_tokens"] == expected_tokens
+        return httpx.Response(200, json={"answer": "답변", "sources": []})
+
+    async def run_contract():
+        agent_repository = InMemoryAgentRepository()
+        await agent_repository.save(persona, OWNER_ID)
+        service = ChatService(
+            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            agent_repository,
+            InMemoryDocumentRepository(),
+            InMemoryChatRepository(),
+        )
+        return await service.reply(
+            persona.agent_id,
+            ChatRequest(message="설명해 주세요.", response_detail=detail),
+            OWNER_ID,
+        )
+
+    assert asyncio.run(run_contract()).answer == "답변"
 
 
 @pytest.mark.parametrize(

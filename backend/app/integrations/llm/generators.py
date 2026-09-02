@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.config import get_chat_output_token_budgets
 from app.integrations.llm.client import HttpLlmClient, LlmServiceConnectionError, LlmServiceResponseError
 from app.integrations.llm.contracts import ChatGeneratorError, PersonaGeneratorError, ReviewGeneratorError
 from app.models.chat import ChatRequest
@@ -42,11 +43,16 @@ class HttpChatGenerator:
     def __init__(self, client: HttpLlmClient) -> None:
         self.client = client
 
+    @staticmethod
+    def _max_output_tokens(request: ChatRequest) -> int:
+        return get_chat_output_token_budgets()[request.response_detail.value]
+
     async def generate(self, persona: PersonaProfile, request: ChatRequest,
                        document: DocumentParseResponse | None) -> dict[str, Any]:
         payload = {
             "persona": persona.model_dump(mode="json"),
             "message": request.message,
+            "max_output_tokens": self._max_output_tokens(request),
             # full_text already contains only selected RAG chunks. Omitting
             # sections prevents the same source text from being sent twice.
             "document": document.model_dump(
@@ -76,6 +82,7 @@ class HttpChatGenerator:
         payload = {
             "persona": persona.model_dump(mode="json"),
             "message": request.message,
+            "max_output_tokens": self._max_output_tokens(request),
             "document": document.model_dump(
                 mode="json", exclude={"saved_path", "sections"}
             ) if document else None,

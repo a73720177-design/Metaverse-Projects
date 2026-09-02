@@ -15,6 +15,8 @@ Backend가 legacy_questions에서 v1으로 전환하면 legacy 엔드포인트�
 
 import json
 import logging
+import math
+import os
 import re
 from typing import TypeVar
 
@@ -24,7 +26,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.llm_client import (
     LLMError,
-    OLLAMA_CHAT_MODEL,
+    CHAT_MODEL,
     call_llm,
     check_ollama_health,
     stream_llm,
@@ -179,6 +181,7 @@ def _build_chat_prompt(request: ChatGenerationRequest) -> str:
         persona_json=_persona_json(request.persona),
         document_block=document_block,
         message=request.message,
+        answer_guidance=_answer_guidance(request.max_output_tokens),
     )
 
 
@@ -237,12 +240,80 @@ def _build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
     return FREE_CHAT_PROMPT.format(
         persona_json=_persona_json(request.persona),
         message=request.message,
+        answer_guidance=_answer_guidance(request.max_output_tokens),
     )
+
+
+def _answer_guidance(max_output_tokens: int) -> str:
+    if max_output_tokens <= 512:
+        return "핵심 결론을 먼저 말하고 1~3문장 안에서 답하세요."
+    if max_output_tokens <= 1024:
+        return "핵심 결론과 이유를 나누어 설명하되 불필요한 반복 없이 답하세요."
+    return (
+        "핵심 결론, 문서 근거, 개선 제안 순서로 충분히 설명하세요. "
+        "내용이 끝나면 최대 길이를 채우지 말고 즉시 종료하세요."
+    )
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.") from exc
+    if value < 1:
+        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.")
+    return value
+
+
+def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
+    """Reserve output/KV budget and trim only retrieved document context."""
+    if request.document is None:
+        return request
+
+    max_model_len = _positive_env_int("LLM_MAX_MODEL_LEN", 8192)
+    safety_tokens = _positive_env_int("LLM_CONTEXT_SAFETY_TOKENS", 512)
+    try:
+        chars_per_token = float(os.getenv("LLM_APPROX_CHARS_PER_TOKEN", "2.0"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
+        ) from exc
+    if chars_per_token <= 0:
+        raise HTTPException(
+            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
+        )
+
+    input_budget = max_model_len - request.max_output_tokens - safety_tokens
+    if input_budget < 256:
+        raise HTTPException(
+            status_code=422,
+            detail="출력 길이가 모델 컨텍스트에 비해 너무 큽니다.",
+        )
+
+    empty_document = request.document.model_copy(update={"full_text": ""})
+    base_request = request.model_copy(update={"document": empty_document})
+    base_tokens = math.ceil(len(_build_effective_chat_prompt(base_request)) / chars_per_token)
+    available_document_tokens = input_budget - base_tokens
+    if available_document_tokens < 1:
+        raise HTTPException(
+            status_code=422,
+            detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.",
+        )
+
+    max_document_chars = max(1, math.floor(available_document_tokens * chars_per_token))
+    if len(request.document.full_text) <= max_document_chars:
+        return request
+    trimmed_document = request.document.model_copy(
+        update={"full_text": request.document.full_text[:max_document_chars]}
+    )
+    return request.model_copy(update={"document": trimmed_document})
 
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
-    return _generate(_build_review_prompt(request), ReviewGenerationResponse)
+    return _generate(
+        _build_review_prompt(request), ReviewGenerationResponse, max_tokens=2048
+    )
 
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)
@@ -250,11 +321,12 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
     # Chat sources are selected and attached by Backend, which already owns
     # document retrieval. Avoid JSON-schema generation here: on CPU Ollama it
     # can consume the full output budget even for a one-line answer.
+    effective_request = _fit_chat_context(request)
     return ChatGenerationResponse(
         answer=_call_llm_as_text(
-            _build_effective_chat_prompt(request),
-            model=OLLAMA_CHAT_MODEL,
-            max_tokens=160,
+            _build_effective_chat_prompt(effective_request),
+            model=CHAT_MODEL,
+            max_tokens=request.max_output_tokens,
         ),
         sources=[],
     )
@@ -262,12 +334,14 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
 
 @v1_router.post("/chat/stream")
 def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
+    effective_request = _fit_chat_context(request)
+
     def events():
         try:
             for token in stream_llm(
-                _build_effective_chat_prompt(request),
-                model=OLLAMA_CHAT_MODEL,
-                max_tokens=160,
+                _build_effective_chat_prompt(effective_request),
+                model=CHAT_MODEL,
+                max_tokens=request.max_output_tokens,
             ):
                 data = json.dumps({"token": token}, ensure_ascii=False)
                 yield f"event: token\ndata: {data}\n\n"

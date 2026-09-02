@@ -1,9 +1,16 @@
 from datetime import datetime, timezone
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 from app.models.review import ReviewSource
+
+
+class ResponseDetail(StrEnum):
+    CONCISE = "concise"
+    STANDARD = "standard"
+    DETAILED = "detailed"
 
 
 class ChatRequest(BaseModel):
@@ -16,6 +23,10 @@ class ChatRequest(BaseModel):
     document_id: UUID | None = Field(
         default=None,
         description="대화 문맥으로 사용할 발표자료 UUID(선택)",
+    )
+    response_detail: ResponseDetail = Field(
+        default=ResponseDetail.STANDARD,
+        description="답변 상세도. Backend가 안전한 출력 토큰 상한으로 변환합니다.",
     )
 
 

@@ -1,5 +1,5 @@
 """
-Ollama 로컬 서버(qwen3:14b)를 호출하는 클라이언트.
+Ollama 또는 vLLM OpenAI 호환 서버를 호출하는 클라이언트.
 
 모델 출력을 구조화된 JSON으로 검증하는 부분(파싱)은 이 모듈이 아니라 호출하는
 쪽(app/main.py)이 담당한다. 이 모듈은 Ollama HTTP 호출, 응답 형식을 JSON
@@ -24,10 +24,34 @@ OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 OLLAMA_MAX_OUTPUT_TOKENS = int(os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", "1024"))
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8002").rstrip("/")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "").strip()
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "").strip()
+CHAT_MODEL = VLLM_MODEL if os.getenv("LLM_PROVIDER", "ollama").lower() == "vllm" else OLLAMA_CHAT_MODEL
 
 
 class LLMError(Exception):
-    """Ollama 서버 호출 실패 시 발생하는 에러"""
+    """Configured model server call failed."""
+
+
+def _provider() -> str:
+    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+    if provider not in {"ollama", "vllm"}:
+        raise LLMError("LLM_PROVIDER must be ollama or vllm")
+    return provider
+
+
+def _vllm_headers() -> dict[str, str]:
+    api_key = os.getenv("VLLM_API_KEY", VLLM_API_KEY).strip()
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+def _vllm_model(model: str | None) -> str:
+    configured = os.getenv("VLLM_MODEL", VLLM_MODEL).strip()
+    resolved = model or configured
+    if not resolved:
+        raise LLMError("VLLM_MODEL is required when LLM_PROVIDER=vllm")
+    return resolved
 
 
 def call_llm(
@@ -49,6 +73,27 @@ def call_llm(
     Raises:
         LLMError: Ollama 서버 호출 실패 시
     """
+    if _provider() == "vllm":
+        payload = {
+            "model": _vllm_model(model),
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+        }
+        if response_schema is not None:
+            payload["structured_outputs"] = {"json": response_schema}
+        try:
+            response = requests.post(
+                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
+                json=payload,
+                headers=_vllm_headers(),
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"] or ""
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMError("vLLM 호출 실패") from exc
+
     payload = {
         "model": model or OLLAMA_MODEL,
         "prompt": prompt,
@@ -81,6 +126,38 @@ def stream_llm(
     max_tokens: int | None = None,
 ) -> Iterator[str]:
     """Ollama token chunks for latency-sensitive chat responses."""
+    if _provider() == "vllm":
+        payload = {
+            "model": _vllm_model(model),
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+        }
+        try:
+            with requests.post(
+                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
+                json=payload,
+                headers=_vllm_headers(),
+                timeout=REQUEST_TIMEOUT,
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    decoded = line.decode() if isinstance(line, bytes) else line
+                    if not decoded.startswith("data:"):
+                        continue
+                    data = decoded.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)["choices"][0]["delta"].get("content", "")
+                    if chunk:
+                        yield chunk
+            return
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMError("vLLM 스트리밍 호출 실패") from exc
+
     payload = {
         "model": model or OLLAMA_MODEL,
         "prompt": prompt,
@@ -108,9 +185,16 @@ def stream_llm(
 
 
 def check_ollama_health() -> bool:
-    """Ollama가 응답하는지 확인한다. 예외를 던지지 않고 True/False만 반환."""
+    """Configured provider health check. Kept name for API compatibility."""
     try:
+        if _provider() == "vllm":
+            response = requests.get(
+                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/models",
+                headers=_vllm_headers(),
+                timeout=5,
+            )
+            return response.ok
         response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
         return response.ok
-    except requests.RequestException:
+    except (requests.RequestException, LLMError):
         return False

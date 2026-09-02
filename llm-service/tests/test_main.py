@@ -140,7 +140,7 @@ def test_v1_health_503_when_ollama_unreachable(monkeypatch):
     assert response.status_code == 503
 
 
-def test_chat_uses_short_output_limit_and_deduplicated_document_prompt(monkeypatch):
+def test_chat_uses_requested_output_limit_and_deduplicated_document_prompt(monkeypatch):
     captured = {}
 
     def fake_call(prompt, **kwargs):
@@ -153,12 +153,13 @@ def test_chat_uses_short_output_limit_and_deduplicated_document_prompt(monkeypat
         "persona": _persona_payload(),
         "message": "매출은 얼마인가요?",
         "document": _document_payload(),
+        "max_output_tokens": 1536,
     }
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
     assert response.json() == {"answer": "짧은 답변", "sources": []}
-    assert captured["max_tokens"] == 160
+    assert captured["max_tokens"] == 1536
     assert "response_schema" not in captured
     assert captured["prompt"].count("본문") == 1
     assert '"sections"' not in captured["prompt"]
@@ -239,6 +240,48 @@ def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
     assert response.status_code == 200
     assert "일반적인 대화" in captured["prompt"]
     assert 'data: {"token": "반갑"}' in response.text
+
+
+def test_chat_trims_document_to_reserved_context_budget(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "문서 기반 답변"
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    monkeypatch.setenv("LLM_MAX_MODEL_LEN", "1024")
+    monkeypatch.setenv("LLM_CONTEXT_SAFETY_TOKENS", "128")
+    monkeypatch.setenv("LLM_APPROX_CHARS_PER_TOKEN", "1")
+    document = _document_payload()
+    document["full_text"] = "가" * 2000
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "persona": _persona_payload(),
+            "message": "자료를 분석해 주세요.",
+            "document": document,
+            "max_output_tokens": 128,
+        },
+    )
+
+    assert response.status_code == 200
+    assert 0 < captured["prompt"].count("가") < 2000
+
+
+def test_chat_rejects_output_budget_that_leaves_no_context(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_MODEL_LEN", "1024")
+    monkeypatch.setenv("LLM_CONTEXT_SAFETY_TOKENS", "512")
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "persona": _persona_payload(),
+            "message": "자료를 분석해 주세요.",
+            "document": _document_payload(),
+            "max_output_tokens": 1024,
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_structured_response_accepts_trailing_model_text(monkeypatch):

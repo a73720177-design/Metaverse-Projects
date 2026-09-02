@@ -118,3 +118,15 @@ def get_login_rate_limit_attempts() -> int:
 
 def get_login_rate_limit_window_seconds() -> int:
     return _get_positive_int("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def get_chat_output_token_budgets() -> dict[str, int]:
+    budgets = {
+        "concise": _get_positive_int("CHAT_OUTPUT_TOKENS_CONCISE", 512),
+        "standard": _get_positive_int("CHAT_OUTPUT_TOKENS_STANDARD", 1024),
+        "detailed": _get_positive_int("CHAT_OUTPUT_TOKENS_DETAILED", 1536),
+    }
+    maximum = _get_positive_int("CHAT_OUTPUT_TOKENS_MAX", 1536)
+    if any(value > maximum for value in budgets.values()):
+        raise RuntimeError("Chat output token budgets must not exceed CHAT_OUTPUT_TOKENS_MAX.")
+    return budgets
