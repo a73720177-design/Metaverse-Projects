@@ -65,7 +65,7 @@ ENDPOINTS = [
     (
         "/api/v1/chat",
         {"persona": _persona_payload(), "message": "질문"},
-        '{"answer": "a", "sources": []}',
+        "짧은 답변",
     ),
 ]
 
@@ -91,6 +91,8 @@ def test_ollama_connection_failure_returns_503(monkeypatch, path, payload, _llm_
 
 @pytest.mark.parametrize("path,payload,_llm_response", ENDPOINTS, ids=ENDPOINT_IDS)
 def test_non_json_llm_response_returns_502(monkeypatch, path, payload, _llm_response):
+    if path == "/api/v1/chat":
+        pytest.skip("채팅은 자유 텍스트 응답을 사용합니다.")
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "이건 JSON이 아님")
     response = client.post(path, json=payload)
     assert response.status_code == 502
@@ -98,6 +100,8 @@ def test_non_json_llm_response_returns_502(monkeypatch, path, payload, _llm_resp
 
 @pytest.mark.parametrize("path,payload,_llm_response", ENDPOINTS, ids=ENDPOINT_IDS)
 def test_schema_mismatch_returns_502(monkeypatch, path, payload, _llm_response):
+    if path == "/api/v1/chat":
+        pytest.skip("채팅은 자유 텍스트 응답을 사용합니다.")
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "{}")
     response = client.post(path, json=payload)
     assert response.status_code == 502
@@ -134,3 +138,117 @@ def test_v1_health_503_when_ollama_unreachable(monkeypatch):
     monkeypatch.setattr("app.main.check_ollama_health", lambda: False)
     response = client.get("/api/v1/health")
     assert response.status_code == 503
+
+
+def test_chat_uses_short_output_limit_and_deduplicated_document_prompt(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return "짧은 답변"
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    payload = {
+        "persona": _persona_payload(),
+        "message": "매출은 얼마인가요?",
+        "document": _document_payload(),
+    }
+    response = client.post("/api/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "짧은 답변", "sources": []}
+    assert captured["max_tokens"] == 160
+    assert "response_schema" not in captured
+    assert captured["prompt"].count("본문") == 1
+    assert '"sections"' not in captured["prompt"]
+
+
+def test_chat_rejects_empty_text_response(monkeypatch):
+    monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "   ")
+    response = client.post(
+        "/api/v1/chat", json={"persona": _persona_payload(), "message": "질문"}
+    )
+    assert response.status_code == 502
+
+
+def test_chat_stream_returns_token_and_done_events(monkeypatch):
+    monkeypatch.setattr("app.main.stream_llm", lambda *a, **k: iter(["안녕", "하세요"]))
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"token": "안녕"}' in response.text
+    assert 'data: {"token": "하세요"}' in response.text
+    assert "event: done" in response.text
+
+
+def test_chat_routes_general_conversation_without_document_context(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "안녕하세요."
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    response = client.post(
+        "/api/v1/chat",
+        json={"persona": _persona_payload(), "message": "안녕, 넌 누구야?"},
+    )
+
+    assert response.status_code == 200
+    assert "일반적인 대화" in captured["prompt"]
+    assert "[참고 문서]" not in captured["prompt"]
+
+
+def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "문서 기반 답변"
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    payload = {
+        "persona": _persona_payload(),
+        "message": "이 부분은 왜 그런가요?",
+        "document": _document_payload(),
+    }
+    response = client.post("/api/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    assert "[참고 문서]" in captured["prompt"]
+    assert "본문" in captured["prompt"]
+
+
+def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
+    captured = {}
+
+    def fake_stream(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return iter(["반갑", "습니다"])
+
+    monkeypatch.setattr("app.main.stream_llm", fake_stream)
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕하세요"},
+    )
+
+    assert response.status_code == 200
+    assert "일반적인 대화" in captured["prompt"]
+    assert 'data: {"token": "반갑"}' in response.text
+
+
+def test_structured_response_accepts_trailing_model_text(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.call_llm",
+        lambda *a, **k: '{"role":"평가자","expertise":[],"evaluation_style":[]}\n추가 설명',
+    )
+    response = client.post(
+        "/api/v1/personas",
+        json={"name": "평가자", "description": "근거를 확인한다."},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "평가자"

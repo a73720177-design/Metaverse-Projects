@@ -18,6 +18,7 @@ from app.models.persona import PersonaCreateRequest, PersonaProfile
 from app.models.review import ReviewCreateRequest
 from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
+from app.repositories.chat_repository import InMemoryChatRepository
 from app.repositories.review_repository import InMemoryReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
@@ -173,6 +174,8 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         if with_document:
             assert payload["document"]["document_id"] == str(document.document_id)
             assert "saved_path" not in payload["document"]
+            assert "sections" not in payload["document"]
+            assert payload["document"]["full_text"]
         else:
             assert payload["document"] is None
         return httpx.Response(200, json={"answer": "답변", "sources": []})
@@ -188,6 +191,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
             HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
             agent_repository,
             document_repository,
+            InMemoryChatRepository(),
         )
         return await service.reply(
             persona.agent_id,
@@ -201,31 +205,23 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     result = asyncio.run(run_contract())
     assert result.agent_id == persona.agent_id
     assert result.answer == "답변"
+    if with_document:
+        assert result.sources
+        assert result.sources[0].document_id == document.document_id
+        assert result.sources[0].filename == document.filename
+    else:
+        assert result.sources == []
 
 
-def test_v1_chat_contract_sends_rag_context_instead_of_full_document() -> None:
+def test_v1_chat_omits_linked_document_for_greeting() -> None:
     persona = _persona()
-    document = DocumentParseResponse(
-        document_id=uuid4(),
-        filename="slides.pdf",
-        document_type="pdf",
-        saved_path=Path("private/storage/object.pdf"),
-        sections=[
-            DocumentSection(index=1, text="도입부와 무관한 설명"),
-            DocumentSection(index=2, text="RAG 검색은 관련 근거 chunk만 선택해 응답 시간을 줄인다."),
-            DocumentSection(index=3, text="결론과 향후 과제"),
-        ],
-        full_text="전체 문서 텍스트가 그대로 넘어가면 느립니다.",
-    )
+    document = _document()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        assert payload["document"]["sections"] == [
-            {"index": 2, "text": "RAG 검색은 관련 근거 chunk만 선택해 응답 시간을 줄인다."}
-        ]
-        assert "전체 문서 텍스트" not in payload["document"]["full_text"]
-        assert "saved_path" not in payload["document"]
-        return httpx.Response(200, json={"answer": "답변", "sources": []})
+        assert payload["message"] == "안녕"
+        assert payload["document"] is None
+        return httpx.Response(200, json={"answer": "안녕하세요!", "sources": []})
 
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()
@@ -237,15 +233,17 @@ def test_v1_chat_contract_sends_rag_context_instead_of_full_document() -> None:
             HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
             agent_repository,
             document_repository,
+            InMemoryChatRepository(),
         )
         return await service.reply(
             persona.agent_id,
-            ChatRequest(message="RAG 검색 응답 시간", document_id=document.document_id),
+            ChatRequest(message="안녕", document_id=document.document_id),
             OWNER_ID,
         )
 
     result = asyncio.run(run_contract())
-    assert result.answer == "답변"
+    assert result.answer == "안녕하세요!"
+    assert result.document_id == document.document_id
 
 
 @pytest.mark.parametrize(

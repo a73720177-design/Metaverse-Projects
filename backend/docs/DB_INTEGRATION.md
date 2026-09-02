@@ -52,10 +52,12 @@ Python 3.14에서는 빌드 오류가 있는 `asyncpg 0.30.0` 대신 3.14 wheel�
 2. 별도 테스트 DB에 `002_split_document_storage.sql`을 먼저 실행합니다.
 3. 인증 기능을 사용할 DB에는 `003_add_users.sql`을 실행합니다.
 4. 리소스 소유권을 적용할 DB에는 `004_add_resource_ownership.sql`을 실행합니다.
-5. 이전된 `document_files`, `document_chunks`의 개수와 내용을 확인합니다.
-6. 기존 리소스의 `owner_id=NULL` 유지 또는 소유자 배정 정책을 확인합니다.
-7. 동일 SQL을 한 번 더 실행해 재실행 안전성을 확인합니다.
-8. 검증 후 공유 DB에 적용합니다.
+5. 페르소나·채팅 휴지통과 채팅 기록을 위해 `005_add_trash_and_chat_history.sql`을 실행합니다.
+6. 페르소나와 다중 문서 연결을 위해 `006_add_agent_documents.sql`을 실행합니다.
+7. 이전된 `document_files`, `document_chunks`의 개수와 내용을 확인합니다.
+8. 기존 리소스의 `owner_id=NULL` 유지 또는 소유자 배정 정책을 확인합니다.
+9. 동일 SQL을 한 번 더 실행해 재실행 안전성을 확인합니다.
+10. 검증 후 공유 DB에 적용합니다.
 
 ## MinIO 연결
 
@@ -69,7 +71,9 @@ MINIO_SECURE=false
 ```
 
 MinIO 모드에서는 endpoint, access key, secret key가 모두 필요합니다. 기본 관리자 계정은
-코드에 넣지 않습니다. 로컬 모드의 파일은 기본적으로 `backend/uploads/objects`에 저장됩니다.
+코드에 넣지 않습니다. Compose의 기본 자격 증명 fallback은 로컬 개발에서만 사용하고,
+공유·운영 환경에서는 `MINIO_ACCESS_KEY`와 `MINIO_SECRET_KEY`를 반드시 별도로 설정합니다.
+로컬 모드의 파일은 기본적으로 `backend/uploads/objects`에 저장됩니다.
 원본 파일의 object key는 `{document_id}/original{suffix}` 형식입니다.
 
 예시:

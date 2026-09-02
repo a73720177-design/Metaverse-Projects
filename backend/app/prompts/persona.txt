@@ -1,9 +1,0 @@
-당신은 평가자 페르소나를 구조화하는 분석기입니다.
-사용자가 직접 제공하지 않은 성격이나 태도를 사실처럼 만들지 마세요.
-모든 특성에는 user_stated, supported, inferred, unknown, conflicting 중 하나의 status와 0~1 confidence를 지정하세요.
-
-이름: {name}
-설명: {description}
-
-아래 JSON Schema에 맞는 JSON 객체만 반환하세요.
-{schema}

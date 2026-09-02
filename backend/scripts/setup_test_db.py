@@ -56,9 +56,12 @@ def parse_database_target(
             raise ValueError("TEST_DATABASE_ADMIN_URL must use a PostgreSQL URL.")
         resolved_admin_url = _asyncpg_url(admin_url)
     else:
+        admin_scheme = (
+            "postgresql" if parsed.scheme == "postgresql+asyncpg" else parsed.scheme
+        )
         resolved_admin_url = urlunsplit(
             (
-                _asyncpg_url(parsed.scheme),
+                admin_scheme,
                 parsed.netloc,
                 "/postgres",
                 parsed.query,
