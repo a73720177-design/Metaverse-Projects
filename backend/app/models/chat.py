@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -23,3 +24,13 @@ class ChatResponse(BaseModel):
     agent_id: UUID
     answer: str
     sources: list[ReviewSource] = Field(default_factory=list)
+
+
+class ChatHistoryItem(ChatResponse):
+    """저장된 질문/답변 한 쌍과 휴지통 상태입니다."""
+
+    owner_id: UUID = Field(exclude=True)
+    message: str
+    document_id: UUID | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    deleted_at: datetime | None = None

@@ -41,6 +41,7 @@ class AgentTable(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class DocumentTable(Base):
@@ -111,7 +112,7 @@ class ReviewTable(Base):
         PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), index=True
     )
     agent_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="RESTRICT"), nullable=False
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="CASCADE"), nullable=False
     )
     document_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -124,3 +125,48 @@ class ReviewTable(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class AgentDocumentTable(Base):
+    __tablename__ = "agent_documents"
+    __table_args__ = (Index("ix_agent_documents_document_id", "document_id"),)
+
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.agent_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ChatMessageTable(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_owner_deleted", "owner_id", "deleted_at"),
+        Index("ix_chat_messages_agent_id", "agent_id"),
+    )
+
+    message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="SET NULL")
+    )
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)

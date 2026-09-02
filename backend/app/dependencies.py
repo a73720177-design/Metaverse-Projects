@@ -23,6 +23,7 @@ from app.integrations.llm.legacy_generators import (
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
+from app.repositories.chat_repository import ChatRepository, InMemoryChatRepository, PostgresChatRepository
 from app.repositories.user_repository import (
     InMemoryUserRepository,
     PostgresUserRepository,
@@ -69,6 +70,11 @@ def get_document_repository() -> DocumentRepository:
 @lru_cache
 def get_review_repository() -> ReviewRepository:
     return PostgresReviewRepository() if get_repository_mode() == "postgres" else InMemoryReviewRepository()
+
+
+@lru_cache
+def get_chat_repository() -> ChatRepository:
+    return PostgresChatRepository() if get_repository_mode() == "postgres" else InMemoryChatRepository()
 
 
 @lru_cache
@@ -122,14 +128,19 @@ def get_object_storage() -> ObjectStorage:
 
 @lru_cache
 def get_persona_service() -> PersonaService:
-    generator = (
-        LocalPersonaGenerator()
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpPersonaGenerator(get_llm_client())
-    )
+    if get_llm_contract_mode() == "legacy_questions":
+        generator = LocalPersonaGenerator()
+    else:
+        generator = (
+            LocalPersonaGenerator()
+            if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
+            in {"1", "true", "yes"}
+            else HttpPersonaGenerator(get_llm_client())
+        )
     return PersonaService(
         generator=generator,
         repository=get_agent_repository(),
+        document_repository=get_document_repository(),
     )
 
 
@@ -159,4 +170,5 @@ def get_chat_service() -> ChatService:
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        chat_repository=get_chat_repository(),
     )
