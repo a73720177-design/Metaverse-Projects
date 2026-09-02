@@ -20,7 +20,7 @@ from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
     LlmServiceConnectionError,
-    LlmServiceResponseError,
+    LlmServiceResponseError
 )
 
 
