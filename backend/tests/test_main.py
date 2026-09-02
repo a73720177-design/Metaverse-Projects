@@ -187,6 +187,54 @@ def test_agent_is_hidden_from_another_user() -> None:
         app.dependency_overrides.clear()
 
 
+def test_delete_agent_removes_it_from_current_users_list() -> None:
+    service = PersonaService(FakePersonaGenerator(), InMemoryAgentRepository())
+    app.dependency_overrides[get_persona_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    try:
+        created = client.post(
+            "/agents",
+            json={"name": "Disposable", "description": "Delete me"},
+        )
+        assert created.status_code == 201
+        agent_id = created.json()["agent_id"]
+
+        deleted = client.delete(f"/agents/{agent_id}")
+        assert deleted.status_code == 204
+        assert client.get(f"/agents/{agent_id}").status_code == 404
+        assert client.get("/agents").json() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_list_only_contains_current_users_personas() -> None:
+    service = PersonaService(FakePersonaGenerator(), InMemoryAgentRepository())
+    app.dependency_overrides[get_persona_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
+    try:
+        mine = client.post(
+            "/agents",
+            json={"name": "Mine", "description": "Owner only"},
+        )
+        assert mine.status_code == 201
+
+        other_user = TEST_USER.model_copy(
+            update={"user_id": UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")}
+        )
+        app.dependency_overrides[get_current_user] = lambda: other_user
+        theirs = client.post(
+            "/agents",
+            json={"name": "Theirs", "description": "Other owner"},
+        )
+        assert theirs.status_code == 201
+
+        assert [agent["name"] for agent in client.get("/agents").json()] == ["Theirs"]
+        app.dependency_overrides[get_current_user] = lambda: TEST_USER
+        assert [agent["name"] for agent in client.get("/agents").json()] == ["Mine"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 class FakeReviewGenerator:
     async def generate(self, persona, document, instructions) -> dict:
         return {

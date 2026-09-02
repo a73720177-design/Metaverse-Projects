@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { sendChat, createAgent, uploadDocument, login, signup, getCurrentUser } from './api'
+import { sendChat, createAgent, getAgents, deleteAgent, uploadDocument, login, signup, getCurrentUser } from './api'
 
 const MAX_PERSONA_FILE_SIZE = 25 * 1024 * 1024 // 25MB, matches Backend's upload limit
 const ALLOWED_PERSONA_EXTENSIONS = ['.pptx', '.pdf', '.docx']
@@ -56,15 +56,7 @@ export default function App() {
   const [selectedChatId, setSelectedChatId] = useState(null)
   const [activeView, setActiveView] = useState('chats')
   const [historyQuery, setHistoryQuery] = useState('')
-  // Personas are entirely user-created (optionally backed by an uploaded PPTX/PDF/DOCX) — starts blank.
-  const [personas, setPersonas] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('personas') || '[]')
-    } catch (e) {
-      initStorageErrorsRef.current.push('저장된 페르소나가 손상되어 불러오지 못했어요. 페르소나 목록이 초기화됐어요.')
-      return []
-    }
-  })
+  const [personas, setPersonas] = useState([])
   const [newPersonaName, setNewPersonaName] = useState('')
   const [newPersonaDescription, setNewPersonaDescription] = useState('')
   const [newPersonaFile, setNewPersonaFile] = useState(null)
@@ -115,12 +107,30 @@ export default function App() {
   }, [chats])
 
   useEffect(() => {
-    try {
-      localStorage.setItem('personas', JSON.stringify(personas))
-    } catch (e) {
-      setStorageWarning(describeStorageError(e))
+    if (!authToken || !authUser) {
+      setPersonas([])
+      setPersona(null)
+      return undefined
     }
-  }, [personas])
+
+    const controller = new AbortController()
+    getAgents(authToken, controller.signal)
+      .then((agents) => {
+        const ownedPersonas = agents.map((agent) => ({
+          id: agent.agent_id,
+          name: agent.name,
+          description: agent.description,
+        }))
+        setPersonas(ownedPersonas)
+        setPersona((selectedId) => (
+          ownedPersonas.some((ownedPersona) => ownedPersona.id === selectedId) ? selectedId : null
+        ))
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setStorageWarning(error.message || '페르소나 목록을 불러오지 못했어요.')
+      })
+    return () => controller.abort()
+  }, [authToken, authUser?.user_id])
 
   useEffect(() => {
     try {
@@ -369,9 +379,14 @@ export default function App() {
     }
   }
 
-  function deletePersona(id) {
-    setPersonas((s) => s.filter((p) => p.id !== id))
-    if (persona === id) setPersona(null)
+  async function deletePersona(id) {
+    try {
+      await deleteAgent(id, authToken)
+      setPersonas((s) => s.filter((p) => p.id !== id))
+      if (persona === id) setPersona(null)
+    } catch (err) {
+      setStorageWarning(err.message || '페르소나를 삭제하지 못했어요.')
+    }
   }
 
   // Selecting a persona from Materials/Personas just switches the active

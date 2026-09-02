@@ -37,3 +37,9 @@ class PersonaService:
 
     async def get(self, agent_id: UUID, owner_id: UUID) -> PersonaProfile | None:
         return await self.repository.get(agent_id, owner_id)
+
+    async def list(self, owner_id: UUID) -> list[PersonaProfile]:
+        return await self.repository.list(owner_id)
+
+    async def delete(self, agent_id: UUID, owner_id: UUID) -> bool:
+        return await self.repository.delete(agent_id, owner_id)

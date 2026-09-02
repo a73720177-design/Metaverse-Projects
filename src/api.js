@@ -83,6 +83,22 @@ export function createAgent({ name, description }, token, signal) {
   })
 }
 
+// Requires auth — returns only agents owned by the caller.
+export function getAgents(token, signal) {
+  return apiFetch('/agents', {
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+export function deleteAgent(agentId, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
 // Requires auth — Backend scopes documents to the caller. ->
 // { document_id, filename, document_type, sections, full_text }
 export function uploadDocument(file, token, signal) {
