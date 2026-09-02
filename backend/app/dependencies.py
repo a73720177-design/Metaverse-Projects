@@ -128,14 +128,19 @@ def get_object_storage() -> ObjectStorage:
 
 @lru_cache
 def get_persona_service() -> PersonaService:
-    generator = (
-        LocalPersonaGenerator()
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpPersonaGenerator(get_llm_client())
-    )
+    if get_llm_contract_mode() == "legacy_questions":
+        generator = LocalPersonaGenerator()
+    else:
+        generator = (
+            LocalPersonaGenerator()
+            if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
+            in {"1", "true", "yes"}
+            else HttpPersonaGenerator(get_llm_client())
+        )
     return PersonaService(
         generator=generator,
         repository=get_agent_repository(),
+        document_repository=get_document_repository(),
     )
 
 
@@ -151,7 +156,6 @@ def get_review_service() -> ReviewService:
         repository=get_review_repository(),
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
-        chat_repository=get_chat_repository(),
     )
 
 
@@ -166,4 +170,5 @@ def get_chat_service() -> ChatService:
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        chat_repository=get_chat_repository(),
     )

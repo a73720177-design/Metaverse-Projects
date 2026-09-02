@@ -65,7 +65,7 @@ ENDPOINTS = [
     (
         "/api/v1/chat",
         {"persona": _persona_payload(), "message": "질문"},
-        '{"answer": "a", "sources": []}',
+        "짧은 답변",
     ),
 ]
 
@@ -91,6 +91,8 @@ def test_ollama_connection_failure_returns_503(monkeypatch, path, payload, _llm_
 
 @pytest.mark.parametrize("path,payload,_llm_response", ENDPOINTS, ids=ENDPOINT_IDS)
 def test_non_json_llm_response_returns_502(monkeypatch, path, payload, _llm_response):
+    if path == "/api/v1/chat":
+        pytest.skip("채팅은 자유 텍스트 응답을 사용합니다.")
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "이건 JSON이 아님")
     response = client.post(path, json=payload)
     assert response.status_code == 502
@@ -98,6 +100,8 @@ def test_non_json_llm_response_returns_502(monkeypatch, path, payload, _llm_resp
 
 @pytest.mark.parametrize("path,payload,_llm_response", ENDPOINTS, ids=ENDPOINT_IDS)
 def test_schema_mismatch_returns_502(monkeypatch, path, payload, _llm_response):
+    if path == "/api/v1/chat":
+        pytest.skip("채팅은 자유 텍스트 응답을 사용합니다.")
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "{}")
     response = client.post(path, json=payload)
     assert response.status_code == 502
@@ -136,111 +140,115 @@ def test_v1_health_503_when_ollama_unreachable(monkeypatch):
     assert response.status_code == 503
 
 
-# --- /api/v1/chat: 주제 분류(1차 호출) → on/off-topic 분기(2차 호출) ---
-#
-# call_llm이 호출 순서대로 responses의 값을 반환하도록 하는 mock. 각 호출의
-# kwargs(response_schema, think)도 함께 기록해 분기별 호출 방식을 검증한다.
+def test_chat_uses_short_output_limit_and_deduplicated_document_prompt(monkeypatch):
+    captured = {}
 
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return "짧은 답변"
 
-def _sequenced_call_llm(responses):
-    calls = []
-
-    def _mock(prompt, *args, **kwargs):
-        calls.append(
-            {
-                "prompt": prompt,
-                "response_schema": kwargs.get("response_schema"),
-                "think": kwargs.get("think", False),
-            }
-        )
-        return responses[len(calls) - 1]
-
-    return _mock, calls
-
-
-def test_chat_on_topic_calls_llm_twice_and_keeps_sources(monkeypatch):
-    responses = [
-        '{"on_topic": true}',
-        '{"answer": "문서에 따르면...", "sources": [{"filename": "slides.pptx", "excerpt": "근거 문장"}]}',
-    ]
-    mock, calls = _sequenced_call_llm(responses)
-    monkeypatch.setattr("app.main.call_llm", mock)
-
+    monkeypatch.setattr("app.main.call_llm", fake_call)
     payload = {
         "persona": _persona_payload(),
-        "message": "이 발표의 핵심 주장 근거가 뭐야?",
+        "message": "매출은 얼마인가요?",
         "document": _document_payload(),
     }
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
-    assert response.json()["sources"] != []
-    assert len(calls) == 2
-    # 분류 호출: think=False, JSON 스키마 강제
-    assert calls[0]["think"] is False
-    assert calls[0]["response_schema"] is not None
-    # 생성 호출(on-topic): think=False, JSON 스키마 강제 (기존 동작 유지)
-    assert calls[1]["think"] is False
-    assert calls[1]["response_schema"] is not None
+    assert response.json() == {"answer": "짧은 답변", "sources": []}
+    assert captured["max_tokens"] == 160
+    assert "response_schema" not in captured
+    assert captured["prompt"].count("본문") == 1
+    assert '"sections"' not in captured["prompt"]
 
 
-def test_chat_off_topic_uses_free_generation_without_schema(monkeypatch):
-    responses = [
-        '{"on_topic": false}',
-        "저는 발표 평가를 돕는 역할이라 특정 모델명을 밝히긴 어렵지만, 편하게 물어보세요.",
-    ]
-    mock, calls = _sequenced_call_llm(responses)
-    monkeypatch.setattr("app.main.call_llm", mock)
+def test_chat_rejects_empty_text_response(monkeypatch):
+    monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "   ")
+    response = client.post(
+        "/api/v1/chat", json={"persona": _persona_payload(), "message": "질문"}
+    )
+    assert response.status_code == 502
 
-    payload = {
-        "persona": _persona_payload(),
-        "message": "너는 무슨 모델이야?",
-    }
-    response = client.post("/api/v1/chat", json=payload)
+
+def test_chat_stream_returns_token_and_done_events(monkeypatch):
+    monkeypatch.setattr("app.main.stream_llm", lambda *a, **k: iter(["안녕", "하세요"]))
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"token": "안녕"}' in response.text
+    assert 'data: {"token": "하세요"}' in response.text
+    assert "event: done" in response.text
+
+
+def test_chat_routes_general_conversation_without_document_context(monkeypatch):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "안녕하세요."
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    response = client.post(
+        "/api/v1/chat",
+        json={"persona": _persona_payload(), "message": "안녕, 넌 누구야?"},
+    )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["sources"] == []
-    assert body["answer"] != ""
-    assert len(calls) == 2
-    # 생성 호출(off-topic): think=True, JSON 스키마 강제하지 않음
-    assert calls[1]["think"] is True
-    assert calls[1]["response_schema"] is None
+    assert "일반적인 대화" in captured["prompt"]
+    assert "[참고 문서]" not in captured["prompt"]
 
 
-def test_chat_off_topic_strips_think_tags_from_answer(monkeypatch):
-    responses = [
-        '{"on_topic": false}',
-        "<think>사용자가 잡담을 원하는군</think>네, 편하게 말씀하세요!",
-    ]
-    mock, _calls = _sequenced_call_llm(responses)
-    monkeypatch.setattr("app.main.call_llm", mock)
+def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkeypatch):
+    captured = {}
 
-    payload = {"persona": _persona_payload(), "message": "안녕!"}
-    response = client.post("/api/v1/chat", json=payload)
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "문서 기반 답변"
 
-    assert response.status_code == 200
-    assert response.json()["answer"] == "네, 편하게 말씀하세요!"
-
-
-def test_chat_classification_failure_falls_back_to_on_topic(monkeypatch):
-    call_count = {"n": 0}
-
-    def mock(prompt, *args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            raise LLMError("분류 호출 실패")
-        return '{"answer": "a", "sources": [{"filename": "slides.pptx", "excerpt": "근거"}]}'
-
-    monkeypatch.setattr("app.main.call_llm", mock)
-
+    monkeypatch.setattr("app.main.call_llm", fake_call)
     payload = {
         "persona": _persona_payload(),
-        "message": "질문",
+        "message": "이 부분은 왜 그런가요?",
         "document": _document_payload(),
     }
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
-    assert call_count["n"] == 2
-    assert response.json()["sources"] != []
+    assert "[참고 문서]" in captured["prompt"]
+    assert "본문" in captured["prompt"]
+
+
+def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
+    captured = {}
+
+    def fake_stream(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return iter(["반갑", "습니다"])
+
+    monkeypatch.setattr("app.main.stream_llm", fake_stream)
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕하세요"},
+    )
+
+    assert response.status_code == 200
+    assert "일반적인 대화" in captured["prompt"]
+    assert 'data: {"token": "반갑"}' in response.text
+
+
+def test_structured_response_accepts_trailing_model_text(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.call_llm",
+        lambda *a, **k: '{"role":"평가자","expertise":[],"evaluation_style":[]}\n추가 설명',
+    )
+    response = client.post(
+        "/api/v1/personas",
+        json={"name": "평가자", "description": "근거를 확인한다."},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "평가자"

@@ -20,8 +20,6 @@ venv/
 # Runtime data
 backend/uploads/*
 !backend/uploads/.gitkeep
-backend/chroma_db/*
-!backend/chroma_db/.gitkeep
 *.db
 *.sqlite
 *.sqlite3

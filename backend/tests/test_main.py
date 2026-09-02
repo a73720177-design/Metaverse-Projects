@@ -98,6 +98,18 @@ def test_cors_preflight_allows_vite_over_hamachi() -> None:
     assert response.headers["access-control-allow-origin"] == "http://25.20.30.40:5173"
 
 
+def test_cors_preflight_allows_vite_over_private_lan() -> None:
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://192.168.0.40:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://192.168.0.40:5173"
+
+
 def test_cors_does_not_allow_unknown_frontend_origin() -> None:
     response = client.options(
         "/health",
@@ -223,6 +235,12 @@ class FakeChatGenerator:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
 
 
+class FakeStreamingChatGenerator(FakeChatGenerator):
+    async def stream(self, persona, request: ChatRequest, document):
+        yield "Evaluator "
+        yield f"response: {request.message}"
+
+
 def test_review_contract() -> None:
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()
@@ -310,6 +328,106 @@ def test_chat_contract() -> None:
         assert client.delete(f"/trash/chats/{message_id}").status_code == 204
         assert client.get("/trash/chats").json() == []
         assert client.post(f"/trash/chats/{message_id}/restore").status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_persists_owned_document_contract() -> None:
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    service = PersonaService(
+        FakePersonaGenerator(), agent_repository, document_repository
+    )
+    document = DocumentParseResponse(
+        filename="source.pdf",
+        document_type="pdf",
+        saved_path=Path("source.pdf"),
+        sections=[{"index": 1, "text": "grounded content"}],
+        full_text="grounded content",
+    )
+    import asyncio
+    asyncio.run(document_repository.save(document, TEST_USER.user_id))
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        created = client.post(
+            "/agents",
+            json={
+                "name": "Grounded evaluator",
+                "description": "Uses linked material",
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert created.status_code == 201
+        assert created.json()["document_ids"] == [str(document.document_id)]
+        assert client.get("/agents").json()[0]["document_ids"] == [
+            str(document.document_id)
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_agent_rejects_document_owned_by_another_user() -> None:
+    document_repository = InMemoryDocumentRepository()
+    service = PersonaService(
+        FakePersonaGenerator(), InMemoryAgentRepository(), document_repository
+    )
+    document = DocumentParseResponse(
+        filename="private.pdf",
+        document_type="pdf",
+        saved_path=Path("private.pdf"),
+        sections=[],
+        full_text="private",
+    )
+    import asyncio
+    asyncio.run(
+        document_repository.save(
+            document, UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        )
+    )
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "Invalid",
+                "description": "Cross-owner material",
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_stream_contract_persists_completed_answer() -> None:
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    chat_repository = InMemoryChatRepository()
+    agent_id = UUID("11111111-1111-1111-1111-111111111111")
+    import asyncio
+    asyncio.run(
+        agent_repository.save(
+            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
+            TEST_USER.user_id,
+        )
+    )
+    app.dependency_overrides[get_chat_service] = lambda: ChatService(
+        FakeStreamingChatGenerator(),
+        agent_repository,
+        document_repository,
+        chat_repository,
+    )
+    try:
+        response = client.post(
+            f"/agents/{agent_id}/chat/stream", json={"message": "Hello"}
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "event: token" in response.text
+        assert "event: done" in response.text
+        stored = asyncio.run(chat_repository.list(TEST_USER.user_id, deleted=False))
+        assert len(stored) == 1
+        assert stored[0].answer == "Evaluator response: Hello"
     finally:
         app.dependency_overrides.clear()
 

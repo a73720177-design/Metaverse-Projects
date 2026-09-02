@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 from app.models.chat import ChatRequest
@@ -37,3 +38,10 @@ class ChatGenerator(Protocol):
         request: ChatRequest,
         document: DocumentParseResponse | None,
     ) -> dict[str, Any]: ...
+
+    def stream(
+        self,
+        persona: PersonaProfile,
+        request: ChatRequest,
+        document: DocumentParseResponse | None,
+    ) -> AsyncIterator[str]: ...

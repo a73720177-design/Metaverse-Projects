@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_current_user, get_persona_service
 from app.models.persona import PersonaCreateRequest, PersonaHistoryItem, PersonaProfile
 from app.models.user import UserResponse
-from app.services.persona_service import PersonaNotFoundError, PersonaService, UpstreamServiceError
+from app.services.persona_service import (
+    PersonaDocumentNotFoundError, PersonaNotFoundError, PersonaService, UpstreamServiceError,
+)
 
 router = APIRouter(prefix="/agents", tags=["평가자"])
 
@@ -22,6 +24,8 @@ async def create_agent(
         return await service.create(request, current_user.user_id)
     except UpstreamServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PersonaDocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("", response_model=list[PersonaHistoryItem], summary="페르소나 목록 조회")

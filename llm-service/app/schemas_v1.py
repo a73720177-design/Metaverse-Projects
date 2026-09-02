@@ -116,7 +116,3 @@ class ChatGenerationRequest(BaseModel):
 class ChatGenerationResponse(BaseModel):
     answer: str = Field(min_length=1)
     sources: list[ReviewSource] = Field(default_factory=list, max_length=10)
-
-
-class TopicClassification(BaseModel):
-    on_topic: bool
