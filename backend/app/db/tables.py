@@ -171,8 +171,10 @@ class AgentAllDcTable(Base):
         ForeignKey("agents.agent_id", ondelete="CASCADE"),
         nullable=False,
     )
-    owner_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE")
+    owner_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
     )
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     source_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
