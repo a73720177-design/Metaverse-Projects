@@ -51,4 +51,3 @@ def test_discover_migrations_rejects_duplicate_versions(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Duplicate migration version"):
         discover_migrations(tmp_path)
-

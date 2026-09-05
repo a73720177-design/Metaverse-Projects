@@ -231,8 +231,22 @@ export default function App() {
     let cancelled = false
     setPersonasError(null)
     listAgents(authToken)
-      .then((items) => { if (!cancelled) setPersonas(items.map(personaFromApi)) })
-      .catch((err) => { if (!cancelled) setPersonasError(err.message || '페르소나 목록을 불러오지 못했어요.') })
+      .then((items) => {
+        if (cancelled) return
+        const ownedPersonas = items.map(personaFromApi)
+        setPersonas(ownedPersonas)
+        setPersona((selectedId) => (
+          ownedPersonas.some((ownedPersona) => ownedPersona.id === selectedId)
+            ? selectedId
+            : null
+        ))
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setPersonas([])
+        setPersona(null)
+        setPersonasError(err.message || '페르소나 목록을 불러오지 못했어요.')
+      })
     return () => { cancelled = true }
   }, [authToken])
 

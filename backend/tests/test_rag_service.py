@@ -41,6 +41,26 @@ def test_selector_limits_and_prioritizes_relevant_chunks() -> None:
     assert len(selected.full_text) < len(_document().full_text)
 
 
+def test_selector_applies_character_limit_even_with_large_chunks() -> None:
+    selector = DocumentContextSelector(
+        chunk_size=2000,
+        overlap=0,
+        max_chunks=3,
+        max_context_chars=500,
+    )
+    selected = selector.select(_document(), "매출 성장률")
+
+    assert len(selected.full_text) <= 500
+
+
+def test_selector_falls_back_to_opening_chunks_when_nothing_matches() -> None:
+    selector = DocumentContextSelector(chunk_size=300, overlap=0, max_chunks=2)
+    selected = selector.select(_document(), "존재하지 않는 키워드")
+
+    assert len(selected.sections) == 2
+    assert all(section.index == 1 for section in selected.sections)
+
+
 def test_selector_reuses_cached_chunks() -> None:
     selector = DocumentContextSelector()
     document = _document()

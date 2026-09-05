@@ -59,3 +59,7 @@ async def test_postgres_repositories_save_and_get() -> None:
     assert await agent_repository.get(agent.agent_id, user.user_id) == agent
     assert await document_repository.get(document.document_id, user.user_id) == document
     assert await review_repository.get(review.review_id, user.user_id) == review
+
+    assert await agent_repository.delete(agent.agent_id, user.user_id) is True
+    assert await agent_repository.get(agent.agent_id, user.user_id) is None
+    assert await review_repository.get(review.review_id, user.user_id) is None
