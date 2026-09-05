@@ -9,6 +9,7 @@ import pytest
 from app.integrations.llm.client import HttpLlmClient, LlmServiceResponseError
 from app.integrations.llm.generators import (
     HttpChatGenerator,
+    HttpDocumentIndexer,
     HttpPersonaGenerator,
     HttpReviewGenerator,
 )
@@ -97,7 +98,8 @@ def test_v1_persona_contract_builds_backend_profile() -> None:
     assert result.expertise[0].value == "AI"
 
 
-def test_v1_review_contract_excludes_private_storage_path() -> None:
+def test_v1_review_contract_sends_document_id_only() -> None:
+    """평가 요청에는 문서 전문이 실리지 않는다. 자료는 인덱싱 때 이미 넘어갔다."""
     persona = _persona()
     document = _document()
 
@@ -105,11 +107,8 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
         assert request.url.path == "/api/v1/reviews"
         payload = json.loads(request.content)
         assert payload["persona"]["agent_id"] == str(persona.agent_id)
-        assert payload["document"]["document_id"] == str(document.document_id)
-        assert payload["document"]["sections"] == [
-            {"index": 1, "text": "발표 내용"}
-        ]
-        assert "saved_path" not in payload["document"]
+        assert payload["document_id"] == str(document.document_id)
+        assert "document" not in payload
         assert payload["instructions"] == "출처를 확인해 주세요."
         return httpx.Response(
             200,
@@ -162,23 +161,76 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
     assert result.claims[0].sources[0].document_id == document.document_id
 
 
+def test_v1_index_contract_sends_full_text_without_storage_path() -> None:
+    """문서 전문이 LLM 서비스로 넘어가는 유일한 지점이다."""
+    document = _document()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/documents/index"
+        payload = json.loads(request.content)
+        assert payload["document_id"] == str(document.document_id)
+        assert payload["full_text"] == "발표 전체 내용"
+        assert payload["sections"] == [{"index": 1, "text": "발표 내용"}]
+        assert "saved_path" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "document_id": str(document.document_id),
+                "chunk_count": 1,
+                "reused": False,
+            },
+        )
+
+    indexer = HttpDocumentIndexer(HttpLlmClient(httpx.MockTransport(handler)))
+    result = asyncio.run(indexer.index(document))
+    assert result["chunk_count"] == 1
+
+
+def test_v1_index_is_removed_when_document_is_deleted() -> None:
+    """문서를 지우면 LLM 서비스의 임베딩 캐시에 남은 본문도 지운다."""
+    document = _document()
+    requested: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append((request.method, request.url.path))
+        return httpx.Response(204)
+
+    indexer = HttpDocumentIndexer(HttpLlmClient(httpx.MockTransport(handler)))
+    asyncio.run(indexer.forget(document.document_id))
+    assert requested == [
+        ("DELETE", f"/api/v1/documents/{document.document_id}/index")
+    ]
+
+
 @pytest.mark.parametrize("with_document", [False, True])
-def test_v1_chat_contract_supports_optional_document(with_document: bool) -> None:
+def test_v1_chat_contract_sends_document_ids(with_document: bool) -> None:
+    """채팅 요청에는 후보 document_id만 실린다. 문서 선택과 검색은 LLM이 한다."""
     persona = _persona()
     document = _document()
+    source = {
+        "document_id": str(document.document_id),
+        "filename": document.filename,
+        "page": 1,
+        "excerpt": "근거",
+    }
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/chat"
         payload = json.loads(request.content)
         assert payload["message"] == "핵심 문제는 무엇인가요?"
+        assert "document" not in payload
         if with_document:
-            assert payload["document"]["document_id"] == str(document.document_id)
-            assert "saved_path" not in payload["document"]
-            assert "sections" not in payload["document"]
-            assert payload["document"]["full_text"]
+            assert payload["document_ids"] == [str(document.document_id)]
         else:
-            assert payload["document"] is None
-        return httpx.Response(200, json={"answer": "답변", "sources": []})
+            assert payload["document_ids"] == []
+        return httpx.Response(
+            200,
+            json={
+                "answer": "답변",
+                "sources": [source] if with_document else [],
+                "needs_more_material": False,
+            },
+        )
 
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()
@@ -205,23 +257,79 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     result = asyncio.run(run_contract())
     assert result.agent_id == persona.agent_id
     assert result.answer == "답변"
+    assert result.needs_more_material is False
     if with_document:
-        assert result.sources
         assert result.sources[0].document_id == document.document_id
         assert result.sources[0].filename == document.filename
     else:
         assert result.sources == []
 
 
-def test_v1_chat_omits_linked_document_for_greeting() -> None:
+def test_v1_chat_marks_answer_that_asks_for_more_material() -> None:
     persona = _persona()
-    document = _document()
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        assert payload["message"] == "안녕"
-        assert payload["document"] is None
-        return httpx.Response(200, json={"answer": "안녕하세요!", "sources": []})
+        return httpx.Response(
+            200,
+            json={
+                "answer": "관련 내용을 찾지 못했습니다. 자료를 추가해 주세요.",
+                "sources": [],
+                "needs_more_material": True,
+            },
+        )
+
+    agent_repository = InMemoryAgentRepository()
+    chat_repository = InMemoryChatRepository()
+
+    async def run_contract():
+        await agent_repository.save(persona, OWNER_ID)
+        service = ChatService(
+            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            agent_repository,
+            InMemoryDocumentRepository(),
+            chat_repository,
+        )
+        result = await service.reply(
+            persona.agent_id, ChatRequest(message="조직도를 알려주세요"), OWNER_ID
+        )
+        stored = await chat_repository.list(OWNER_ID, deleted=False)
+        return result, stored
+
+    result, stored = asyncio.run(run_contract())
+    assert result.needs_more_material is True
+    assert stored[0].needs_more_material is True
+
+
+def test_v1_chat_reindexes_and_retries_when_index_is_missing() -> None:
+    """LLM 서비스가 재시작돼 인덱스가 비면 문서를 다시 밀어넣고 한 번 재시도한다."""
+    persona = _persona()
+    document = _document()
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path == "/api/v1/documents/index":
+            return httpx.Response(
+                200,
+                json={
+                    "document_id": str(document.document_id),
+                    "chunk_count": 1,
+                    "reused": False,
+                },
+            )
+        if requested.count("/api/v1/chat") == 1:
+            return httpx.Response(
+                409,
+                json={
+                    "detail": {
+                        "code": "document_not_indexed",
+                        "document_id": str(document.document_id),
+                    }
+                },
+            )
+        return httpx.Response(
+            200, json={"answer": "답변", "sources": [], "needs_more_material": False}
+        )
 
     agent_repository = InMemoryAgentRepository()
     document_repository = InMemoryDocumentRepository()
@@ -229,21 +337,27 @@ def test_v1_chat_omits_linked_document_for_greeting() -> None:
     async def run_contract():
         await agent_repository.save(persona, OWNER_ID)
         await document_repository.save(document, OWNER_ID)
+        llm_client = HttpLlmClient(httpx.MockTransport(handler))
         service = ChatService(
-            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            HttpChatGenerator(llm_client),
             agent_repository,
             document_repository,
             InMemoryChatRepository(),
+            indexer=HttpDocumentIndexer(llm_client),
         )
         return await service.reply(
             persona.agent_id,
-            ChatRequest(message="안녕", document_id=document.document_id),
+            ChatRequest(message="근거는?", document_id=document.document_id),
             OWNER_ID,
         )
 
     result = asyncio.run(run_contract())
-    assert result.answer == "안녕하세요!"
-    assert result.document_id == document.document_id
+    assert result.answer == "답변"
+    assert requested == [
+        "/api/v1/chat",
+        "/api/v1/documents/index",
+        "/api/v1/chat",
+    ]
 
 
 @pytest.mark.parametrize(

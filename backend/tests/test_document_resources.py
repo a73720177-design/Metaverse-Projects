@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.dependencies import (
     get_current_user,
+    get_document_indexer,
     get_document_repository,
     get_object_storage,
 )
@@ -40,6 +41,19 @@ class FakeStorage:
         self.deleted.append(object_key)
 
 
+class FakeIndexer:
+    def __init__(self) -> None:
+        self.indexed: list[UUID] = []
+        self.forgotten: list[UUID] = []
+
+    async def index(self, document: DocumentParseResponse) -> dict:
+        self.indexed.append(document.document_id)
+        return {"document_id": str(document.document_id), "chunk_count": 1}
+
+    async def forget(self, document_id: UUID) -> None:
+        self.forgotten.append(document_id)
+
+
 def test_document_list_get_delete_and_owner_isolation() -> None:
     repository = InMemoryDocumentRepository()
     storage = FakeStorage()
@@ -54,9 +68,11 @@ def test_document_list_get_delete_and_owner_isolation() -> None:
 
     import asyncio
 
+    indexer = FakeIndexer()
     asyncio.run(repository.save(document, OWNER.user_id))
     app.dependency_overrides[get_document_repository] = lambda: repository
     app.dependency_overrides[get_object_storage] = lambda: storage
+    app.dependency_overrides[get_document_indexer] = lambda: indexer
     app.dependency_overrides[get_current_user] = lambda: OWNER
     client = TestClient(app)
 
@@ -84,6 +100,8 @@ def test_document_list_get_delete_and_owner_isolation() -> None:
         deleted = client.delete(f"/documents/{document.document_id}")
         assert deleted.status_code == 204
         assert storage.deleted == [str(document.saved_path)]
+        # 삭제한 문서의 본문이 LLM 서비스 임베딩 캐시에 남으면 안 됩니다.
+        assert indexer.forgotten == [document.document_id]
         assert client.get("/documents").json() == []
         assert client.get(f"/documents/{document.document_id}").status_code == 404
     finally:

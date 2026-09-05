@@ -5,6 +5,9 @@ Backend의 backend/app/models/{persona,document,review,chat}.py와 필드가
 1:1로 맞아야 한다. Backend는 이 서비스의 응답 dict를 자기 Pydantic 모델에
 그대로 병합(model_validate)하므로, 필드 이름과 타입이 어긋나면 Backend
 쪽에서 검증 오류가 난다.
+
+문서 전문(DocumentIn)은 /documents/index 요청에만 실린다. 평가와 채팅은
+이미 인덱싱된 문서를 document_id로 가리키기만 한다.
 """
 
 from enum import StrEnum
@@ -95,9 +98,15 @@ class ReviewFeedback(BaseModel):
     negative: str
 
 
+class DocumentIndexResponse(BaseModel):
+    document_id: UUID
+    chunk_count: int = Field(ge=0)
+    reused: bool = False
+
+
 class ReviewGenerationRequest(BaseModel):
     persona: PersonaProfileIn
-    document: DocumentIn
+    document_id: UUID
     instructions: str | None = Field(default=None, max_length=2000)
 
 
@@ -110,9 +119,12 @@ class ReviewGenerationResponse(BaseModel):
 class ChatGenerationRequest(BaseModel):
     persona: PersonaProfileIn
     message: str = Field(min_length=1, max_length=5000)
-    document: DocumentIn | None = None
+    # 검색 대상 후보. 여러 개를 넘기면 검색 점수가 가장 높은 문서가 쓰인다.
+    document_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
 
 class ChatGenerationResponse(BaseModel):
     answer: str = Field(min_length=1)
     sources: list[ReviewSource] = Field(default_factory=list, max_length=10)
+    # 검색 결과가 임계값에 못 미쳐 자료 추가를 요청한 응답인지.
+    needs_more_material: bool = False

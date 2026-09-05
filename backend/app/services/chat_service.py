@@ -1,19 +1,19 @@
-import asyncio
-from collections.abc import AsyncIterator
-from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
 from app.models.chat import ChatHistoryItem, ChatRequest
-from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
-from app.models.review import ReviewSource
-from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
+from app.integrations.llm.contracts import (
+    ChatGenerator,
+    ChatGeneratorError,
+    DocumentIndexError,
+    DocumentIndexer,
+    DocumentNotIndexedError,
+)
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
-from app.services.rag_service import DocumentContextSelector, should_use_document
 
 
 class ChatServiceError(RuntimeError):
@@ -25,133 +25,87 @@ class ChatResourceNotFoundError(RuntimeError):
 
 
 class ChatService:
+    """대화 요청의 소유권을 확인하고 LLM 서비스에 위임합니다.
+
+    자료 검색(어떤 문서의 어떤 조각을 쓸지)은 LLM 서비스가 bge-m3 임베딩으로
+    수행합니다. Backend는 사용자가 접근할 수 있는 문서 후보만 추려서 넘깁니다.
+    """
+
     def __init__(
         self,
         generator: ChatGenerator,
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
         chat_repository: ChatRepository,
-        context_selector: DocumentContextSelector | None = None,
+        indexer: DocumentIndexer | None = None,
     ) -> None:
         self.generator = generator
         self.agent_repository = agent_repository
         self.document_repository = document_repository
         self.chat_repository = chat_repository
-        self.context_selector = context_selector or DocumentContextSelector()
+        self.indexer = indexer
 
     async def _resolve_context(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
-    ) -> tuple[PersonaProfile, ChatRequest, DocumentParseResponse | None]:
+    ) -> tuple[PersonaProfile, list[UUID]]:
         persona = await self.agent_repository.get(agent_id, owner_id)
         if persona is None:
             raise ChatResourceNotFoundError("Agent not found")
-        effective_request = request
-        source_document = None
-        if request.document_id is None and persona.document_ids:
-            fetched = await asyncio.gather(*(
-                self.document_repository.get(document_id, owner_id)
-                for document_id in persona.document_ids
-            ))
-            candidates = [candidate for candidate in fetched if candidate is not None]
-            if candidates:
-                source_document = max(
-                    candidates,
-                    key=lambda item: self.context_selector.relevance_score(
-                        item, request.message
-                    ),
-                )
-                effective_request = request.model_copy(
-                    update={"document_id": source_document.document_id}
-                )
-        elif effective_request.document_id is not None:
-            source_document = await self.document_repository.get(
-                effective_request.document_id, owner_id
-            )
-            if source_document is None:
+
+        if request.document_id is not None:
+            document = await self.document_repository.get(request.document_id, owner_id)
+            if document is None:
                 raise ChatResourceNotFoundError("Document not found")
+            return persona, [request.document_id]
 
-        document = None
-        if source_document is not None:
-            if should_use_document(effective_request.message, effective_request.document_id):
-                document = self.context_selector.select(
-                    source_document, effective_request.message
-                )
-        return persona, effective_request, document
+        # 문서를 고르지 않았으면 페르소나에 연결된 자료 전체를 후보로 넘긴다.
+        return persona, list(persona.document_ids)
 
-    @staticmethod
-    def _sources(document: DocumentParseResponse | None) -> list[ReviewSource]:
+    async def _generate(
+        self, persona: PersonaProfile, request: ChatRequest,
+        document_ids: list[UUID], owner_id: UUID
+    ) -> dict:
+        try:
+            return await self.generator.generate(persona, request, document_ids)
+        except DocumentNotIndexedError as exc:
+            # LLM 서비스가 재시작되어 인덱스가 비었을 때만 발생한다. 문서를 다시
+            # 밀어넣고 한 번 재시도한다.
+            await self._reindex(exc.document_id, owner_id)
+            return await self.generator.generate(persona, request, document_ids)
+
+    async def _reindex(self, document_id: UUID, owner_id: UUID) -> None:
+        if self.indexer is None:
+            raise ChatServiceError("Document index is unavailable")
+        document = await self.document_repository.get(document_id, owner_id)
         if document is None:
-            return []
-        return [
-            ReviewSource(
-                document_id=document.document_id,
-                filename=document.filename,
-                page=(section.index if document.document_type in {"pdf", "pptx"} else None),
-                excerpt=section.text[:500],
-            )
-            for section in document.sections
-        ]
+            raise ChatResourceNotFoundError("Document not found")
+        try:
+            await self.indexer.index(document)
+        except DocumentIndexError as exc:
+            raise ChatServiceError("Document indexing failed") from exc
 
     async def reply(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
     ) -> ChatHistoryItem:
-        persona, effective_request, document = await self._resolve_context(
-            agent_id, request, owner_id
-        )
+        persona, document_ids = await self._resolve_context(agent_id, request, owner_id)
         try:
-            generated = await self.generator.generate(persona, effective_request, document)
+            generated = await self._generate(persona, request, document_ids, owner_id)
+            sources = generated.get("sources") or []
             chat = ChatHistoryItem.model_validate(
                 {
                     **generated,
                     "message_id": uuid4(),
                     "owner_id": owner_id,
                     "agent_id": agent_id,
-                    "document_id": effective_request.document_id,
+                    # 어떤 문서가 쓰였는지는 LLM 서비스의 검색 결과가 알려준다.
+                    "document_id": request.document_id or _first_document_id(sources),
                     "message": request.message,
                 }
             )
-            await self.chat_repository.save(chat)
-            return chat
         except (ChatGeneratorError, ValidationError) as exc:
             raise ChatServiceError("Chat generator returned an invalid response") from exc
-
-    async def open_stream(
-        self, agent_id: UUID, request: ChatRequest, owner_id: UUID
-    ) -> AsyncIterator[dict[str, Any]]:
-        persona, effective_request, document = await self._resolve_context(
-            agent_id, request, owner_id
-        )
-        stream_method = getattr(self.generator, "stream", None)
-        if stream_method is None:
-            raise ChatServiceError("Streaming chat is unavailable")
-
-        async def events() -> AsyncIterator[dict[str, Any]]:
-            parts: list[str] = []
-            try:
-                async for token in stream_method(persona, effective_request, document):
-                    parts.append(token)
-                    yield {"event": "token", "data": {"token": token}}
-                answer = "".join(parts).strip()
-                if not answer:
-                    raise ChatServiceError("Chat generator returned an empty response")
-                chat = ChatHistoryItem(
-                    message_id=uuid4(),
-                    owner_id=owner_id,
-                    agent_id=agent_id,
-                    document_id=effective_request.document_id,
-                    message=request.message,
-                    answer=answer,
-                    sources=self._sources(document),
-                )
-                await self.chat_repository.save(chat)
-                yield {
-                    "event": "done",
-                    "data": chat.model_dump(mode="json", exclude={"owner_id"}),
-                }
-            except ChatGeneratorError as exc:
-                raise ChatServiceError("Chat stream failed") from exc
-
-        return events()
+        await self.chat_repository.save(chat)
+        return chat
 
     async def list_active(self, owner_id: UUID) -> list[ChatHistoryItem]:
         return await self.chat_repository.list(owner_id, deleted=False)
@@ -178,3 +132,14 @@ class ChatService:
     async def permanently_delete(self, message_id: UUID, owner_id: UUID) -> None:
         if not await self.chat_repository.permanently_delete(message_id, owner_id):
             raise ChatResourceNotFoundError("Trashed chat not found")
+
+
+def _first_document_id(sources: list) -> UUID | None:
+    for source in sources:
+        raw = source.get("document_id") if isinstance(source, dict) else None
+        if raw:
+            try:
+                return UUID(str(raw))
+            except ValueError:
+                return None
+    return None

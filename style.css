@@ -507,6 +507,11 @@ main::-webkit-scrollbar-thumb:hover{ background:var(--accent-border); }
 
 .assistant-reply-error{ font-size:13.5px; color:var(--danger); }
 .thread-msg-bubble-loading{ color:var(--muted); font-style:italic; animation:pulseCursor 1.4s ease-in-out infinite; }
+/* 검색된 자료가 임계값에 못 미쳐 자료 추가를 요청한 답변에 붙는 안내입니다. */
+.thread-msg-material-hint{
+  margin:8px 0 0; padding-top:8px; border-top:1px solid var(--line);
+  font-size:13px; color:var(--muted);
+}
 @keyframes pulseCursor{ 0%,100%{ opacity:1; } 50%{ opacity:.45; } }
 
 /* persona rail — the standalone "페르소나" view */

@@ -12,14 +12,11 @@ from app.config import (
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import (
     HttpChatGenerator,
+    HttpDocumentIndexer,
     HttpPersonaGenerator,
     HttpReviewGenerator,
 )
-from app.integrations.llm.legacy_generators import (
-    LegacyQuestionReviewGenerator,
-    LocalPersonaGenerator,
-    UnsupportedLegacyChatGenerator,
-)
+from app.integrations.llm.local_persona import LocalPersonaGenerator
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
@@ -45,16 +42,12 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 @lru_cache
 def get_llm_client() -> HttpLlmClient:
-    if get_llm_contract_mode() == "legacy_questions":
-        return HttpLlmClient(api_prefix="")
     return HttpLlmClient()
 
 
-def get_llm_contract_mode() -> str:
-    mode = os.getenv("LLM_CONTRACT_MODE", "legacy_questions").strip().lower()
-    if mode not in {"legacy_questions", "v1"}:
-        raise RuntimeError("LLM_CONTRACT_MODE는 legacy_questions 또는 v1이어야 합니다.")
-    return mode
+@lru_cache
+def get_document_indexer() -> HttpDocumentIndexer:
+    return HttpDocumentIndexer(get_llm_client())
 
 
 @lru_cache
@@ -128,15 +121,12 @@ def get_object_storage() -> ObjectStorage:
 
 @lru_cache
 def get_persona_service() -> PersonaService:
-    if get_llm_contract_mode() == "legacy_questions":
-        generator = LocalPersonaGenerator()
-    else:
-        generator = (
-            LocalPersonaGenerator()
-            if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
-            in {"1", "true", "yes"}
-            else HttpPersonaGenerator(get_llm_client())
-        )
+    generator = (
+        LocalPersonaGenerator()
+        if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
+        in {"1", "true", "yes"}
+        else HttpPersonaGenerator(get_llm_client())
+    )
     return PersonaService(
         generator=generator,
         repository=get_agent_repository(),
@@ -146,29 +136,21 @@ def get_persona_service() -> PersonaService:
 
 @lru_cache
 def get_review_service() -> ReviewService:
-    generator = (
-        LegacyQuestionReviewGenerator(get_llm_client())
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpReviewGenerator(get_llm_client())
-    )
     return ReviewService(
-        generator=generator,
+        generator=HttpReviewGenerator(get_llm_client()),
         repository=get_review_repository(),
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        indexer=get_document_indexer(),
     )
 
 
 @lru_cache
 def get_chat_service() -> ChatService:
-    generator = (
-        UnsupportedLegacyChatGenerator()
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpChatGenerator(get_llm_client())
-    )
     return ChatService(
-        generator=generator,
+        generator=HttpChatGenerator(get_llm_client()),
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         chat_repository=get_chat_repository(),
+        indexer=get_document_indexer(),
     )

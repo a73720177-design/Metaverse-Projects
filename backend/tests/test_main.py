@@ -23,11 +23,7 @@ from app.repositories.review_repository import InMemoryReviewRepository
 from app.repositories.chat_repository import InMemoryChatRepository
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import HttpPersonaGenerator
-from app.integrations.llm.contracts import ReviewGeneratorError
-from app.integrations.llm.legacy_generators import (
-    LegacyQuestionReviewGenerator,
-    LocalPersonaGenerator,
-)
+from app.integrations.llm.local_persona import LocalPersonaGenerator
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
@@ -222,7 +218,7 @@ def test_agent_is_hidden_from_another_user() -> None:
 
 
 class FakeReviewGenerator:
-    async def generate(self, persona, document, instructions) -> dict:
+    async def generate(self, persona, document_id, instructions) -> dict:
         return {
             "feedback": {"positive": "Clear structure", "negative": "Add evidence"},
             "claims": [],
@@ -231,14 +227,8 @@ class FakeReviewGenerator:
 
 
 class FakeChatGenerator:
-    async def generate(self, persona, request: ChatRequest, document) -> dict:
+    async def generate(self, persona, request: ChatRequest, document_ids) -> dict:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
-
-
-class FakeStreamingChatGenerator(FakeChatGenerator):
-    async def stream(self, persona, request: ChatRequest, document):
-        yield "Evaluator "
-        yield f"response: {request.message}"
 
 
 def test_review_contract() -> None:
@@ -399,39 +389,6 @@ def test_agent_rejects_document_owned_by_another_user() -> None:
         app.dependency_overrides.clear()
 
 
-def test_chat_stream_contract_persists_completed_answer() -> None:
-    agent_repository = InMemoryAgentRepository()
-    document_repository = InMemoryDocumentRepository()
-    chat_repository = InMemoryChatRepository()
-    agent_id = UUID("11111111-1111-1111-1111-111111111111")
-    import asyncio
-    asyncio.run(
-        agent_repository.save(
-            PersonaProfile(agent_id=agent_id, name="Evaluator", description="Strict"),
-            TEST_USER.user_id,
-        )
-    )
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        FakeStreamingChatGenerator(),
-        agent_repository,
-        document_repository,
-        chat_repository,
-    )
-    try:
-        response = client.post(
-            f"/agents/{agent_id}/chat/stream", json={"message": "Hello"}
-        )
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/event-stream")
-        assert "event: token" in response.text
-        assert "event: done" in response.text
-        stored = asyncio.run(chat_repository.list(TEST_USER.user_id, deleted=False))
-        assert len(stored) == 1
-        assert stored[0].answer == "Evaluator response: Hello"
-    finally:
-        app.dependency_overrides.clear()
-
-
 def test_http_llm_persona_adapter_uses_service_contract() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/personas"
@@ -510,7 +467,7 @@ def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
         app.dependency_overrides.clear()
 
 
-def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
+def test_local_persona_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
     result = asyncio.run(
@@ -546,70 +503,3 @@ def test_database_failure_uses_safe_common_error_response() -> None:
         assert "sensitive" not in response.text
     finally:
         app.dependency_overrides.clear()
-
-
-def test_legacy_review_adapts_current_llm_team_contract() -> None:
-    requested_paths: list[str] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        requested_paths.append(request.url.path)
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(
-                200,
-                json={"concepts": [{"name": "AI", "definition": "인공지능"}]},
-            )
-        if request.url.path == "/generate-questions":
-            return httpx.Response(
-                200,
-                json={"questions": [{"question": "근거는 무엇인가요?"}]},
-            )
-        return httpx.Response(404)
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    result = asyncio.run(
-        generator.generate(
-            PersonaProfile(name="Evaluator", description="근거 중심"),
-            DocumentParseResponse(
-                filename="slides.pptx",
-                document_type="pptx",
-                saved_path=Path("uploads/slides.pptx"),
-                sections=[],
-                full_text="발표 내용",
-            ),
-            None,
-        )
-    )
-
-    assert requested_paths == ["/extract-concepts", "/generate-questions"]
-    assert result["questions"] == ["근거는 무엇인가요?"]
-
-
-def test_legacy_review_rejects_invalid_concept_contract() -> None:
-    async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(200, json={"concepts": [{"name": "AI"}]})
-        raise AssertionError("질문 API는 호출되면 안 됩니다.")
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    with pytest.raises(ReviewGeneratorError, match="definition"):
-        asyncio.run(
-            generator.generate(
-                PersonaProfile(name="Evaluator", description="Evidence"),
-                DocumentParseResponse(
-                    filename="slides.pdf",
-                    document_type="pdf",
-                    saved_path=Path("uploads/slides.pdf"),
-                    sections=[],
-                    full_text="Presentation",
-                ),
-                None,
-            )
-        )

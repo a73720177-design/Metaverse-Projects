@@ -24,6 +24,10 @@ class ChatResponse(BaseModel):
     agent_id: UUID
     answer: str
     sources: list[ReviewSource] = Field(default_factory=list)
+    needs_more_material: bool = Field(
+        default=False,
+        description="검색된 자료가 임계값에 못 미쳐 자료 추가를 요청한 답변인지",
+    )
 
 
 class ChatHistoryItem(ChatResponse):
