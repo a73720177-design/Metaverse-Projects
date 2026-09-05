@@ -69,6 +69,7 @@ def _to_model(row: ChatMessageTable) -> ChatHistoryItem:
             "message": row.message,
             "answer": row.answer,
             "sources": row.sources,
+            "needs_more_material": row.needs_more_material,
             "created_at": row.created_at,
             "deleted_at": row.deleted_at,
         }
@@ -85,6 +86,7 @@ class PostgresChatRepository:
             message=chat.message,
             answer=chat.answer,
             sources=[source.model_dump(mode="json") for source in chat.sources],
+            needs_more_material=chat.needs_more_material,
             created_at=chat.created_at,
             deleted_at=chat.deleted_at,
         )

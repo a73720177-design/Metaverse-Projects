@@ -6,51 +6,59 @@ LLM 서비스 API 서버.
 
 사전 조건:
     - Ollama가 로컬에서 실행 중이어야 함 (ollama serve)
-    - qwen3:14b 모델이 pull 되어 있어야 함
+    - qwen3:8b, qwen3:4b, bge-m3 모델이 pull 되어 있어야 함
 
-/extract-concepts, /generate-questions는 Backend의 legacy_questions 호환
-모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약이며,
-Backend가 legacy_questions에서 v1으로 전환하면 legacy 엔드포인트는 제거한다.
+RAG(bge-m3 검색)가 모든 답변 경로의 공통 기반 레이어다. 답변을 생성하기 전에
+항상 관련 자료 조각을 검색해서 프롬프트에 넣는다. 경로마다 다른 것은 "검색
+여부"가 아니라 "검색 후 추론(think) 여부"다.
+
+    /documents/index  임베딩 생성          bge-m3
+    /personas         검색 없음, 추론 없음  qwen3:4b
+    /reviews          검색 + 추론          qwen3:8b
+    /chat             검색 + 추론          qwen3:8b
+      ├ 인사말        검색 생략, 추론 없음  qwen3:4b
+      └ 유사도 미달   검색만, 생성 없음     코드 템플릿
+
+문서 전문은 Backend가 업로드 시점에 /documents/index로 한 번만 밀어넣는다.
+평가와 채팅 요청에는 document_id만 실린다. 인덱스가 없으면 409를 반환하고,
+Backend가 문서를 다시 밀어넣은 뒤 재시도한다.
 """
 
 import json
 import logging
 import re
 from typing import TypeVar
+from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
+from app import rag
 from app.llm_client import (
     LLMError,
     OLLAMA_CHAT_MODEL,
+    OLLAMA_MODEL,
     call_llm,
     check_ollama_health,
-    stream_llm,
 )
 from app.prompts import (
     CHAT_PROMPT,
-    CONCEPT_EXTRACTION_PROMPT,
     FREE_CHAT_PROMPT,
+    NEEDS_MORE_MATERIAL_TEMPLATE,
     PERSONA_GENERATION_PROMPT,
-    QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
-)
-from app.schemas import (
-    ConceptExtractionRequest,
-    ConceptExtractionResponse,
-    QuestionGenerationRequest,
-    QuestionGenerationResponse,
 )
 from app.schemas_v1 import (
     ChatGenerationRequest,
     ChatGenerationResponse,
+    DocumentIn,
+    DocumentIndexResponse,
     PersonaGenerationRequest,
     PersonaGenerationResponse,
     PersonaProfileIn,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    ReviewSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,13 +67,28 @@ T = TypeVar("T", bound=BaseModel)
 
 app = FastAPI(
     title="LLM Service",
-    description="발표 자료/대본 기반 개념 추출 및 비판 질문 생성 API",
-    version="0.1.0",
+    description="발표 자료 RAG 검색 기반 평가·피드백 API",
+    version="1.0.0",
 )
 
 # response_schema로 구조화 출력을 강제해도, Ollama 버전에 따라 강제가 안 통하는
 # 경우를 대비한 방어적 처리로 코드펜스 제거는 남겨둔다.
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# 인사·감사 같은 짧은 상투어만 검색을 건너뛴다. 이보다 넓게 잡으면 자료에
+# 근거해야 할 질문까지 근거 없는 잡담 응답으로 새어 나간다.
+_SMALL_TALK_RE = re.compile(
+    r"^(안녕(?:하세요)?|반가워(?:요)?|고마워(?:요)?|감사(?:합니다|해요)?|"
+    r"잘\s*부탁(?:드립니다|해요|합니다)?|잘가(?:요)?|수고(?:하셨습니다|하세요)?|"
+    r"좋은\s*(아침|오후|저녁)(?:이에요|입니다)?|"
+    r"hi|hello|hey|thanks|thank\s*you)[!?.\s]*$",
+    re.IGNORECASE,
+)
+
+# 최초 평가에서 자료를 넓게 훑기 위한 기본 질의. instructions가 있으면 그쪽을 쓴다.
+_REVIEW_DEFAULT_QUERY = "발표의 핵심 주장과 근거"
+
+_MAX_SOURCES = 10
 
 
 @app.get("/health")
@@ -74,27 +97,21 @@ def health_check():
     return {"status": "ok"}
 
 
-def _build_concept_prompt(paper_text: str) -> str:
-    return CONCEPT_EXTRACTION_PROMPT.format(paper_text=paper_text)
-
-
-def _build_question_prompt(request: QuestionGenerationRequest) -> str:
-    concepts_json = json.dumps(
-        [c.model_dump() for c in request.concepts], ensure_ascii=False
-    )
-    return QUESTION_GENERATION_PROMPT.format(
-        critical_points=request.critical_points,
-        concepts_json=concepts_json,
-        script_text=request.script_text,
-    )
-
-
 def _call_llm_as_json(
-    prompt: str, response_schema: dict, max_tokens: int | None = None
+    prompt: str,
+    response_schema: dict,
+    *,
+    model: str | None = None,
+    think: bool = False,
+    max_tokens: int | None = None,
 ) -> dict:
     try:
         raw = call_llm(
-            prompt, response_schema=response_schema, max_tokens=max_tokens
+            prompt,
+            model=model,
+            response_schema=response_schema,
+            think=think,
+            max_tokens=max_tokens,
         )
     except LLMError:
         # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
@@ -115,10 +132,19 @@ def _call_llm_as_json(
 
 
 def _generate(
-    prompt: str, response_model: type[T], max_tokens: int | None = None
+    prompt: str,
+    response_model: type[T],
+    *,
+    model: str | None = None,
+    think: bool = False,
+    max_tokens: int | None = None,
 ) -> T:
     data = _call_llm_as_json(
-        prompt, response_model.model_json_schema(), max_tokens=max_tokens
+        prompt,
+        response_model.model_json_schema(),
+        model=model,
+        think=think,
+        max_tokens=max_tokens,
     )
     try:
         return response_model.model_validate(data)
@@ -128,10 +154,16 @@ def _generate(
 
 
 def _call_llm_as_text(
-    prompt: str, *, model: str | None = None, max_tokens: int | None = None
+    prompt: str,
+    *,
+    model: str | None = None,
+    think: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     try:
-        answer = call_llm(prompt, model=model, max_tokens=max_tokens).strip()
+        answer = call_llm(
+            prompt, model=model, think=think, max_tokens=max_tokens
+        ).strip()
     except LLMError:
         logger.exception("Ollama 채팅 호출 실패")
         raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
@@ -140,46 +172,41 @@ def _call_llm_as_text(
     return answer
 
 
-@app.post("/extract-concepts", response_model=ConceptExtractionResponse)
-def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
-    return _generate(_build_concept_prompt(request.paper_text), ConceptExtractionResponse)
-
-
-@app.post("/generate-questions", response_model=QuestionGenerationResponse)
-def generate_questions(request: QuestionGenerationRequest) -> QuestionGenerationResponse:
-    return _generate(_build_question_prompt(request), QuestionGenerationResponse)
+def _search(document_ids: list, query: str, top_k: int | None = None) -> rag.SearchResult:
+    """공통 RAG 검색. 인덱스가 없으면 Backend가 재인덱싱하도록 409로 알린다."""
+    try:
+        return rag.store.search(document_ids, query, top_k=top_k)
+    except rag.DocumentNotIndexedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "document_not_indexed",
+                "document_id": str(exc.document_id),
+            },
+        )
+    except rag.RagError:
+        logger.exception("RAG 검색 실패")
+        raise HTTPException(status_code=503, detail="자료 검색에 실패했습니다.")
 
 
 def _persona_json(persona: PersonaProfileIn) -> str:
     return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
 
 
-def _build_persona_prompt(request: PersonaGenerationRequest) -> str:
-    return PERSONA_GENERATION_PROMPT.format(
-        name=request.name, description=request.description
-    )
-
-
-def _build_review_prompt(request: ReviewGenerationRequest) -> str:
-    return REVIEW_GENERATION_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        filename=request.document.filename,
-        full_text=request.document.full_text,
-        instructions=request.instructions or "(없음)",
-    )
-
-
-def _build_chat_prompt(request: ChatGenerationRequest) -> str:
-    document_block = (
-        f"파일명: {request.document.filename}\n{request.document.full_text}"
-        if request.document is not None
-        else "(제공된 문서 없음)"
-    )
-    return CHAT_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        document_block=document_block,
-        message=request.message,
-    )
+def _sources(result: rag.SearchResult) -> list[ReviewSource]:
+    return [
+        ReviewSource(
+            document_id=item.chunk.document_id,
+            filename=item.chunk.filename,
+            page=(
+                item.chunk.index
+                if item.chunk.document_type in {"pdf", "pptx"}
+                else None
+            ),
+            excerpt=item.chunk.text[:500],
+        )
+        for item in result.chunks[:_MAX_SOURCES]
+    ]
 
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -197,90 +224,120 @@ def health_check_v1():
     return {"status": "ok"}
 
 
-@v1_router.post("/personas", response_model=PersonaGenerationResponse)
-def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
-    return _generate(
-        _build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
+@v1_router.post("/documents/index", response_model=DocumentIndexResponse)
+def index_document(request: DocumentIn) -> DocumentIndexResponse:
+    """문서를 청킹·임베딩해 보관한다.
+
+    Backend가 업로드 직후 한 번 호출한다. 같은 내용이면 재계산하지 않는다.
+    """
+    try:
+        chunk_count, reused = rag.store.index(
+            document_id=request.document_id,
+            filename=request.filename,
+            document_type=request.document_type,
+            sections=[(section.index, section.text) for section in request.sections],
+            full_text=request.full_text,
+        )
+    except rag.RagError as exc:
+        logger.exception("문서 인덱싱 실패 (document_id=%s)", request.document_id)
+        raise HTTPException(status_code=503, detail=str(exc))
+    return DocumentIndexResponse(
+        document_id=request.document_id, chunk_count=chunk_count, reused=reused
     )
 
 
-_DOCUMENT_TOPIC_MARKERS = (
-    "발표", "자료", "문서", "슬라이드", "첨부", "내용", "주장", "근거",
-    "평가", "요약", "분석", "페이지", "개선", "질문", "document", "slide",
-    "presentation", "evidence", "source", "summary",
-)
-_FREE_CHAT_MARKERS = (
-    "안녕", "반가", "고마", "너는 누구", "넌 누구", "정체가", "날씨", "농담",
-    "hello", "thank", "who are you", "weather", "tell me a joke",
-)
+@v1_router.delete("/documents/{document_id}/index", status_code=204)
+def delete_document_index(document_id: UUID) -> None:
+    """문서를 지울 때 임베딩과 디스크 캐시에 남은 본문까지 함께 지운다."""
+    rag.store.forget(document_id)
 
 
-def _is_off_topic(request: ChatGenerationRequest) -> bool:
-    """Classify obvious cases locally so chat latency does not double."""
-    message = " ".join(request.message.lower().split())
-    has_document_topic = any(marker in message for marker in _DOCUMENT_TOPIC_MARKERS)
-    if request.document is not None:
-        if has_document_topic:
-            return False
-        if any(marker in message for marker in _FREE_CHAT_MARKERS):
-            return True
-        # With selected context, ambiguous questions should stay grounded.
-        return False
-    # Without a document, explicit presentation questions retain the evaluator
-    # prompt while everything else uses concise free conversation.
-    return not has_document_topic
-
-
-def _build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
-    if not _is_off_topic(request):
-        return _build_chat_prompt(request)
-    return FREE_CHAT_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        message=request.message,
+@v1_router.post("/personas", response_model=PersonaGenerationResponse)
+def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
+    return _generate(
+        PERSONA_GENERATION_PROMPT.format(
+            name=request.name, description=request.description
+        ),
+        PersonaGenerationResponse,
+        model=OLLAMA_CHAT_MODEL,
+        max_tokens=512,
     )
 
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
-    return _generate(_build_review_prompt(request), ReviewGenerationResponse)
+    """문서 업로드 직후 1회 수행하는 평가. 주장 검증이 필요해 추론을 켠다."""
+    try:
+        filename, _document_type = rag.store.describe(request.document_id)
+    except rag.DocumentNotIndexedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "document_not_indexed",
+                "document_id": str(exc.document_id),
+            },
+        )
+
+    result = _search(
+        [request.document_id],
+        request.instructions or _REVIEW_DEFAULT_QUERY,
+        top_k=rag.RAG_REVIEW_TOP_K,
+    )
+    return _generate(
+        REVIEW_GENERATION_PROMPT.format(
+            persona_json=_persona_json(request.persona),
+            filename=filename,
+            context_block=result.as_context(),
+            instructions=request.instructions or "(없음)",
+        ),
+        ReviewGenerationResponse,
+        model=OLLAMA_MODEL,
+        think=True,
+        max_tokens=2048,
+    )
 
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)
 def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
-    # Chat sources are selected and attached by Backend, which already owns
-    # document retrieval. Avoid JSON-schema generation here: on CPU Ollama it
-    # can consume the full output budget even for a one-line answer.
-    return ChatGenerationResponse(
-        answer=_call_llm_as_text(
-            _build_effective_chat_prompt(request),
-            model=OLLAMA_CHAT_MODEL,
-            max_tokens=160,
-        ),
-        sources=[],
-    )
+    """평가 이후의 대화. 발표자의 답변에 페르소나 관점으로 피드백한다."""
+    message = request.message.strip()
 
-
-@v1_router.post("/chat/stream")
-def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
-    def events():
-        try:
-            for token in stream_llm(
-                _build_effective_chat_prompt(request),
+    # 인사·상투어는 근거로 삼을 자료가 필요 없다. 검색과 추론을 모두 건너뛴다.
+    if _SMALL_TALK_RE.fullmatch(message):
+        return ChatGenerationResponse(
+            answer=_call_llm_as_text(
+                FREE_CHAT_PROMPT.format(
+                    persona_json=_persona_json(request.persona), message=message
+                ),
                 model=OLLAMA_CHAT_MODEL,
                 max_tokens=160,
-            ):
-                data = json.dumps({"token": token}, ensure_ascii=False)
-                yield f"event: token\ndata: {data}\n\n"
-            yield "event: done\ndata: {}\n\n"
-        except LLMError:
-            logger.exception("Ollama 채팅 스트리밍 실패")
-            data = json.dumps({"message": "LLM 서버에 연결할 수 없습니다."}, ensure_ascii=False)
-            yield f"event: error\ndata: {data}\n\n"
+            ),
+            sources=[],
+        )
 
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    result = _search(request.document_ids, message)
+
+    # 근거가 없는 상태에서 생성하면 없는 내용을 지어낸다. 모델을 부르지 않고
+    # 자료 추가를 요청한다.
+    if not result.is_relevant():
+        return ChatGenerationResponse(
+            answer=NEEDS_MORE_MATERIAL_TEMPLATE.format(name=request.persona.name),
+            sources=[],
+            needs_more_material=True,
+        )
+
+    return ChatGenerationResponse(
+        answer=_call_llm_as_text(
+            CHAT_PROMPT.format(
+                persona_json=_persona_json(request.persona),
+                context_block=result.as_context(),
+                message=message,
+            ),
+            model=OLLAMA_MODEL,
+            think=True,
+            max_tokens=1536,
+        ),
+        sources=_sources(result),
     )
 
 

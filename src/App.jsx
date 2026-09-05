@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
-  streamChat, createAgent, uploadDocument, listDocuments, deleteDocument,
+  sendChat, createAgent, uploadDocument, listDocuments, deleteDocument,
   login, signup, getCurrentUser,
   listAgents, trashAgent, listTrashedAgents, restoreAgent, permanentlyDeleteAgent,
   listChats, trashChat, listTrashedChats, restoreChat, permanentlyDeleteChat,
@@ -81,6 +81,8 @@ function chatFromApi(item) {
     message: item.message,
     answer: item.answer,
     documentId: item.document_id,
+    // 검색된 자료가 부족해 "자료를 추가해 달라"고 돌아온 답변인지.
+    needsMoreMaterial: item.needs_more_material === true,
     createdAt: item.created_at,
   }
 }
@@ -91,7 +93,7 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState(null)
-  const streamAbortRef = useRef(null)
+  const chatAbortRef = useRef(null)
   const initStorageErrorsRef = useRef([])
 
   const [activeView, setActiveView] = useState('personas')
@@ -425,9 +427,9 @@ export default function App() {
     setContent('')
     setPendingChatMaterials([])
 
-    if (streamAbortRef.current) streamAbortRef.current.abort()
+    if (chatAbortRef.current) chatAbortRef.current.abort()
     const controller = new AbortController()
-    streamAbortRef.current = controller
+    chatAbortRef.current = controller
 
     const pendingId = `pending-${Date.now()}`
     setChatHistory((s) => [...s, {
@@ -444,17 +446,12 @@ export default function App() {
     setSendError(null)
 
     try {
-      const item = await streamChat({
+      const item = await sendChat({
         agentId: activePersona.id,
         message: messageText,
         documentId: activeDocumentId,
         token: authToken,
         signal: controller.signal,
-        onToken: (token) => {
-          setChatHistory((s) => s.map((m) => (
-            m.messageId === pendingId ? { ...m, answer: `${m.answer || ''}${token}` } : m
-          )))
-        },
       })
       setChatHistory((s) => s.map((m) => (m.messageId === pendingId ? chatFromApi(item) : m)))
     } catch (err) {
@@ -529,7 +526,7 @@ export default function App() {
   }
 
   function startNewChat() {
-    if (streamAbortRef.current) streamAbortRef.current.abort()
+    if (chatAbortRef.current) chatAbortRef.current.abort()
     setContent('')
     setPendingChatMaterials([])
     setPersona(null)
@@ -1071,7 +1068,7 @@ export default function App() {
                   <button
                     className={`history-item ${persona === c.personaId ? 'active' : ''}`}
                     onClick={() => {
-                      if (streamAbortRef.current) streamAbortRef.current.abort()
+                      if (chatAbortRef.current) chatAbortRef.current.abort()
                       setPersona(c.personaId)
                       setActiveView('chats')
                       setSending(false)
@@ -1139,6 +1136,11 @@ export default function App() {
                         {ex.pending && !ex.answer
                           ? `답변을 기다리는 중… (경과 ${Math.floor((Date.now() - new Date(ex.createdAt).getTime()) / 1000)}초)`
                           : ex.answer}
+                        {ex.needsMoreMaterial && (
+                          <p className="thread-msg-material-hint">
+                            관련 자료를 찾지 못했어요. 발표 자료를 첨부하면 그 내용을 근거로 답변해요.
+                          </p>
+                        )}
                       </div>
                     </div>
                     {!ex.pending && (

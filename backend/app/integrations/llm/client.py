@@ -1,6 +1,4 @@
 import os
-import json
-from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -11,7 +9,21 @@ class LlmServiceConnectionError(RuntimeError):
 
 
 class LlmServiceResponseError(RuntimeError):
-    pass
+    """LLM 서비스가 4xx/5xx를 반환했습니다.
+
+    status_code와 body를 함께 들고 있어야 호출부가 409(document_not_indexed)
+    처럼 복구 가능한 응답을 구분할 수 있습니다.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        body: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 class HttpLlmClient:
@@ -38,42 +50,27 @@ class HttpLlmClient:
     async def get_json(self, path: str) -> dict[str, Any]:
         return await self._request("GET", path)
 
-    async def stream_sse(
-        self, path: str, payload: dict[str, Any]
-    ) -> AsyncIterator[str]:
+    async def delete(self, path: str) -> None:
+        """본문 없는 204 응답을 쓰는 삭제 요청입니다."""
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout, transport=self.transport
             ) as client:
-                async with client.stream(
-                    "POST",
+                response = await client.request(
+                    "DELETE",
                     f"{self.base_url}{self.api_prefix}{path}",
-                    json=payload,
                     headers={"X-Backend-Contract-Version": "1"},
-                ) as response:
-                    if response.status_code >= 400:
-                        raise LlmServiceResponseError(
-                            f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다."
-                        )
-                    event = "message"
-                    async for line in response.aiter_lines():
-                        if line.startswith("event:"):
-                            event = line.removeprefix("event:").strip()
-                        elif line.startswith("data:"):
-                            data = json.loads(line.removeprefix("data:").strip())
-                            if event == "token" and isinstance(data.get("token"), str):
-                                yield data["token"]
-                            elif event == "error":
-                                raise LlmServiceResponseError(
-                                    "LLM 서비스 스트리밍 중 오류가 발생했습니다."
-                                )
-                            event = "message"
-        except LlmServiceResponseError:
-            raise
-        except (httpx.RequestError, ValueError) as exc:
+                )
+        except httpx.RequestError as exc:
             raise LlmServiceConnectionError(
                 f"LLM 서비스를 사용할 수 없습니다: {self.base_url}"
             ) from exc
+
+        if response.status_code >= 400:
+            raise LlmServiceResponseError(
+                f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다.",
+                status_code=response.status_code,
+            )
 
     async def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
@@ -94,8 +91,14 @@ class HttpLlmClient:
             ) from exc
 
         if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = None
             raise LlmServiceResponseError(
-                f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다."
+                f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다.",
+                status_code=response.status_code,
+                body=error_body,
             )
         try:
             body = response.json()
