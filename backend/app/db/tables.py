@@ -33,6 +33,8 @@ class AgentTable(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     role: Mapped[str] = mapped_column(Text, nullable=False, default="Evaluator")
+    gender: Mapped[str] = mapped_column(Text, nullable=False, default="unspecified")
+    age: Mapped[int | None] = mapped_column(nullable=True)
     expertise: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     evaluation_style: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
@@ -166,6 +168,7 @@ class ChatMessageTable(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    timing: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

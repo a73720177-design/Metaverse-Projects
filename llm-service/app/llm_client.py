@@ -17,8 +17,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
+OLLAMA_REVIEW_MODEL = os.getenv("OLLAMA_REVIEW_MODEL", "qwen3:8b").strip()
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
 
 # 응답 생성이 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다 (초 단위)
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
@@ -100,7 +102,12 @@ def call_llm(
         "stream": False,
         "think": think,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS},
+        "options": {
+            "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            "temperature": 0.35,
+            "repeat_penalty": 1.18,
+            "repeat_last_n": 256,
+        },
     }
     if response_schema is not None:
         payload["format"] = response_schema
@@ -164,7 +171,12 @@ def stream_llm(
         "stream": True,
         "think": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS},
+        "options": {
+            "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            "temperature": 0.35,
+            "repeat_penalty": 1.18,
+            "repeat_last_n": 256,
+        },
     }
     try:
         with requests.post(
@@ -174,12 +186,21 @@ def stream_llm(
             stream=True,
         ) as response:
             response.raise_for_status()
+            emitted = ""
             for line in response.iter_lines():
                 if not line:
                     continue
                 chunk = json.loads(line).get("response", "")
                 if chunk:
+                    remaining_lines = 30 - emitted.count("\n")
+                    if remaining_lines <= 0:
+                        break
+                    if chunk.count("\n") >= remaining_lines:
+                        chunk = "\n".join(chunk.split("\n")[:remaining_lines])
+                    emitted += chunk
                     yield chunk
+                    if emitted.count("\n") >= 30:
+                        break
     except (requests.RequestException, ValueError) as exc:
         raise LLMError("Ollama 스트리밍 호출 실패") from exc
 
@@ -198,3 +219,20 @@ def check_ollama_health() -> bool:
         return response.ok
     except (requests.RequestException, LLMError):
         return False
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Create retrieval vectors with the configured bge-m3 embedding model."""
+    try:
+        response = requests.post(
+            f"{OLLAMA_HOST}/api/embed",
+            json={"model": OLLAMA_EMBEDDING_MODEL, "input": texts},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        embeddings = response.json().get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+            raise ValueError("invalid embedding response")
+        return embeddings
+    except (requests.RequestException, ValueError) as exc:
+        raise LLMError("임베딩 모델 호출 실패") from exc

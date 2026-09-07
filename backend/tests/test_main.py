@@ -127,13 +127,15 @@ def test_rejects_unsupported_document() -> None:
     assert response.json()["error"]["code"] == "http_415"
 
 
-def test_rejects_empty_supported_document() -> None:
+def test_accepts_empty_pdf_for_later_processing() -> None:
     response = client.post(
         "/documents/parse",
         files={"file": ("sample.pdf", b"", "application/pdf")},
     )
-    assert response.status_code == 422
-    assert response.json()["error"]["message"] == "빈 파일은 업로드할 수 없습니다."
+    assert response.status_code == 201
+    assert response.json()["document_type"] == "pdf"
+    assert response.json()["sections"] == []
+    assert response.json()["full_text"] == ""
 
 
 def test_rejects_document_over_configured_limit(
@@ -362,6 +364,32 @@ def test_agent_persists_owned_document_contract() -> None:
         assert client.get("/agents").json()[0]["document_ids"] == [
             str(document.document_id)
         ]
+        detached = client.put(
+            f"/agents/{created.json()['agent_id']}/documents",
+            json={"document_ids": []},
+        )
+        assert detached.status_code == 200
+        assert detached.json()["document_ids"] == []
+        reattached = client.put(
+            f"/agents/{created.json()['agent_id']}/documents",
+            json={"document_ids": [str(document.document_id)]},
+        )
+        assert reattached.status_code == 200
+        assert reattached.json()["document_ids"] == [str(document.document_id)]
+        updated = client.put(
+            f"/agents/{created.json()['agent_id']}",
+            json={
+                "name": "Updated evaluator",
+                "description": "Updated style",
+                "gender": "female",
+                "age": 51,
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "Updated evaluator"
+        assert updated.json()["age"] == 51
+        assert updated.json()["document_ids"] == [str(document.document_id)]
     finally:
         app.dependency_overrides.clear()
 
@@ -428,6 +456,8 @@ def test_chat_stream_contract_persists_completed_answer() -> None:
         stored = asyncio.run(chat_repository.list(TEST_USER.user_id, deleted=False))
         assert len(stored) == 1
         assert stored[0].answer == "Evaluator response: Hello"
+        assert stored[0].timing.total_ms >= 0
+        assert stored[0].timing.output_characters == len(stored[0].answer)
     finally:
         app.dependency_overrides.clear()
 

@@ -250,7 +250,7 @@ def test_v1_chat_omits_linked_document_for_greeting() -> None:
 
 @pytest.mark.parametrize(
     ("detail", "expected_tokens"),
-    [("concise", 512), ("standard", 1024), ("detailed", 1536)],
+    [("concise", 512), ("standard", 1024), ("detailed", 1024)],
 )
 def test_v1_chat_maps_response_detail_to_safe_token_budget(
     detail: str, expected_tokens: int

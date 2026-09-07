@@ -14,6 +14,7 @@ from app.controllers.auth_controller import router as auth_router
 from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
+from app.controllers.practice_controller import router as practice_router
 from app.dependencies import get_llm_client
 from app.db.database import check_db, close_db, init_db
 from app.error_handlers import register_error_handlers
@@ -69,6 +70,7 @@ app.include_router(auth_router)
 app.include_router(document_router)
 app.include_router(review_router)
 app.include_router(chat_router)
+app.include_router(practice_router)
 register_error_handlers(app)
 
 

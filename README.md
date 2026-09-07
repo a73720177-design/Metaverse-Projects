@@ -47,7 +47,7 @@ Windows PowerShell 기준입니다. Python 가상환경은 서비스별로 분�
 
 ```powershell
 ollama serve
-ollama pull qwen3:14b
+ollama pull qwen3:4b
 ```
 
 ### 2. LLM Service

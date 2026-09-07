@@ -6,6 +6,7 @@ from app.config import (
     get_jwt_secret_key,
     get_max_upload_size_bytes,
     get_object_storage_mode,
+    get_rag_max_context_chars,
     get_repository_mode,
 )
 from app.controllers.document_controller import build_document_object_key
@@ -44,6 +45,15 @@ def test_invalid_repository_mode_fails_early(monkeypatch: pytest.MonkeyPatch) ->
 def test_upload_limit_is_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MAX_UPLOAD_SIZE_MB", "10")
     assert get_max_upload_size_bytes() == 10 * 1024 * 1024
+
+
+def test_rag_context_limit_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "2048")
+    assert get_rag_max_context_chars() == 2048
+
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "0")
+    with pytest.raises(RuntimeError, match="RAG_MAX_CONTEXT_CHARS"):
+        get_rag_max_context_chars()
 
 
 def test_document_storage_schema_is_split() -> None:

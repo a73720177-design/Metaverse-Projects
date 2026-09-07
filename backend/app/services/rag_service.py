@@ -3,6 +3,7 @@ import re
 from collections import OrderedDict
 from uuid import UUID
 
+from app.config import get_rag_max_context_chars
 from app.models.document import DocumentParseResponse, DocumentSection
 
 
@@ -22,12 +23,32 @@ def should_use_document(message: str, document_id: UUID | None) -> bool:
 class DocumentContextSelector:
     """외부 검색엔진 없이 관련 문서 청크만 고르는 경량 lexical retriever."""
 
-    def __init__(self, *, chunk_size: int = 700, overlap: int = 100,
-                 max_chunks: int = 3, cache_size: int = 32) -> None:
+    def __init__(
+        self,
+        *,
+        chunk_size: int = 700,
+        overlap: int = 100,
+        max_chunks: int = 3,
+        cache_size: int = 32,
+        max_context_chars: int | None = None,
+    ) -> None:
+        if max_context_chars is None:
+            max_context_chars = get_rag_max_context_chars()
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be at least 1.")
+        if overlap < 0 or overlap >= chunk_size:
+            raise ValueError("overlap must be between 0 and chunk_size - 1.")
+        if max_chunks < 1:
+            raise ValueError("max_chunks must be at least 1.")
+        if cache_size < 1:
+            raise ValueError("cache_size must be at least 1.")
+        if max_context_chars < 1:
+            raise ValueError("max_context_chars must be at least 1.")
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.max_chunks = max_chunks
         self.cache_size = cache_size
+        self.max_context_chars = max_context_chars
         self._cache: OrderedDict[UUID, tuple[str, list[DocumentSection]]] = OrderedDict()
 
     @staticmethod
@@ -73,9 +94,33 @@ class DocumentContextSelector:
             return (len(query_terms & terms), -position)
 
         ranked = sorted(enumerate(chunks), key=score, reverse=True)
-        selected = [chunk for _, chunk in ranked[: self.max_chunks]]
+        relevant = [item for item in ranked if score(item)[0] > 0]
+        candidates = relevant or list(enumerate(chunks))
+        selected: list[DocumentSection] = []
+        rendered: list[str] = []
+        rendered_length = 0
+        for _, chunk in candidates:
+            block = f"[구간 {chunk.index}]\n{chunk.text}"
+            added_length = len(block) + (2 if rendered else 0)
+            if rendered_length + added_length > self.max_context_chars:
+                remaining = self.max_context_chars - rendered_length - (2 if rendered else 0)
+                header = f"[구간 {chunk.index}]\n"
+                if remaining > len(header):
+                    truncated = chunk.model_copy(
+                        update={"text": chunk.text[: remaining - len(header)]}
+                    )
+                    selected.append(truncated)
+                    rendered.append(f"{header}{truncated.text}")
+                break
+            selected.append(chunk)
+            rendered.append(block)
+            rendered_length += added_length
+            if len(selected) == self.max_chunks:
+                break
         selected.sort(key=lambda chunk: chunk.index)
-        context = "\n\n".join(f"[구간 {chunk.index}]\n{chunk.text}" for chunk in selected)
+        context = "\n\n".join(
+            f"[구간 {chunk.index}]\n{chunk.text}" for chunk in selected
+        )
         return document.model_copy(update={"sections": selected, "full_text": context})
 
     def relevance_score(self, document: DocumentParseResponse, query: str) -> int:

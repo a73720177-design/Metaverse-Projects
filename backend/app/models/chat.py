@@ -24,6 +24,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="대화 문맥으로 사용할 발표자료 UUID(선택)",
     )
+    document_ids: list[UUID] = Field(
+        default_factory=list,
+        description="발표 프로젝트와 페르소나에서 채팅 근거로 사용할 문서 UUID 목록",
+    )
     response_detail: ResponseDetail = Field(
         default=ResponseDetail.STANDARD,
         description="답변 상세도. Backend가 안전한 출력 토큰 상한으로 변환합니다.",
@@ -37,6 +41,16 @@ class ChatResponse(BaseModel):
     sources: list[ReviewSource] = Field(default_factory=list)
 
 
+class ChatTiming(BaseModel):
+    context_ms: int = Field(default=0, ge=0)
+    first_content_latency_ms: int = Field(default=0, ge=0)
+    generation_ms: int = Field(default=0, ge=0)
+    save_ms: int = Field(default=0, ge=0)
+    total_ms: int = Field(default=0, ge=0)
+    output_characters: int = Field(default=0, ge=0)
+    output_lines: int = Field(default=0, ge=0)
+
+
 class ChatHistoryItem(ChatResponse):
     """저장된 질문/답변 한 쌍과 휴지통 상태입니다."""
 
@@ -45,3 +59,4 @@ class ChatHistoryItem(ChatResponse):
     document_id: UUID | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: datetime | None = None
+    timing: ChatTiming = Field(default_factory=ChatTiming)

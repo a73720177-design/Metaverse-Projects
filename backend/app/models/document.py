@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 class DocumentSection(BaseModel):
     index: int = Field(ge=1)
     text: str
+    source_document_id: UUID | None = None
+    source_filename: str | None = None
 
 
 class DocumentParseResponse(BaseModel):

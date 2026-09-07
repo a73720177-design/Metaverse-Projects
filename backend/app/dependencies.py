@@ -36,6 +36,7 @@ from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
+from app.services.practice_service import PracticeService
 from app.models.user import UserResponse
 from app.services.auth_service import InvalidCredentialsError
 from app.storage.minio_storage import MinioStorage
@@ -182,4 +183,18 @@ def get_chat_service() -> ChatService:
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         chat_repository=get_chat_repository(),
+    )
+
+
+@lru_cache
+def get_practice_service() -> PracticeService:
+    generator = (
+        LegacyQuestionReviewGenerator(get_llm_client())
+        if get_llm_contract_mode() == "legacy_questions"
+        else HttpReviewGenerator(get_llm_client())
+    )
+    return PracticeService(
+        generator=generator,
+        agent_repository=get_agent_repository(),
+        document_repository=get_document_repository(),
     )

@@ -6,7 +6,7 @@ LLM 서비스 API 서버.
 
 사전 조건:
     - Ollama가 로컬에서 실행 중이어야 함 (ollama serve)
-    - qwen3:14b 모델이 pull 되어 있어야 함
+    - qwen3:4b 모델이 pull 되어 있어야 함
 
 /extract-concepts, /generate-questions는 Backend의 legacy_questions 호환
 모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약이며,
@@ -27,6 +27,9 @@ from pydantic import BaseModel, ValidationError
 from app.llm_client import (
     LLMError,
     CHAT_MODEL,
+    OLLAMA_REVIEW_MODEL,
+    OLLAMA_EMBEDDING_MODEL,
+    embed_texts,
     call_llm,
     check_ollama_health,
     stream_llm,
@@ -53,6 +56,8 @@ from app.schemas_v1 import (
     PersonaProfileIn,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    EmbeddingRequest,
+    EmbeddingResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,11 +97,12 @@ def _build_question_prompt(request: QuestionGenerationRequest) -> str:
 
 
 def _call_llm_as_json(
-    prompt: str, response_schema: dict, max_tokens: int | None = None
+    prompt: str, response_schema: dict, max_tokens: int | None = None,
+    model: str | None = None,
 ) -> dict:
     try:
         raw = call_llm(
-            prompt, response_schema=response_schema, max_tokens=max_tokens
+            prompt, model=model, response_schema=response_schema, max_tokens=max_tokens
         )
     except LLMError:
         # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
@@ -117,10 +123,11 @@ def _call_llm_as_json(
 
 
 def _generate(
-    prompt: str, response_model: type[T], max_tokens: int | None = None
+    prompt: str, response_model: type[T], max_tokens: int | None = None,
+    model: str | None = None,
 ) -> T:
     data = _call_llm_as_json(
-        prompt, response_model.model_json_schema(), max_tokens=max_tokens
+        prompt, response_model.model_json_schema(), max_tokens=max_tokens, model=model
     )
     try:
         return response_model.model_validate(data)
@@ -250,7 +257,7 @@ def _answer_guidance(max_output_tokens: int) -> str:
     if max_output_tokens <= 1024:
         return "핵심 결론과 이유를 나누어 설명하되 불필요한 반복 없이 답하세요."
     return (
-        "핵심 결론, 문서 근거, 개선 제안 순서로 충분히 설명하세요. "
+        "핵심 결론, 문서 근거, 개선 제안 순서로 최대 약 30줄 안에서 충분히 설명하세요. "
         "내용이 끝나면 최대 길이를 채우지 말고 즉시 종료하세요."
     )
 
@@ -312,8 +319,20 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
     return _generate(
-        _build_review_prompt(request), ReviewGenerationResponse, max_tokens=2048
+        _build_review_prompt(request), ReviewGenerationResponse,
+        max_tokens=1024, model=OLLAMA_REVIEW_MODEL,
     )
+
+
+@v1_router.post("/embeddings", response_model=EmbeddingResponse)
+def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
+    try:
+        return EmbeddingResponse(
+            model=OLLAMA_EMBEDDING_MODEL,
+            embeddings=embed_texts(request.texts),
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail="임베딩 모델을 사용할 수 없습니다.") from exc
 
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)

@@ -88,9 +88,10 @@ async def upload_and_parse(
     storage: ObjectStorage = Depends(get_object_storage),
     current_user: UserResponse = Depends(get_current_user),
 ) -> DocumentDetailResponse:
-    filename = file.filename or ""
-    if not filename or Path(filename).name != filename:
-        raise HTTPException(status_code=422, detail="올바른 파일 이름이 필요합니다.")
+    raw_filename = (file.filename or "").replace("\\", "/")
+    filename = Path(raw_filename).name
+    if not filename:
+        raise HTTPException(status_code=400, detail="올바른 파일 이름이 필요합니다.")
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
@@ -105,8 +106,8 @@ async def upload_and_parse(
     try:
         max_size = get_max_upload_size_bytes()
         contents = await file.read(max_size + 1)
-        if not contents:
-            raise HTTPException(status_code=422, detail="빈 파일은 업로드할 수 없습니다.")
+        if not contents and suffix not in {".pdf", ".pptx"}:
+            raise HTTPException(status_code=400, detail="빈 파일은 업로드할 수 없습니다.")
         if len(contents) > max_size:
             raise HTTPException(
                 status_code=413,
@@ -116,7 +117,7 @@ async def upload_and_parse(
         document = await asyncio.to_thread(
             parse_document,
             saved_path,
-            file.filename or saved_path.name,
+            filename,
         )
         object_key = build_document_object_key(document.document_id, suffix)
         await storage.upload(saved_path, object_key, file.content_type)
@@ -133,7 +134,7 @@ async def upload_and_parse(
             except Exception:
                 pass
         saved_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (SQLAlchemyError, ObjectStorageError):
         if uploaded and object_key is not None:
             try:

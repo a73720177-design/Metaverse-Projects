@@ -1,6 +1,8 @@
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.services.rag_service import DocumentContextSelector, should_use_document
 
@@ -48,3 +50,42 @@ def test_selector_reuses_cached_chunks() -> None:
     cached = selector._cache[DOCUMENT_ID][1]
     selector.select(document, "개발 일정")
     assert selector._cache[DOCUMENT_ID][1] is cached
+
+
+def test_selector_falls_back_to_opening_chunks_when_query_has_no_match() -> None:
+    selector = DocumentContextSelector(chunk_size=300, overlap=20, max_chunks=1)
+    selected = selector.select(_document(), "전혀없는검색어")
+
+    assert len(selected.sections) == 1
+    assert selected.sections[0].index == 1
+
+
+def test_selector_respects_configured_context_character_limit() -> None:
+    selector = DocumentContextSelector(
+        chunk_size=300,
+        overlap=20,
+        max_chunks=3,
+        max_context_chars=120,
+    )
+    selected = selector.select(_document(), "매출 성장률")
+
+    assert 0 < len(selected.full_text) <= 120
+    assert selected.full_text == "\n\n".join(
+        f"[구간 {section.index}]\n{section.text}" for section in selected.sections
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"chunk_size": 0},
+        {"chunk_size": 100, "overlap": 100},
+        {"overlap": -1},
+        {"max_chunks": 0},
+        {"cache_size": 0},
+        {"max_context_chars": 0},
+    ],
+)
+def test_selector_rejects_invalid_limits(kwargs: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        DocumentContextSelector(**kwargs)

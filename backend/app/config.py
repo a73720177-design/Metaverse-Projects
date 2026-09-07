@@ -83,6 +83,10 @@ def get_max_upload_size_bytes() -> int:
     return megabytes * 1024 * 1024
 
 
+def get_rag_max_context_chars() -> int:
+    return _get_positive_int("RAG_MAX_CONTEXT_CHARS", 4000)
+
+
 def get_jwt_secret_key() -> str:
     secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
     if len(secret_key.encode("utf-8")) < 32:
@@ -124,9 +128,9 @@ def get_chat_output_token_budgets() -> dict[str, int]:
     budgets = {
         "concise": _get_positive_int("CHAT_OUTPUT_TOKENS_CONCISE", 512),
         "standard": _get_positive_int("CHAT_OUTPUT_TOKENS_STANDARD", 1024),
-        "detailed": _get_positive_int("CHAT_OUTPUT_TOKENS_DETAILED", 1536),
+        "detailed": _get_positive_int("CHAT_OUTPUT_TOKENS_DETAILED", 1024),
     }
-    maximum = _get_positive_int("CHAT_OUTPUT_TOKENS_MAX", 1536)
+    maximum = _get_positive_int("CHAT_OUTPUT_TOKENS_MAX", 1024)
     if any(value > maximum for value in budgets.values()):
         raise RuntimeError("Chat output token budgets must not exceed CHAT_OUTPUT_TOKENS_MAX.")
     return budgets

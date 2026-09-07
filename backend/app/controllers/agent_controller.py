@@ -3,7 +3,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_current_user, get_persona_service
-from app.models.persona import PersonaCreateRequest, PersonaHistoryItem, PersonaProfile
+from app.models.persona import (
+    PersonaCreateRequest, PersonaDocumentsUpdate, PersonaHistoryItem, PersonaProfile,
+    PersonaUpdateRequest,
+)
 from app.models.user import UserResponse
 from app.services.persona_service import (
     PersonaDocumentNotFoundError, PersonaNotFoundError, PersonaService, UpstreamServiceError,
@@ -34,6 +37,35 @@ async def list_agents(
     current_user: UserResponse = Depends(get_current_user),
 ) -> list[PersonaHistoryItem]:
     return await service.list_active(current_user.user_id)
+
+
+@router.put("/{agent_id}/documents", response_model=PersonaProfile,
+            summary="질문자 참고자료 연결 변경")
+async def update_agent_documents(
+    agent_id: UUID,
+    request: PersonaDocumentsUpdate,
+    service: PersonaService = Depends(get_persona_service),
+    current_user: UserResponse = Depends(get_current_user),
+) -> PersonaProfile:
+    try:
+        return await service.update_documents(
+            agent_id, request.document_ids, current_user.user_id
+        )
+    except (PersonaNotFoundError, PersonaDocumentNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{agent_id}", response_model=PersonaProfile, summary="질문자 정보 수정")
+async def update_agent(
+    agent_id: UUID,
+    request: PersonaUpdateRequest,
+    service: PersonaService = Depends(get_persona_service),
+    current_user: UserResponse = Depends(get_current_user),
+) -> PersonaProfile:
+    try:
+        return await service.update(agent_id, request, current_user.user_id)
+    except (PersonaNotFoundError, PersonaDocumentNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/trash", response_model=list[PersonaHistoryItem], summary="페르소나 휴지통 조회")

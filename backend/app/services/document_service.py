@@ -24,18 +24,20 @@ def parse_document(path: Path, original_filename: str) -> DocumentParseResponse:
     try:
         parsed = parser(path)
     except Exception as exc:
-        raise ValueError(
-            "파일이 손상됐거나 올바른 PDF, PPTX, DOCX 문서가 아닙니다."
-        ) from exc
+        # PDF/PPTX 원본은 향후 DB/vector 파싱 파이프라인이 다시 처리할 수
+        # 있도록 현재 파서가 읽지 못해도 먼저 보관한다. DOCX는 기존처럼
+        # 손상된 문서를 거절한다.
+        if path.suffix.lower() in {".pdf", ".pptx"}:
+            parsed = []
+        else:
+            raise ValueError(
+                "파일이 손상됐거나 올바른 PDF, PPTX, DOCX 문서가 아닙니다."
+            ) from exc
     sections = [
         DocumentSection(index=index, text=text.strip())
         for index, text in parsed
         if text.strip()
     ]
-    if not sections:
-        raise ValueError(
-            "문서에서 분석 가능한 텍스트를 찾지 못했습니다. 스캔 문서는 OCR이 필요합니다."
-        )
     return DocumentParseResponse(
         filename=original_filename,
         document_type=path.suffix.lower().lstrip("."),

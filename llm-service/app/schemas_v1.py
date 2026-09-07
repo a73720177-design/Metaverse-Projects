@@ -111,9 +111,18 @@ class ChatGenerationRequest(BaseModel):
     persona: PersonaProfileIn
     message: str = Field(min_length=1, max_length=5000)
     document: DocumentIn | None = None
-    max_output_tokens: int = Field(default=1024, ge=128, le=1536)
+    max_output_tokens: int = Field(default=1024, ge=128, le=2048)
 
 
 class ChatGenerationResponse(BaseModel):
     answer: str = Field(min_length=1)
     sources: list[ReviewSource] = Field(default_factory=list, max_length=10)
+
+
+class EmbeddingRequest(BaseModel):
+    texts: list[str] = Field(min_length=1, max_length=128)
+
+
+class EmbeddingResponse(BaseModel):
+    model: str
+    embeddings: list[list[float]]

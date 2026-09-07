@@ -71,11 +71,11 @@ export function getCurrentUser(token, signal) {
 
 // Requires auth — Backend scopes agents to the caller. ->
 // { agent_id, name, description, role, expertise, evaluation_style }
-export function createAgent({ name, description, documentIds = [] }, token, signal) {
+export function createAgent({ name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
   return apiFetch('/agents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description, document_ids: documentIds }),
+    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
     signal,
   })
 }
@@ -111,6 +111,8 @@ export async function streamChat({
   agentId,
   message,
   documentId = null,
+  documentIds = [],
+  responseDetail = 'detailed',
   token,
   signal,
   onToken,
@@ -124,7 +126,12 @@ export async function streamChat({
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-        body: JSON.stringify({ message, document_id: documentId }),
+        body: JSON.stringify({
+          message,
+          document_id: documentId,
+          document_ids: documentIds,
+          response_detail: responseDetail,
+        }),
         signal,
       },
     )
@@ -143,6 +150,15 @@ export async function streamChat({
   const decoder = new TextDecoder()
   let buffer = ''
   let completedItem = null
+  let displayBuffer = ''
+
+  const flushDisplayBuffer = (force = false) => {
+    if (!displayBuffer) return
+    const naturalBoundary = /(?:\n|[.!?。！？]\s*)$/.test(displayBuffer)
+    if (!force && !naturalBoundary && displayBuffer.length < 80) return
+    onToken?.(displayBuffer)
+    displayBuffer = ''
+  }
 
   const handleEvent = (block) => {
     let event = 'message'
@@ -160,8 +176,14 @@ export async function streamChat({
       throw new Error('Backend 스트리밍 응답 형식이 올바르지 않습니다.')
     }
 
-    if (event === 'token') onToken?.(data.token || '')
-    if (event === 'done') completedItem = data
+    if (event === 'token') {
+      displayBuffer += data.token || ''
+      flushDisplayBuffer(false)
+    }
+    if (event === 'done') {
+      flushDisplayBuffer(true)
+      completedItem = data
+    }
     if (event === 'error') throw new Error(data.message || '채팅 스트리밍 중 오류가 발생했습니다.')
   }
 
@@ -176,6 +198,45 @@ export async function streamChat({
   if (buffer.trim()) handleEvent(buffer)
   if (!completedItem) throw new Error('Backend 스트리밍이 완료 결과 없이 종료되었습니다.')
   return completedItem
+}
+
+export function updateAgentDocuments(agentId, documentIds, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/documents`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ document_ids: documentIds }),
+    signal,
+  })
+}
+
+export function updateAgent(agentId, { name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
+    signal,
+  })
+}
+
+export function deleteAgent(agentId, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    signal,
+  })
+}
+
+export function generateExpectedQuestions({ personaIds, presentationDocumentIds, questionCount = 5 }, token, signal) {
+  return apiFetch('/practice/questions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({
+      persona_ids: personaIds,
+      presentation_document_ids: presentationDocumentIds,
+      question_count_per_persona: questionCount,
+    }),
+    signal,
+  })
 }
 
 // -> PersonaHistoryItem[] (active personas only — Backend excludes trashed ones)

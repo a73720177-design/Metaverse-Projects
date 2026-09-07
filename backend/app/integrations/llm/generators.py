@@ -16,7 +16,10 @@ class HttpPersonaGenerator:
     async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]:
         try:
             return await self.client.post_json(
-                "/personas", request.model_dump(mode="json", exclude={"document_ids"})
+                "/personas",
+                request.model_dump(
+                    mode="json", exclude={"document_ids", "gender", "age"}
+                ),
             )
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise PersonaGeneratorError(str(exc)) from exc
@@ -30,7 +33,9 @@ class HttpReviewGenerator:
                        instructions: str | None) -> dict[str, Any]:
         payload = {
             "persona": persona.model_dump(mode="json"),
-            "document": document.model_dump(mode="json", exclude={"saved_path"}),
+            "document": document.model_dump(
+                mode="json", exclude={"saved_path"}, exclude_none=True
+            ),
             "instructions": instructions,
         }
         try:
@@ -64,8 +69,8 @@ class HttpChatGenerator:
             if document is not None:
                 generated["sources"] = [
                     ReviewSource(
-                        document_id=document.document_id,
-                        filename=document.filename,
+                        document_id=section.source_document_id or document.document_id,
+                        filename=section.source_filename or document.filename,
                         page=(section.index if document.document_type in {"pdf", "pptx"} else None),
                         excerpt=section.text[:500],
                     ).model_dump(mode="json")

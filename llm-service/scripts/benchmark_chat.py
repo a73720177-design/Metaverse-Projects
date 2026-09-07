@@ -75,7 +75,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8001")
     parser.add_argument("--concurrency", type=int, default=1, choices=(1, 2, 4, 8))
     parser.add_argument("--requests", type=int, default=3)
-    parser.add_argument("--max-output-tokens", type=int, default=1536, choices=(512, 1024, 1536))
+    parser.add_argument("--max-output-tokens", type=int, default=2048, choices=(512, 1024, 1536, 2048))
     parser.add_argument("--document-chars", type=int, default=2000)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--message", default="이 발표의 핵심 문제와 개선안을 근거와 함께 설명해 주세요.")
