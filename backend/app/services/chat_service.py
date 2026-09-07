@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.vector_rag import VectorRag, enabled as vector_enabled
 
 
 class ChatServiceError(RuntimeError):
@@ -47,6 +49,7 @@ class ChatService:
             raise ChatResourceNotFoundError("Agent not found")
         effective_request = request
         source_document = None
+        candidates = []
         if request.document_id is None and persona.document_ids:
             fetched = await asyncio.gather(*(
                 self.document_repository.get(document_id, owner_id)
@@ -69,10 +72,19 @@ class ChatService:
             )
             if source_document is None:
                 raise ChatResourceNotFoundError("Document not found")
+            candidates = [source_document]
 
         document = None
         if source_document is not None:
             if should_use_document(effective_request.message, effective_request.document_id):
+                if vector_enabled():
+                    try:
+                        retrieved = await VectorRag().search(candidates, request.message, owner_id)
+                        if retrieved is not None:
+                            effective_request = request.model_copy(update={"document_id": retrieved.document_id})
+                            return persona, effective_request, retrieved
+                    except Exception:
+                        logging.getLogger(__name__).warning("Vector search failed; using lexical RAG", exc_info=True)
                 document = self.context_selector.select(
                     source_document, effective_request.message
                 )

@@ -114,6 +114,9 @@ class PostgresDocumentRepository:
             )
             await session.commit()
 
+        from app.services.vector_rag import index_after_save
+        await index_after_save(document.document_id, owner_id)
+
     async def get(self, document_id: UUID, owner_id: UUID) -> DocumentParseResponse | None:
         async with get_session_factory()() as session:
             row = await session.scalar(

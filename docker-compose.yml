@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.2-pg16-bookworm
     container_name: metaverse-postgres
     environment:
       POSTGRES_DB: qwendb
@@ -9,7 +9,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_vector_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U qwen -d qwendb"]
       interval: 5s
@@ -36,4 +36,5 @@ services:
 
 volumes:
   postgres_data:
+  postgres_vector_data:
   minio_data:
