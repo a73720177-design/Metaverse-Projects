@@ -21,6 +21,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
 OLLAMA_REVIEW_MODEL = os.getenv("OLLAMA_REVIEW_MODEL", "qwen3:8b").strip()
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
+OLLAMA_EMBED_BATCH = int(os.getenv("OLLAMA_EMBED_BATCH", "32"))
 
 # 응답 생성이 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다 (초 단위)
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
@@ -206,7 +207,12 @@ def stream_llm(
 
 
 def check_ollama_health() -> bool:
-    """Configured provider health check. Kept name for API compatibility."""
+    """Configured provider health check. Kept name for API compatibility.
+
+    For Ollama this also confirms the configured embedding model has been
+    pulled (checked via /api/tags), since /api/v1/embeddings silently fails
+    otherwise.
+    """
     try:
         if _provider() == "vllm":
             response = requests.get(
@@ -216,23 +222,37 @@ def check_ollama_health() -> bool:
             )
             return response.ok
         response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
-        return response.ok
-    except (requests.RequestException, LLMError):
+        if not response.ok:
+            return False
+        available = {
+            str(model.get("name", "")).split(":")[0]
+            for model in response.json().get("models", [])
+        }
+        return OLLAMA_EMBEDDING_MODEL.split(":")[0] in available
+    except (requests.RequestException, LLMError, ValueError):
         return False
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Create retrieval vectors with the configured bge-m3 embedding model."""
-    try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/embed",
-            json={"model": OLLAMA_EMBEDDING_MODEL, "input": texts},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        embeddings = response.json().get("embeddings")
-        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
-            raise ValueError("invalid embedding response")
-        return embeddings
-    except (requests.RequestException, ValueError) as exc:
-        raise LLMError("임베딩 모델 호출 실패") from exc
+    """Create retrieval vectors with the configured embedding model.
+
+    Requests are chunked to OLLAMA_EMBED_BATCH items so a large indexing job
+    doesn't send one oversized call to Ollama; batch order is preserved.
+    """
+    embeddings: list[list[float]] = []
+    for start in range(0, len(texts), OLLAMA_EMBED_BATCH):
+        batch = texts[start : start + OLLAMA_EMBED_BATCH]
+        try:
+            response = requests.post(
+                f"{OLLAMA_HOST}/api/embed",
+                json={"model": OLLAMA_EMBEDDING_MODEL, "input": batch},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            batch_embeddings = response.json().get("embeddings")
+            if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch):
+                raise ValueError("invalid embedding response")
+        except (requests.RequestException, ValueError) as exc:
+            raise LLMError("임베딩 모델 호출 실패") from exc
+        embeddings.extend(batch_embeddings)
+    return embeddings

@@ -1,10 +1,12 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import get_embedding_dimension
 from app.db.database import Base
 
 
@@ -97,6 +99,31 @@ class DocumentChunkTable(Base):
     metadata_json: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DocumentEmbeddingTable(Base):
+    __tablename__ = "document_embeddings"
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_document_embeddings_index"),
+        Index("ix_document_embeddings_document_id", "document_id"),
+    )
+
+    embedding_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_index: Mapped[int] = mapped_column(nullable=False)
+    section_index: Mapped[int] = mapped_column(nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(get_embedding_dimension()), nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

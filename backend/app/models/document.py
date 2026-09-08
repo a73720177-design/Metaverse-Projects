@@ -21,6 +21,20 @@ class DocumentParseResponse(BaseModel):
     full_text: str
 
 
+class EmbeddedChunk(BaseModel):
+    chunk_index: int = Field(ge=0)
+    section_index: int = Field(ge=1)
+    content: str
+    embedding: list[float]
+
+
+class ScoredChunk(BaseModel):
+    chunk_index: int = Field(ge=0)
+    section_index: int = Field(ge=1)
+    content: str
+    score: float
+
+
 class DocumentListItem(BaseModel):
     document_id: UUID
     filename: str

@@ -33,9 +33,10 @@ def test_greeting_does_not_require_document_context() -> None:
     assert should_use_document("안녕", None) is False
 
 
-def test_selector_limits_and_prioritizes_relevant_chunks() -> None:
+@pytest.mark.asyncio
+async def test_selector_limits_and_prioritizes_relevant_chunks() -> None:
     selector = DocumentContextSelector(chunk_size=300, overlap=20, max_chunks=2)
-    selected = selector.select(_document(), "매출 성장률과 고객 수는?")
+    selected = await selector.select(_document(), "매출 성장률과 고객 수는?")
 
     assert len(selected.sections) == 2
     assert all(section.index == 2 for section in selected.sections)
@@ -43,31 +44,34 @@ def test_selector_limits_and_prioritizes_relevant_chunks() -> None:
     assert len(selected.full_text) < len(_document().full_text)
 
 
-def test_selector_reuses_cached_chunks() -> None:
+@pytest.mark.asyncio
+async def test_selector_reuses_cached_chunks() -> None:
     selector = DocumentContextSelector()
     document = _document()
-    selector.select(document, "프로젝트 배경")
+    await selector.select(document, "프로젝트 배경")
     cached = selector._cache[DOCUMENT_ID][1]
-    selector.select(document, "개발 일정")
+    await selector.select(document, "개발 일정")
     assert selector._cache[DOCUMENT_ID][1] is cached
 
 
-def test_selector_falls_back_to_opening_chunks_when_query_has_no_match() -> None:
+@pytest.mark.asyncio
+async def test_selector_falls_back_to_opening_chunks_when_query_has_no_match() -> None:
     selector = DocumentContextSelector(chunk_size=300, overlap=20, max_chunks=1)
-    selected = selector.select(_document(), "전혀없는검색어")
+    selected = await selector.select(_document(), "전혀없는검색어")
 
     assert len(selected.sections) == 1
     assert selected.sections[0].index == 1
 
 
-def test_selector_respects_configured_context_character_limit() -> None:
+@pytest.mark.asyncio
+async def test_selector_respects_configured_context_character_limit() -> None:
     selector = DocumentContextSelector(
         chunk_size=300,
         overlap=20,
         max_chunks=3,
         max_context_chars=120,
     )
-    selected = selector.select(_document(), "매출 성장률")
+    selected = await selector.select(_document(), "매출 성장률")
 
     assert 0 < len(selected.full_text) <= 120
     assert selected.full_text == "\n\n".join(

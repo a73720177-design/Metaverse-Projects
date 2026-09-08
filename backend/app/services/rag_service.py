@@ -1,10 +1,14 @@
 
 import re
 from collections import OrderedDict
+from typing import Protocol
 from uuid import UUID
 
-from app.config import get_rag_max_context_chars
+from app.config import get_rag_max_context_chars, get_retrieval_candidate_multiplier
+from app.integrations.llm.contracts import EmbeddingGenerator, EmbeddingGeneratorError
 from app.models.document import DocumentParseResponse, DocumentSection
+from app.repositories.document_repository import DocumentRepository
+from app.services.chunking import DocumentChunk, split_document
 
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
@@ -56,20 +60,12 @@ class DocumentContextSelector:
         return f"{len(document.full_text)}:{hash(document.full_text)}"
 
     def _split(self, document: DocumentParseResponse) -> list[DocumentSection]:
-        chunks: list[DocumentSection] = []
-        source = document.sections or [DocumentSection(index=1, text=document.full_text)]
-        for section in source:
-            text = section.text.strip()
-            if not text:
-                continue
-            start = 0
-            while start < len(text):
-                end = min(start + self.chunk_size, len(text))
-                chunks.append(DocumentSection(index=section.index, text=text[start:end]))
-                if end == len(text):
-                    break
-                start = end - self.overlap
-        return chunks
+        return [
+            DocumentSection(index=chunk.section_index, text=chunk.text)
+            for chunk in split_document(
+                document, chunk_size=self.chunk_size, overlap=self.overlap
+            )
+        ]
 
     def _chunks(self, document: DocumentParseResponse) -> list[DocumentSection]:
         fingerprint = self._fingerprint(document)
@@ -84,7 +80,7 @@ class DocumentContextSelector:
             self._cache.popitem(last=False)
         return chunks
 
-    def select(self, document: DocumentParseResponse, query: str) -> DocumentParseResponse:
+    async def select(self, document: DocumentParseResponse, query: str) -> DocumentParseResponse:
         query_terms = set(_TOKEN_RE.findall(query.lower()))
         chunks = self._chunks(document)
 
@@ -123,7 +119,7 @@ class DocumentContextSelector:
         )
         return document.model_copy(update={"sections": selected, "full_text": context})
 
-    def relevance_score(self, document: DocumentParseResponse, query: str) -> int:
+    async def relevance_score(self, document: DocumentParseResponse, query: str) -> int:
         """Return a cheap cross-document score used for an agent's defaults."""
         query_terms = set(_TOKEN_RE.findall(query.lower()))
         return max(
@@ -133,3 +129,141 @@ class DocumentContextSelector:
             ),
             default=0,
         )
+
+
+class ContextSelector(Protocol):
+    """Duck-typed interface ChatService relies on, shared by both selectors."""
+
+    max_context_chars: int
+
+    async def select(self, document: DocumentParseResponse, query: str) -> DocumentParseResponse: ...
+
+    async def relevance_score(self, document: DocumentParseResponse, query: str) -> int: ...
+
+
+class HybridContextSelector:
+    """Combines lexical keyword matching with pgvector cosine search via RRF.
+
+    Falls back to plain lexical selection whenever the document has not been
+    indexed yet or the embedding call fails, so a broken/slow embedding path
+    never breaks chat.
+    """
+
+    def __init__(
+        self,
+        *,
+        embedding_generator: EmbeddingGenerator,
+        document_repository: DocumentRepository,
+        chunk_size: int = 700,
+        overlap: int = 100,
+        max_chunks: int = 3,
+        max_context_chars: int | None = None,
+        candidate_multiplier: int | None = None,
+        rrf_k: int = 60,
+        lexical_selector: DocumentContextSelector | None = None,
+    ) -> None:
+        if max_context_chars is None:
+            max_context_chars = get_rag_max_context_chars()
+        if candidate_multiplier is None:
+            candidate_multiplier = get_retrieval_candidate_multiplier()
+        self.embedding_generator = embedding_generator
+        self.document_repository = document_repository
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+        self.max_chunks = max_chunks
+        self.max_context_chars = max_context_chars
+        self.candidate_multiplier = candidate_multiplier
+        self.rrf_k = rrf_k
+        self.lexical_selector = lexical_selector or DocumentContextSelector(
+            chunk_size=chunk_size,
+            overlap=overlap,
+            max_chunks=max_chunks,
+            max_context_chars=max_context_chars,
+        )
+
+    async def _fuse_ranked_chunks(
+        self, document: DocumentParseResponse, query: str
+    ) -> list[DocumentChunk] | None:
+        if not await self.document_repository.has_embeddings(document.document_id):
+            return None
+        try:
+            query_vector = (await self.embedding_generator.embed([query]))[0]
+        except EmbeddingGeneratorError:
+            return None
+
+        lexical_chunks = split_document(
+            document, chunk_size=self.chunk_size, overlap=self.overlap
+        )
+        limit = self.max_chunks * self.candidate_multiplier
+        semantic = await self.document_repository.search_chunks(
+            document.document_id, query_vector, limit
+        )
+        if not semantic:
+            return None
+
+        query_terms = set(_TOKEN_RE.findall(query.lower()))
+        lexical_ranked = sorted(
+            lexical_chunks,
+            key=lambda chunk: (
+                len(query_terms & set(_TOKEN_RE.findall(chunk.text.lower()))),
+                -chunk.chunk_index,
+            ),
+            reverse=True,
+        )
+        lexical_rank = {chunk.chunk_index: rank for rank, chunk in enumerate(lexical_ranked, start=1)}
+        semantic_rank = {row.chunk_index: rank for rank, row in enumerate(semantic, start=1)}
+
+        by_index: dict[int, DocumentChunk] = {chunk.chunk_index: chunk for chunk in lexical_chunks}
+        for row in semantic:
+            by_index.setdefault(
+                row.chunk_index,
+                DocumentChunk(
+                    chunk_index=row.chunk_index,
+                    section_index=row.section_index,
+                    text=row.content,
+                ),
+            )
+
+        worst_lexical_rank = len(lexical_chunks) + 1
+
+        def fused_score(chunk_index: int) -> float:
+            lexical_component = 1 / (self.rrf_k + lexical_rank.get(chunk_index, worst_lexical_rank))
+            semantic_component = (
+                1 / (self.rrf_k + semantic_rank[chunk_index]) if chunk_index in semantic_rank else 0
+            )
+            return lexical_component + semantic_component
+
+        top = sorted(
+            by_index.values(), key=lambda chunk: fused_score(chunk.chunk_index), reverse=True
+        )[: self.max_chunks]
+        top.sort(key=lambda chunk: chunk.section_index)
+        return top
+
+    def _render(
+        self, document: DocumentParseResponse, chunks: list[DocumentChunk]
+    ) -> DocumentParseResponse:
+        selected: list[DocumentSection] = []
+        rendered: list[str] = []
+        used = 0
+        for chunk in chunks:
+            block = f"[구간 {chunk.section_index}]\n{chunk.text}"
+            added = len(block) + (2 if rendered else 0)
+            if used + added > self.max_context_chars:
+                break
+            selected.append(DocumentSection(index=chunk.section_index, text=chunk.text))
+            rendered.append(block)
+            used += added
+        return document.model_copy(
+            update={"sections": selected, "full_text": "\n\n".join(rendered)}
+        )
+
+    async def select(self, document: DocumentParseResponse, query: str) -> DocumentParseResponse:
+        fused = await self._fuse_ranked_chunks(document, query)
+        if fused is None:
+            return await self.lexical_selector.select(document, query)
+        return self._render(document, fused)
+
+    async def relevance_score(self, document: DocumentParseResponse, query: str) -> int:
+        # Cheap cross-document pre-ranking only picks which documents to embed
+        # a query against; keep it lexical so it never triggers embedding calls.
+        return await self.lexical_selector.relevance_score(document, query)

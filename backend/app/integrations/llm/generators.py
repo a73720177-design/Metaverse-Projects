@@ -2,7 +2,12 @@ from typing import Any
 
 from app.config import get_chat_output_token_budgets
 from app.integrations.llm.client import HttpLlmClient, LlmServiceConnectionError, LlmServiceResponseError
-from app.integrations.llm.contracts import ChatGeneratorError, PersonaGeneratorError, ReviewGeneratorError
+from app.integrations.llm.contracts import (
+    ChatGeneratorError,
+    EmbeddingGeneratorError,
+    PersonaGeneratorError,
+    ReviewGeneratorError,
+)
 from app.models.chat import ChatRequest
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
@@ -97,3 +102,18 @@ class HttpChatGenerator:
                 yield token
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ChatGeneratorError(str(exc)) from exc
+
+
+class HttpEmbeddingGenerator:
+    def __init__(self, client: HttpLlmClient) -> None:
+        self.client = client
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            response = await self.client.post_json("/embeddings", {"texts": texts})
+        except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
+            raise EmbeddingGeneratorError(str(exc)) from exc
+        embeddings = response.get("embeddings")
+        if not isinstance(embeddings, list):
+            raise EmbeddingGeneratorError("LLM 서비스가 잘못된 임베딩 응답을 반환했습니다.")
+        return embeddings

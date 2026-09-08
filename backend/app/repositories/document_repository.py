@@ -1,3 +1,4 @@
+import math
 import os
 from datetime import datetime, timezone
 from typing import Protocol
@@ -5,9 +6,15 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, select
 
-from app.models.document import DocumentListItem, DocumentParseResponse
+from app.models.document import DocumentListItem, DocumentParseResponse, EmbeddedChunk, ScoredChunk
 from app.db.database import get_session_factory
-from app.db.tables import DocumentChunkTable, DocumentFileTable, DocumentTable, ReviewTable
+from app.db.tables import (
+    DocumentChunkTable,
+    DocumentEmbeddingTable,
+    DocumentFileTable,
+    DocumentTable,
+    ReviewTable,
+)
 
 
 class DocumentRepository(Protocol):
@@ -21,6 +28,21 @@ class DocumentRepository(Protocol):
         self, document_id: UUID, owner_id: UUID
     ) -> DocumentParseResponse | None: ...
 
+    async def save_embeddings(
+        self, document_id: UUID, model: str, rows: list[EmbeddedChunk]
+    ) -> None:
+        """Replace this document's stored chunk embeddings with `rows`."""
+        ...
+
+    async def has_embeddings(self, document_id: UUID) -> bool: ...
+
+    async def search_chunks(
+        self, document_id: UUID, query_vector: list[float], limit: int
+    ) -> list[ScoredChunk]:
+        """Return the `limit` chunks closest to `query_vector` by cosine similarity,
+        best match first."""
+        ...
+
 
 class InMemoryDocumentRepository:
     """실제 DB 연결 전까지 사용하는 개발용 임시 저장소입니다."""
@@ -29,6 +51,7 @@ class InMemoryDocumentRepository:
         self._documents: dict[
             UUID, tuple[UUID, DocumentParseResponse, datetime]
         ] = {}
+        self._embeddings: dict[UUID, list[EmbeddedChunk]] = {}
 
     async def save(self, document: DocumentParseResponse, owner_id: UUID) -> None:
         self._documents[document.document_id] = (
@@ -65,7 +88,41 @@ class InMemoryDocumentRepository:
         document = await self.get(document_id, owner_id)
         if document is not None:
             self._documents.pop(document_id, None)
+            self._embeddings.pop(document_id, None)
         return document
+
+    async def save_embeddings(
+        self, document_id: UUID, model: str, rows: list[EmbeddedChunk]
+    ) -> None:
+        self._embeddings[document_id] = list(rows)
+
+    async def has_embeddings(self, document_id: UUID) -> bool:
+        return bool(self._embeddings.get(document_id))
+
+    async def search_chunks(
+        self, document_id: UUID, query_vector: list[float], limit: int
+    ) -> list[ScoredChunk]:
+        rows = self._embeddings.get(document_id, [])
+        scored = [
+            ScoredChunk(
+                chunk_index=row.chunk_index,
+                section_index=row.section_index,
+                content=row.content,
+                score=_cosine_similarity(query_vector, row.embedding),
+            )
+            for row in rows
+        ]
+        scored.sort(key=lambda item: item.score, reverse=True)
+        return scored[:limit]
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return dot / (left_norm * right_norm)
 
 
 class PostgresDocumentRepository:
@@ -200,3 +257,58 @@ class PostgresDocumentRepository:
                 return None
             await session.commit()
         return document
+
+    async def save_embeddings(
+        self, document_id: UUID, model: str, rows: list[EmbeddedChunk]
+    ) -> None:
+        async with get_session_factory()() as session:
+            await session.execute(
+                delete(DocumentEmbeddingTable).where(
+                    DocumentEmbeddingTable.document_id == document_id
+                )
+            )
+            session.add_all(
+                DocumentEmbeddingTable(
+                    embedding_id=uuid4(),
+                    document_id=document_id,
+                    chunk_index=row.chunk_index,
+                    section_index=row.section_index,
+                    content=row.content,
+                    embedding=row.embedding,
+                    model=model,
+                )
+                for row in rows
+            )
+            await session.commit()
+
+    async def has_embeddings(self, document_id: UUID) -> bool:
+        async with get_session_factory()() as session:
+            embedding_id = await session.scalar(
+                select(DocumentEmbeddingTable.embedding_id)
+                .where(DocumentEmbeddingTable.document_id == document_id)
+                .limit(1)
+            )
+        return embedding_id is not None
+
+    async def search_chunks(
+        self, document_id: UUID, query_vector: list[float], limit: int
+    ) -> list[ScoredChunk]:
+        distance = DocumentEmbeddingTable.embedding.cosine_distance(query_vector)
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(DocumentEmbeddingTable, distance.label("distance"))
+                    .where(DocumentEmbeddingTable.document_id == document_id)
+                    .order_by(distance.asc())
+                    .limit(limit)
+                )
+            ).all()
+        return [
+            ScoredChunk(
+                chunk_index=row.DocumentEmbeddingTable.chunk_index,
+                section_index=row.DocumentEmbeddingTable.section_index,
+                content=row.DocumentEmbeddingTable.content,
+                score=1 - row.distance,
+            )
+            for row in rows
+        ]

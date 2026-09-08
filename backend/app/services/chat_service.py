@@ -14,7 +14,7 @@ from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
-from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.rag_service import ContextSelector, DocumentContextSelector, should_use_document
 
 
 class ChatServiceError(RuntimeError):
@@ -32,13 +32,13 @@ class ChatService:
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
         chat_repository: ChatRepository,
-        context_selector: DocumentContextSelector | None = None,
+        context_selector: ContextSelector | None = None,
     ) -> None:
         self.generator = generator
         self.agent_repository = agent_repository
         self.document_repository = document_repository
         self.chat_repository = chat_repository
-        self.context_selector = context_selector or DocumentContextSelector()
+        self.context_selector: ContextSelector = context_selector or DocumentContextSelector()
 
     async def _resolve_context(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
@@ -67,14 +67,19 @@ class ChatService:
 
         document = None
         if candidates and should_use_document(effective_request.message, effective_request.document_id):
-            ranked = sorted(
-                candidates,
-                key=lambda item: self.context_selector.relevance_score(item, request.message),
-                reverse=True,
-            )[:4]
-            selected_documents = [
+            scores = await asyncio.gather(*(
+                self.context_selector.relevance_score(item, request.message)
+                for item in candidates
+            ))
+            ranked = [
+                item
+                for _, item in sorted(
+                    zip(scores, candidates), key=lambda pair: pair[0], reverse=True
+                )
+            ][:4]
+            selected_documents = await asyncio.gather(*(
                 self.context_selector.select(item, request.message) for item in ranked
-            ]
+            ))
             sections = []
             blocks = []
             used = 0

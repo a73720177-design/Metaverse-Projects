@@ -295,3 +295,64 @@ def test_structured_response_accepts_trailing_model_text(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["role"] == "평가자"
+
+
+def test_embeddings_returns_model_and_dimension(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.embed_texts", lambda texts: [[0.1, 0.2, 0.3] for _ in texts]
+    )
+    response = client.post("/api/v1/embeddings", json={"texts": ["문장 1", "문장 2"]})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dimension"] == 3
+    assert len(body["embeddings"]) == 2
+
+
+def test_embeddings_unavailable_returns_503(monkeypatch):
+    def raise_llm_error(texts):
+        raise LLMError("연결 실패")
+
+    monkeypatch.setattr("app.main.embed_texts", raise_llm_error)
+    response = client.post("/api/v1/embeddings", json={"texts": ["문장"]})
+    assert response.status_code == 503
+
+
+def test_embeddings_inconsistent_dimension_returns_502(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.embed_texts", lambda texts: [[0.1, 0.2], [0.1, 0.2, 0.3]]
+    )
+    response = client.post("/api/v1/embeddings", json={"texts": ["문장 1", "문장 2"]})
+    assert response.status_code == 502
+
+
+def test_embeddings_rejects_oversized_item():
+    response = client.post("/api/v1/embeddings", json={"texts": ["a" * 8001]})
+    assert response.status_code == 422
+
+
+def test_ollama_health_fails_when_embedding_model_not_pulled(monkeypatch):
+    class FakeResponse:
+        ok = True
+
+        @staticmethod
+        def json():
+            return {"models": [{"name": "qwen3:4b"}]}
+
+    monkeypatch.setattr("app.llm_client.requests.get", lambda *a, **k: FakeResponse())
+    from app.llm_client import check_ollama_health
+
+    assert check_ollama_health() is False
+
+
+def test_ollama_health_ok_when_embedding_model_pulled(monkeypatch):
+    class FakeResponse:
+        ok = True
+
+        @staticmethod
+        def json():
+            return {"models": [{"name": "bge-m3:latest"}]}
+
+    monkeypatch.setattr("app.llm_client.requests.get", lambda *a, **k: FakeResponse())
+    from app.llm_client import check_ollama_health
+
+    assert check_ollama_health() is True
