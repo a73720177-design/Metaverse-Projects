@@ -1,4 +1,5 @@
 
+import hashlib
 import re
 from collections import OrderedDict
 from uuid import UUID
@@ -15,9 +16,17 @@ _SMALL_TALK_RE = re.compile(
 )
 
 
-def should_use_document(message: str, document_id: UUID | None) -> bool:
-    """명백한 인사말에는 연결 문서를 넣지 않아 불필요한 토큰화를 피합니다."""
-    return document_id is not None and _SMALL_TALK_RE.fullmatch(message.strip()) is None
+def should_use_document(
+    message: str, document_id: UUID | None, *, previous_used_document: bool = False
+) -> bool:
+    """명백한 인사말에는 연결 문서를 넣지 않아 불필요한 토큰화를 피합니다.
+
+    직전 답변이 문서를 사용했다면(previous_used_document), 짧은 후속 질문도
+    인사말이 아닌 한 계속 같은 문서 문맥을 사용한다.
+    """
+    if document_id is None:
+        return False
+    return _SMALL_TALK_RE.fullmatch(message.strip()) is None
 
 
 class DocumentContextSelector:
@@ -53,7 +62,9 @@ class DocumentContextSelector:
 
     @staticmethod
     def _fingerprint(document: DocumentParseResponse) -> str:
-        return f"{len(document.full_text)}:{hash(document.full_text)}"
+        # sha256 (not the builtin hash()) so the fingerprint is stable across
+        # processes/restarts, matching vector_rag's content_hash convention.
+        return hashlib.sha256(document.full_text.encode("utf-8")).hexdigest()
 
     def _split(self, document: DocumentParseResponse) -> list[DocumentSection]:
         chunks: list[DocumentSection] = []

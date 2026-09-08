@@ -9,10 +9,12 @@ from app.integrations.llm.contracts import (
     ChatGeneratorError,
     PersonaGeneratorError,
     ReviewGeneratorError,
+    SummaryGeneratorError,
 )
-from app.models.chat import ChatRequest
+from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
+from app.models.summary import SummaryStyle
 
 
 def _validate_concepts(body: dict[str, Any]) -> list[dict[str, str]]:
@@ -112,7 +114,22 @@ class UnsupportedLegacyChatGenerator:
         persona: PersonaProfile,
         request: ChatRequest,
         document: DocumentParseResponse | None,
+        history: list[ChatTurn],
     ) -> dict[str, Any]:
         raise ChatGeneratorError(
             "현재 LLM 서비스는 채팅 API를 제공하지 않습니다. LLM /api/v1/chat 구현이 필요합니다."
+        )
+
+
+class UnsupportedLegacySummaryGenerator:
+    """현재 LLM 팀 API에 요약 기능이 없음을 명시적으로 알립니다."""
+
+    async def generate(
+        self,
+        document: DocumentParseResponse,
+        style: SummaryStyle,
+        persona: PersonaProfile | None,
+    ) -> dict[str, Any]:
+        raise SummaryGeneratorError(
+            "현재 LLM 서비스는 요약 API를 제공하지 않습니다. LLM /api/v1/summaries 구현이 필요합니다."
         )

@@ -1,9 +1,10 @@
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from app.models.chat import ChatRequest
+from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
+from app.models.summary import SummaryStyle
 
 
 class PersonaGeneratorError(RuntimeError):
@@ -15,6 +16,10 @@ class ReviewGeneratorError(RuntimeError):
 
 
 class ChatGeneratorError(RuntimeError):
+    pass
+
+
+class SummaryGeneratorError(RuntimeError):
     pass
 
 
@@ -37,6 +42,7 @@ class ChatGenerator(Protocol):
         persona: PersonaProfile,
         request: ChatRequest,
         document: DocumentParseResponse | None,
+        history: list[ChatTurn],
     ) -> dict[str, Any]: ...
 
     def stream(
@@ -44,4 +50,14 @@ class ChatGenerator(Protocol):
         persona: PersonaProfile,
         request: ChatRequest,
         document: DocumentParseResponse | None,
+        history: list[ChatTurn],
     ) -> AsyncIterator[str]: ...
+
+
+class SummaryGenerator(Protocol):
+    async def generate(
+        self,
+        document: DocumentParseResponse,
+        style: SummaryStyle,
+        persona: PersonaProfile | None,
+    ) -> dict[str, Any]: ...

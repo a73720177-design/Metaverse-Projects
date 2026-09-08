@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { createAgent, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
+import { createAgent, createSummary, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
 
 const ACCEPTED = [
   '.pdf',
@@ -207,6 +207,50 @@ function ChatPanel({ result, token, documentIds, chat, update }) {
   </article>
 }
 
+const SUMMARY_STYLES = [
+  { value: 'brief', label: '간단히' },
+  { value: 'detailed', label: '자세히' },
+  { value: 'outline', label: '개요만' },
+]
+
+function DocumentSummaryPanel({ doc, token }) {
+  const [open, setOpen] = useState(false)
+  const [style, setStyle] = useState('brief')
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function load(targetStyle, refresh = false) {
+    setBusy(true); setError('')
+    try { setData(await createSummary(doc.document_id, { style: targetStyle, refresh }, token)) } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && !data) load(style)
+  }
+  function changeStyle(nextStyle) {
+    setStyle(nextStyle)
+    load(nextStyle)
+  }
+  return <div className="summary-panel">
+    <button type="button" className="text-btn" onClick={toggle}>{open ? '요약 접기 ▲' : '요약 보기 ▼'}</button>
+    {open && <div className="summary-body">
+      <div className="summary-style-row">
+        {SUMMARY_STYLES.map((s) => <button key={s.value} type="button" className={style === s.value ? 'active' : ''} disabled={busy} onClick={() => changeStyle(s.value)}>{s.label}</button>)}
+        <button type="button" disabled={busy} onClick={() => load(style, true)}>다시 생성</button>
+      </div>
+      {busy && <Spinner label="요약 생성 중" />}
+      {error && <p className="form-error">{error}</p>}
+      {data && !busy && <>
+        <p className="summary-text">{data.summary}</p>
+        {data.key_topics?.length > 0 && <ul className="summary-topics">{data.key_topics.map((topic, i) => <li key={i}><strong>{topic.topic}</strong> — {topic.description}</li>)}</ul>}
+        {data.outline?.length > 0 && <ol className="summary-outline">{data.outline.map((item, i) => <li key={i}>{item}</li>)}</ol>}
+      </>}
+    </div>}
+  </div>
+}
+
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('authToken'))
   const [user, setUser] = useState(null)
@@ -283,7 +327,7 @@ export default function App() {
       <section className="generate-bar"><div><strong>예상 질문 준비</strong><p>발표 자료 {projectIds.length}개 · 질문자 {selected.length}명</p></div><button className="primary-btn" disabled={generating || !projectIds.length || !selected.length} onClick={makeQuestions}>{generating ? <Spinner label="페르소나별 질문 생성 중" /> : '예상 질문 생성'}</button></section>
       {error && <p className="global-error">{error}</p>}
       {results.length > 0 && <section><div className="section-title"><span className="eyebrow">PRACTICE</span><h2>페르소나별 답변 연습</h2><p>질문을 고른 뒤 답변하세요. 각 채팅창은 독립적으로 동작합니다.</p></div><div className={`chat-grid panels-${results.length}`}>{results.map((r) => <ChatPanel key={r.persona_id} result={r} token={token} documentIds={projectIds} chat={chats[r.persona_id]} update={(fn) => setChats((all) => ({ ...all, [r.persona_id]: fn(all[r.persona_id]) }))} />)}</div></section>}
-      <section className="materials-overview"><div className="section-title"><span className="eyebrow">SOURCE MAP</span><h2>자료 사용 위치</h2><p>발표·페르소나·예상 질문·채팅에 사용된 위치를 표시합니다.</p></div><div className="materials-table">{documents.map((d) => { const linked = personas.filter((p) => p.documentIds.includes(d.document_id)); const used = results.some((r) => r.questions.some((q) => q.sources?.some((s) => s.document_id === d.document_id))); const chatUsed = Object.values(chats).some((chat) => Object.values(chat.conversations || {}).some((conversation) => (conversation.messages || []).some((message) => (message.sources || []).some((source) => source.document_id === d.document_id)))); return <div className="material-card" key={d.document_id}><div><strong>{d.filename}</strong><small>{d.document_type?.toUpperCase()} · {d.text_length || d.full_text?.length || 0}자</small></div><div className="usage-list">{projectIds.includes(d.document_id) && <em className="usage-badge user">사용자 발표 자료</em>}{linked.map((p) => <em className="usage-badge persona" key={p.id}>{p.name} 자료</em>)}{used && <em className="usage-badge question">예상 질문 사용</em>}{chatUsed && <em className="usage-badge chat">채팅 사용</em>}{!projectIds.includes(d.document_id) && !linked.length && <em className="usage-badge unused">미사용</em>}</div><button className="text-btn" onClick={() => setProjectIds((x) => x.includes(d.document_id) ? x.filter((id) => id !== d.document_id) : [...x, d.document_id])}>{projectIds.includes(d.document_id) ? '발표에서 제외' : '발표에 사용'}</button></div> })}</div></section>
+      <section className="materials-overview"><div className="section-title"><span className="eyebrow">SOURCE MAP</span><h2>자료 사용 위치</h2><p>발표·페르소나·예상 질문·채팅에 사용된 위치를 표시합니다.</p></div><div className="materials-table">{documents.map((d) => { const linked = personas.filter((p) => p.documentIds.includes(d.document_id)); const used = results.some((r) => r.questions.some((q) => q.sources?.some((s) => s.document_id === d.document_id))); const chatUsed = Object.values(chats).some((chat) => Object.values(chat.conversations || {}).some((conversation) => (conversation.messages || []).some((message) => (message.sources || []).some((source) => source.document_id === d.document_id)))); return <div className="material-card" key={d.document_id}><div><strong>{d.filename}</strong><small>{d.document_type?.toUpperCase()} · {d.text_length || d.full_text?.length || 0}자</small></div><div className="usage-list">{projectIds.includes(d.document_id) && <em className="usage-badge user">사용자 발표 자료</em>}{linked.map((p) => <em className="usage-badge persona" key={p.id}>{p.name} 자료</em>)}{used && <em className="usage-badge question">예상 질문 사용</em>}{chatUsed && <em className="usage-badge chat">채팅 사용</em>}{!projectIds.includes(d.document_id) && !linked.length && <em className="usage-badge unused">미사용</em>}</div><button className="text-btn" onClick={() => setProjectIds((x) => x.includes(d.document_id) ? x.filter((id) => id !== d.document_id) : [...x, d.document_id])}>{projectIds.includes(d.document_id) ? '발표에서 제외' : '발표에 사용'}</button><DocumentSummaryPanel doc={d} token={token} /></div> })}</div></section>
     </main>
   </div>
 }

@@ -37,8 +37,10 @@ Ollama :11434
 - 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
 - `RAG_MODE=vector`(pgvector) 시 Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 시맨틱 검색. 기본값 `lexical`은 기존 키워드 검색만 사용
+- 문서 요약·핵심 주제 API(`brief`/`detailed`/`outline` 스타일, 선택적 페르소나 관점). 동일 (문서, 페르소나, 스타일) 조합은 캐시된 결과를 재사용하고 `refresh=true`일 때만 재생성. LLM Service는 긴 문서를 map-reduce로 나눠 처리
+- `GROUNDING_MODE`(`off`/`annotate`/`strict`)로 Chat 답변-근거 검증. LLM을 다시 부르지 않고 lexical 포함률 + 애매한 문장만 배치 임베딩 재확인으로 `grounding` 필드를 채움. 기본값 `off`
 
-`backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. `009_add_document_chunk_embeddings.sql`은 `pgvector` 확장과 `document_chunks.embedding`/`embedding_model`/`embedded_at`/`content_hash` 컬럼을 추가합니다(테이블의 기존 의미는 바꾸지 않습니다). `docker-compose.yml`의 postgres 이미지는 `pgvector/pgvector:pg16`을 사용합니다. Migration을 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
+`backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. `009_add_document_chunk_embeddings.sql`은 `pgvector` 확장과 `document_chunks.embedding`/`embedding_model`/`embedded_at`/`content_hash` 컬럼을 추가합니다(테이블의 기존 의미는 바꾸지 않습니다). `010_add_summaries.sql`은 문서 요약을 저장하는 `summaries` 테이블을 추가합니다. `docker-compose.yml`의 postgres 이미지는 `pgvector/pgvector:pg16`을 사용합니다. Migration을 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
 
 ## 빠른 실행
 
@@ -124,6 +126,7 @@ python integration\check_services.py
 | Persona 휴지통 | `GET /agents/trash`, `POST /agents/trash/{agent_id}/restore`, `DELETE /agents/trash/{agent_id}` |
 | 문서 | `POST /documents/parse`, `GET /documents`, `GET/DELETE /documents/{document_id}` |
 | Review | `POST /agents/{agent_id}/reviews`, `GET /reviews/{review_id}` |
+| 문서 요약 | `POST /documents/{document_id}/summary`, `GET /documents/{document_id}/summary` |
 | Chat | `POST /agents/{agent_id}/chat`, `POST /agents/{agent_id}/chat/stream`, `GET /chats` |
 | Chat 휴지통 | `DELETE /chats/{message_id}`, `GET /trash/chats`, 복원·완전 삭제 |
 

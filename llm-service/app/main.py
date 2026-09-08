@@ -41,6 +41,15 @@ from app.prompts import (
     PERSONA_GENERATION_PROMPT,
     QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
+    SUMMARY_GENERATION_PROMPT,
+)
+from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
+from app.summary_pipeline import (
+    generate_summary_map_reduce,
+    persona_block,
+    should_use_map_reduce as should_use_summary_map_reduce,
+    style_guidance,
+    style_max_tokens,
 )
 from app.schemas import (
     ConceptExtractionRequest,
@@ -51,6 +60,7 @@ from app.schemas import (
 from app.schemas_v1 import (
     ChatGenerationRequest,
     ChatGenerationResponse,
+    ChatTurn,
     PersonaGenerationRequest,
     PersonaGenerationResponse,
     PersonaProfileIn,
@@ -58,6 +68,8 @@ from app.schemas_v1 import (
     ReviewGenerationResponse,
     EmbeddingRequest,
     EmbeddingResponse,
+    SummaryGenerationRequest,
+    SummaryGenerationResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,6 +190,21 @@ def _build_review_prompt(request: ReviewGenerationRequest) -> str:
     )
 
 
+def _history_block(history: list[ChatTurn]) -> str:
+    if not history:
+        return "(이전 대화 없음)"
+    max_chars = _positive_env_int("CHAT_HISTORY_MAX_CHARS", 2000)
+    lines = [
+        f"{'사용자' if turn.role == 'user' else '평가자'}: {turn.content}"
+        for turn in history
+    ]
+    # Oldest turns are least relevant to the current question, so drop from
+    # the front first when the block would blow the token budget.
+    while lines and sum(len(line) + 1 for line in lines) > max_chars:
+        lines.pop(0)
+    return "\n".join(lines) if lines else "(이전 대화 없음)"
+
+
 def _build_chat_prompt(request: ChatGenerationRequest) -> str:
     document_block = (
         f"파일명: {request.document.filename}\n{request.document.full_text}"
@@ -187,6 +214,7 @@ def _build_chat_prompt(request: ChatGenerationRequest) -> str:
     return CHAT_PROMPT.format(
         persona_json=_persona_json(request.persona),
         document_block=document_block,
+        history_block=_history_block(request.history),
         message=request.message,
         answer_guidance=_answer_guidance(request.max_output_tokens),
     )
@@ -232,7 +260,10 @@ def _is_off_topic(request: ChatGenerationRequest) -> bool:
     if request.document is not None:
         if has_document_topic:
             return False
-        if any(marker in message for marker in _FREE_CHAT_MARKERS):
+        # Once a conversation is under way, a bare greeting/thanks marker in a
+        # follow-up ("고마워, 근데 그거 무슨 뜻이야?") should not bounce it out
+        # of the grounded document prompt.
+        if not request.history and any(marker in message for marker in _FREE_CHAT_MARKERS):
             return True
         # With selected context, ambiguous questions should stay grounded.
         return False
@@ -246,6 +277,7 @@ def _build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
         return _build_chat_prompt(request)
     return FREE_CHAT_PROMPT.format(
         persona_json=_persona_json(request.persona),
+        history_block=_history_block(request.history),
         message=request.message,
         answer_guidance=_answer_guidance(request.max_output_tokens),
     )
@@ -318,9 +350,42 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
+    if should_use_map_reduce(request.document.full_text):
+        return generate_review_map_reduce(
+            persona=request.persona,
+            document=request.document,
+            instructions=request.instructions,
+            generate=_generate,
+            model=OLLAMA_REVIEW_MODEL,
+        )
     return _generate(
         _build_review_prompt(request), ReviewGenerationResponse,
         max_tokens=1024, model=OLLAMA_REVIEW_MODEL,
+    )
+
+
+def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
+    return SUMMARY_GENERATION_PROMPT.format(
+        persona_block=persona_block(request.persona),
+        filename=request.document.filename,
+        full_text=request.document.full_text,
+        style_guidance=style_guidance(request.style),
+    )
+
+
+@v1_router.post("/summaries", response_model=SummaryGenerationResponse)
+def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResponse:
+    if should_use_summary_map_reduce(request.document.full_text):
+        return generate_summary_map_reduce(
+            document=request.document,
+            style=request.style,
+            persona=request.persona,
+            generate=_generate,
+            model=OLLAMA_REVIEW_MODEL,
+        )
+    return _generate(
+        _build_summary_prompt(request), SummaryGenerationResponse,
+        max_tokens=style_max_tokens(request.style), model=OLLAMA_REVIEW_MODEL,
     )
 
 

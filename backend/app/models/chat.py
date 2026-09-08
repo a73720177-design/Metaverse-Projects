@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,13 @@ class ResponseDetail(StrEnum):
     CONCISE = "concise"
     STANDARD = "standard"
     DETAILED = "detailed"
+
+
+class ChatTurn(BaseModel):
+    """LLM Service에 전달하는 과거 대화 한 마디."""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class ChatRequest(BaseModel):
@@ -34,11 +42,20 @@ class ChatRequest(BaseModel):
     )
 
 
+class Grounding(BaseModel):
+    """답변 문장이 실제로 첨부 문서 근거에 기반하는지 검증한 결과."""
+
+    score: float = Field(ge=0, le=1)
+    unsupported: list[str] = Field(default_factory=list, max_length=10)
+    checked: bool = True
+
+
 class ChatResponse(BaseModel):
     message_id: UUID = Field(default_factory=uuid4)
     agent_id: UUID
     answer: str
     sources: list[ReviewSource] = Field(default_factory=list)
+    grounding: Grounding | None = None
 
 
 class ChatTiming(BaseModel):
