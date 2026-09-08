@@ -9,6 +9,7 @@ Schema로 강제하는 것(response_schema), 연결 오류 처리만 담당한�
 import os
 import json
 from collections.abc import Iterator
+from threading import BoundedSemaphore
 
 import requests
 from dotenv import load_dotenv
@@ -26,6 +27,12 @@ OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 OLLAMA_MAX_OUTPUT_TOKENS = int(os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", "1024"))
+LLM_MAX_CONCURRENT_GENERATIONS = int(
+    os.getenv("LLM_MAX_CONCURRENT_GENERATIONS", "3")
+)
+if LLM_MAX_CONCURRENT_GENERATIONS < 1:
+    raise RuntimeError("LLM_MAX_CONCURRENT_GENERATIONS must be at least 1")
+_GENERATION_SLOTS = BoundedSemaphore(LLM_MAX_CONCURRENT_GENERATIONS)
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8002").rstrip("/")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "").strip()
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "").strip()
@@ -85,14 +92,15 @@ def call_llm(
         if response_schema is not None:
             payload["structured_outputs"] = {"json": response_schema}
         try:
-            response = requests.post(
-                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers=_vllm_headers(),
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"] or ""
+            with _GENERATION_SLOTS:
+                response = requests.post(
+                    f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
+                    json=payload,
+                    headers=_vllm_headers(),
+                    timeout=REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                return response.json()["choices"][0]["message"]["content"] or ""
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError("vLLM 호출 실패") from exc
 
@@ -113,12 +121,13 @@ def call_llm(
         payload["format"] = response_schema
 
     try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/generate",
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
+        with _GENERATION_SLOTS:
+            response = requests.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
     except requests.RequestException as e:
         raise LLMError(
             f"Ollama 서버 호출 실패 (host={OLLAMA_HOST}, model={model or OLLAMA_MODEL}): {e}"
@@ -141,26 +150,27 @@ def stream_llm(
             "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
         }
         try:
-            with requests.post(
-                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers=_vllm_headers(),
-                timeout=REQUEST_TIMEOUT,
-                stream=True,
-            ) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    decoded = line.decode() if isinstance(line, bytes) else line
-                    if not decoded.startswith("data:"):
-                        continue
-                    data = decoded.removeprefix("data:").strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)["choices"][0]["delta"].get("content", "")
-                    if chunk:
-                        yield chunk
+            with _GENERATION_SLOTS:
+                with requests.post(
+                    f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions",
+                    json=payload,
+                    headers=_vllm_headers(),
+                    timeout=REQUEST_TIMEOUT,
+                    stream=True,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        decoded = line.decode() if isinstance(line, bytes) else line
+                        if not decoded.startswith("data:"):
+                            continue
+                        data = decoded.removeprefix("data:").strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)["choices"][0]["delta"].get("content", "")
+                        if chunk:
+                            yield chunk
             return
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError("vLLM 스트리밍 호출 실패") from exc
@@ -179,28 +189,29 @@ def stream_llm(
         },
     }
     try:
-        with requests.post(
-            f"{OLLAMA_HOST}/api/generate",
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-            stream=True,
-        ) as response:
-            response.raise_for_status()
-            emitted = ""
-            for line in response.iter_lines():
-                if not line:
-                    continue
-                chunk = json.loads(line).get("response", "")
-                if chunk:
-                    remaining_lines = 30 - emitted.count("\n")
-                    if remaining_lines <= 0:
-                        break
-                    if chunk.count("\n") >= remaining_lines:
-                        chunk = "\n".join(chunk.split("\n")[:remaining_lines])
-                    emitted += chunk
-                    yield chunk
-                    if emitted.count("\n") >= 30:
-                        break
+        with _GENERATION_SLOTS:
+            with requests.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+                emitted = ""
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line).get("response", "")
+                    if chunk:
+                        remaining_lines = 30 - emitted.count("\n")
+                        if remaining_lines <= 0:
+                            break
+                        if chunk.count("\n") >= remaining_lines:
+                            chunk = "\n".join(chunk.split("\n")[:remaining_lines])
+                        emitted += chunk
+                        yield chunk
+                        if emitted.count("\n") >= 30:
+                            break
     except (requests.RequestException, ValueError) as exc:
         raise LLMError("Ollama 스트리밍 호출 실패") from exc
 

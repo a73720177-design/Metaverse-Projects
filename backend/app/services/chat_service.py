@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from time import perf_counter
 from collections.abc import AsyncIterator
 from typing import Any
@@ -15,6 +16,10 @@ from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.vector_rag import VectorRag, vector_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatServiceError(RuntimeError):
@@ -67,6 +72,18 @@ class ChatService:
 
         document = None
         if candidates and should_use_document(effective_request.message, effective_request.document_id):
+            if vector_enabled():
+                try:
+                    document = await VectorRag().select_context(
+                        candidates, request.message, owner_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "Vector search failed; falling back to lexical RAG",
+                        exc_info=True,
+                    )
+                if document is not None:
+                    return persona, effective_request, document
             ranked = sorted(
                 candidates,
                 key=lambda item: self.context_selector.relevance_score(item, request.message),
