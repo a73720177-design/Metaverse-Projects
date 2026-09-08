@@ -327,12 +327,18 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
 @v1_router.post("/embeddings", response_model=EmbeddingResponse)
 def generate_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
     try:
-        return EmbeddingResponse(
-            model=OLLAMA_EMBEDDING_MODEL,
-            embeddings=embed_texts(request.texts),
-        )
+        embeddings = embed_texts(request.texts)
     except LLMError as exc:
         raise HTTPException(status_code=503, detail="임베딩 모델을 사용할 수 없습니다.") from exc
+    dimension = len(embeddings[0]) if embeddings else 0
+    if dimension == 0 or any(len(vector) != dimension for vector in embeddings):
+        logger.error("임베딩 응답의 차원이 일정하지 않음")
+        raise HTTPException(status_code=502, detail="임베딩 응답 형식이 올바르지 않습니다.")
+    return EmbeddingResponse(
+        model=OLLAMA_EMBEDDING_MODEL,
+        dimension=dimension,
+        embeddings=embeddings,
+    )
 
 
 @v1_router.post("/chat", response_model=ChatGenerationResponse)

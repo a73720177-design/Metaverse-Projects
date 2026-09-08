@@ -36,8 +36,9 @@ Ollama :11434
 - LLM legacy 호환 API와 정식 `/api/v1` 계약
 - 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
+- `RAG_MODE=vector`(pgvector) 시 Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 시맨틱 검색. 기본값 `lexical`은 기존 키워드 검색만 사용
 
-`backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. Migration `001`부터 `005`까지 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
+`backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. `009_add_document_chunk_embeddings.sql`은 `pgvector` 확장과 `document_chunks.embedding`/`embedding_model`/`embedded_at`/`content_hash` 컬럼을 추가합니다(테이블의 기존 의미는 바꾸지 않습니다). `docker-compose.yml`의 postgres 이미지는 `pgvector/pgvector:pg16`을 사용합니다. Migration을 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
 
 ## 빠른 실행
 
@@ -48,6 +49,8 @@ Windows PowerShell 기준입니다. Python 가상환경은 서비스별로 분�
 ```powershell
 ollama serve
 ollama pull qwen3:4b
+# RAG_MODE=vector를 쓰려면 임베딩 모델도 미리 pull합니다.
+ollama pull bge-m3
 ```
 
 ### 2. LLM Service

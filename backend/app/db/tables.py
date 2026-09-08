@@ -1,10 +1,12 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import get_embedding_dimension
 from app.db.database import Base
 
 
@@ -97,6 +99,12 @@ class DocumentChunkTable(Base):
     metadata_json: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(get_embedding_dimension()), nullable=True
+    )
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

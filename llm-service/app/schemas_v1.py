@@ -8,6 +8,7 @@ Backend의 backend/app/models/{persona,document,review,chat}.py와 필드가
 """
 
 from enum import StrEnum
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -120,9 +121,12 @@ class ChatGenerationResponse(BaseModel):
 
 
 class EmbeddingRequest(BaseModel):
-    texts: list[str] = Field(min_length=1, max_length=128)
+    texts: list[Annotated[str, Field(min_length=1, max_length=8000)]] = Field(
+        min_length=1, max_length=128
+    )
 
 
 class EmbeddingResponse(BaseModel):
     model: str
+    dimension: int = Field(ge=1)
     embeddings: list[list[float]]
