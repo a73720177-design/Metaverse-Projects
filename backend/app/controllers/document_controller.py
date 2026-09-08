@@ -5,13 +5,9 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import get_max_upload_size_bytes, get_retrieval_mode
+from app.config import get_max_upload_size_bytes
 from app.dependencies import (
-    get_agent_repository,
-    get_current_user,
-    get_document_repository,
-    get_embedding_indexer,
-    get_object_storage,
+    get_agent_repository, get_current_user, get_document_repository, get_object_storage,
 )
 from app.models.document import (
     DocumentDetailResponse, DocumentListItem, DocumentParseResponse,
@@ -20,7 +16,6 @@ from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.agent_repository import AgentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
-from app.services.embedding_service import EmbeddingIndexer
 from app.storage.object_storage import ObjectStorage, ObjectStorageError
 
 router = APIRouter(prefix="/documents", tags=["문서"])
@@ -92,7 +87,6 @@ async def upload_and_parse(
     repository: DocumentRepository = Depends(get_document_repository),
     storage: ObjectStorage = Depends(get_object_storage),
     current_user: UserResponse = Depends(get_current_user),
-    indexer: EmbeddingIndexer = Depends(get_embedding_indexer),
 ) -> DocumentDetailResponse:
     raw_filename = (file.filename or "").replace("\\", "/")
     filename = Path(raw_filename).name
@@ -130,8 +124,6 @@ async def upload_and_parse(
         uploaded = True
         document.saved_path = Path(object_key)
         await repository.save(document, current_user.user_id)
-        if get_retrieval_mode() == "hybrid":
-            indexer.schedule(document)
         return DocumentDetailResponse.from_document(document)
     except HTTPException:
         raise

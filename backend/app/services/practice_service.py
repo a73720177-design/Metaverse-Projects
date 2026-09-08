@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import html
+import logging
 import re
 from uuid import UUID
 
@@ -15,6 +16,10 @@ from app.models.practice import (
 from app.models.review import ReviewSource
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
+from app.services.vector_rag import VectorRag, vector_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 class PracticeResourceNotFoundError(RuntimeError):
@@ -141,6 +146,11 @@ class PracticeService:
                         )
                     )
                     index += 1
+            instructions = (
+                f"예상 질문을 {request.question_count_per_persona}개 생성하세요. "
+                "발표 자료는 검토 대상이고 질문자 참고자료는 평가 관점의 근거입니다. "
+                "두 종류를 혼동하지 말고 질문자가 실제로 물을 법한 질문을 작성하세요."
+            )
             combined = "\n\n".join(blocks)
             # The LLM service performs the final token-aware trim. This first
             # guard prevents an unbounded HTTP payload when many files exist.
@@ -153,11 +163,28 @@ class PracticeService:
                 sections=sections,
                 full_text=combined,
             )
-            instructions = (
-                f"예상 질문을 {request.question_count_per_persona}개 생성하세요. "
-                "발표 자료는 검토 대상이고 질문자 참고자료는 평가 관점의 근거입니다. "
-                "두 종류를 혼동하지 말고 질문자가 실제로 물을 법한 질문을 작성하세요."
-            )
+            all_documents = [*presentation_documents, *valid_references]
+            if vector_enabled():
+                retrieval_query = " ".join(
+                    value
+                    for value in (
+                        persona.role,
+                        persona.description,
+                        instructions,
+                    )
+                    if value and value.strip()
+                )
+                try:
+                    retrieved = await VectorRag().select_context(
+                        all_documents, retrieval_query, owner_id
+                    )
+                    if retrieved is not None:
+                        synthetic = retrieved
+                except Exception:
+                    logger.warning(
+                        "Expected-question vector search failed; using lexical document context",
+                        exc_info=True,
+                    )
             try:
                 generated = await self.generator.generate(persona, synthetic, instructions)
             except ReviewGeneratorError as exc:
@@ -170,7 +197,7 @@ class PracticeService:
                 if len(unique) == request.question_count_per_persona:
                     break
             for question in _fallback_questions(
-                persona, [*presentation_documents, *valid_references],
+                persona, all_documents,
                 request.question_count_per_persona,
             ):
                 if len(unique) == request.question_count_per_persona:

@@ -99,31 +99,12 @@ class DocumentChunkTable(Base):
     metadata_json: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(get_embedding_dimension()), nullable=True
     )
-
-
-class DocumentEmbeddingTable(Base):
-    __tablename__ = "document_embeddings"
-    __table_args__ = (
-        UniqueConstraint("document_id", "chunk_index", name="uq_document_embeddings_index"),
-        Index("ix_document_embeddings_document_id", "document_id"),
-    )
-
-    embedding_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    document_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("documents.document_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    chunk_index: Mapped[int] = mapped_column(nullable=False)
-    section_index: Mapped[int] = mapped_column(nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(Vector(get_embedding_dimension()), nullable=False)
-    model: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

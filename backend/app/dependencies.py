@@ -4,19 +4,16 @@ import os
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import (
-    get_embedding_model_name,
     get_jwt_access_token_expire_minutes,
     get_jwt_secret_key,
     get_login_rate_limit_attempts,
     get_login_rate_limit_window_seconds,
     get_object_storage_mode,
     get_repository_mode,
-    get_retrieval_mode,
 )
 from app.integrations.llm.client import HttpLlmClient
 from app.integrations.llm.generators import (
     HttpChatGenerator,
-    HttpEmbeddingGenerator,
     HttpPersonaGenerator,
     HttpReviewGenerator,
 )
@@ -37,9 +34,7 @@ from app.repositories.user_repository import (
 from app.services.auth_service import AuthService
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.chat_service import ChatService
-from app.services.embedding_service import EmbeddingIndexer
 from app.services.persona_service import PersonaService
-from app.services.rag_service import ContextSelector, DocumentContextSelector, HybridContextSelector
 from app.services.review_service import ReviewService
 from app.services.practice_service import PracticeService
 from app.models.user import UserResponse
@@ -177,30 +172,6 @@ def get_review_service() -> ReviewService:
 
 
 @lru_cache
-def get_embedding_generator() -> HttpEmbeddingGenerator:
-    return HttpEmbeddingGenerator(get_llm_client())
-
-
-@lru_cache
-def get_embedding_indexer() -> EmbeddingIndexer:
-    return EmbeddingIndexer(
-        get_embedding_generator(),
-        get_document_repository(),
-        model=get_embedding_model_name(),
-    )
-
-
-@lru_cache
-def get_context_selector() -> ContextSelector:
-    if get_retrieval_mode() == "hybrid":
-        return HybridContextSelector(
-            embedding_generator=get_embedding_generator(),
-            document_repository=get_document_repository(),
-        )
-    return DocumentContextSelector()
-
-
-@lru_cache
 def get_chat_service() -> ChatService:
     generator = (
         UnsupportedLegacyChatGenerator()
@@ -212,7 +183,6 @@ def get_chat_service() -> ChatService:
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         chat_repository=get_chat_repository(),
-        context_selector=get_context_selector(),
     )
 
 

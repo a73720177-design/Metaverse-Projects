@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from time import perf_counter
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,7 +15,11 @@ from app.integrations.llm.contracts import ChatGenerator, ChatGeneratorError
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
-from app.services.rag_service import ContextSelector, DocumentContextSelector, should_use_document
+from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.vector_rag import VectorRag, vector_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatServiceError(RuntimeError):
@@ -32,13 +37,13 @@ class ChatService:
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
         chat_repository: ChatRepository,
-        context_selector: ContextSelector | None = None,
+        context_selector: DocumentContextSelector | None = None,
     ) -> None:
         self.generator = generator
         self.agent_repository = agent_repository
         self.document_repository = document_repository
         self.chat_repository = chat_repository
-        self.context_selector: ContextSelector = context_selector or DocumentContextSelector()
+        self.context_selector = context_selector or DocumentContextSelector()
 
     async def _resolve_context(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
@@ -67,19 +72,26 @@ class ChatService:
 
         document = None
         if candidates and should_use_document(effective_request.message, effective_request.document_id):
-            scores = await asyncio.gather(*(
-                self.context_selector.relevance_score(item, request.message)
-                for item in candidates
-            ))
-            ranked = [
-                item
-                for _, item in sorted(
-                    zip(scores, candidates), key=lambda pair: pair[0], reverse=True
-                )
-            ][:4]
-            selected_documents = await asyncio.gather(*(
+            if vector_enabled():
+                try:
+                    document = await VectorRag().select_context(
+                        candidates, request.message, owner_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "Vector search failed; falling back to lexical RAG",
+                        exc_info=True,
+                    )
+                if document is not None:
+                    return persona, effective_request, document
+            ranked = sorted(
+                candidates,
+                key=lambda item: self.context_selector.relevance_score(item, request.message),
+                reverse=True,
+            )[:4]
+            selected_documents = [
                 self.context_selector.select(item, request.message) for item in ranked
-            ))
+            ]
             sections = []
             blocks = []
             used = 0

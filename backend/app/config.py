@@ -87,23 +87,24 @@ def get_rag_max_context_chars() -> int:
     return _get_positive_int("RAG_MAX_CONTEXT_CHARS", 4000)
 
 
-def get_retrieval_mode() -> str:
-    return _get_choice("RETRIEVAL_MODE", "lexical", {"lexical", "hybrid"})
+def get_rag_mode() -> str:
+    return _get_choice("RAG_MODE", "lexical", {"lexical", "vector"})
 
 
-def get_embedding_model_name() -> str:
-    value = os.getenv("EMBEDDING_MODEL", "bge-m3").strip()
-    if not value:
-        raise RuntimeError("EMBEDDING_MODEL must not be empty.")
-    return value
+def get_embedding_model() -> str:
+    return os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3:latest").strip() or "bge-m3:latest"
+
+
+def get_embedding_url() -> str:
+    return os.getenv("OLLAMA_EMBEDDING_URL", "http://127.0.0.1:11434").strip().rstrip("/")
 
 
 def get_embedding_dimension() -> int:
     return _get_positive_int("EMBEDDING_DIMENSION", 1024)
 
 
-def get_retrieval_candidate_multiplier() -> int:
-    return _get_positive_int("RETRIEVAL_CANDIDATE_MULTIPLIER", 3)
+def get_embedding_timeout_seconds() -> int:
+    return _get_positive_int("EMBEDDING_TIMEOUT_SECONDS", 8)
 
 
 def get_jwt_secret_key() -> str:

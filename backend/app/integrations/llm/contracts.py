@@ -18,10 +18,6 @@ class ChatGeneratorError(RuntimeError):
     pass
 
 
-class EmbeddingGeneratorError(RuntimeError):
-    pass
-
-
 class PersonaGenerator(Protocol):
     async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]: ...
 
@@ -49,7 +45,3 @@ class ChatGenerator(Protocol):
         request: ChatRequest,
         document: DocumentParseResponse | None,
     ) -> AsyncIterator[str]: ...
-
-
-class EmbeddingGenerator(Protocol):
-    async def embed(self, texts: list[str]) -> list[list[float]]: ...
