@@ -170,7 +170,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/chat"
         payload = json.loads(request.content)
-        assert payload["message"] == "핵심 문제는 무엇인가요?"
+        assert payload["message"] == "발표 내용은 무엇인가요?"
         assert payload["max_output_tokens"] == 1024
         if with_document:
             assert payload["document"]["document_id"] == str(document.document_id)
@@ -197,7 +197,7 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         return await service.reply(
             persona.agent_id,
             ChatRequest(
-                message="핵심 문제는 무엇인가요?",
+                message="발표 내용은 무엇인가요?",
                 document_id=document.document_id if with_document else None,
                 response_detail="standard",
             ),
@@ -213,6 +213,35 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         assert result.sources[0].filename == document.filename
     else:
         assert result.sources == []
+
+
+def test_chat_returns_safe_answer_without_calling_llm_when_source_has_no_evidence() -> None:
+    persona = _persona()
+    document = _document()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("LLM must not be called without grounded context")
+
+    async def run_contract():
+        agent_repository = InMemoryAgentRepository()
+        document_repository = InMemoryDocumentRepository()
+        await agent_repository.save(persona, OWNER_ID)
+        await document_repository.save(document, OWNER_ID)
+        service = ChatService(
+            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            agent_repository,
+            document_repository,
+            InMemoryChatRepository(),
+        )
+        return await service.reply(
+            persona.agent_id,
+            ChatRequest(message="화성 토양의 염분 농도는?", document_id=document.document_id),
+            OWNER_ID,
+        )
+
+    result = asyncio.run(run_contract())
+    assert "근거를 찾지 못했습니다" in result.answer
+    assert result.sources == []
 
 
 def test_v1_chat_omits_linked_document_for_greeting() -> None:
@@ -301,3 +330,56 @@ def test_v1_client_rejects_upstream_errors_without_leaking_body(
     assert message in str(captured.value)
     assert "invalid model output" not in str(captured.value)
     assert "ollama unavailable" not in str(captured.value)
+
+
+def test_v1_client_extracts_json_without_exposing_reasoning_prefix() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                "사용자의 의도를 먼저 분석합니다.\n"
+                '<think>내부 사고 과정</think>\n'
+                '{"answer":"최종 답변","sources":[]}'
+            ),
+            headers={"content-type": "text/plain"},
+        )
+
+    result = asyncio.run(
+        HttpLlmClient(httpx.MockTransport(handler)).post_json("/chat", {})
+    )
+
+    assert result == {"answer": "최종 답변", "sources": []}
+
+
+def test_v1_client_removes_reasoning_block_from_answer_field() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "answer": "<think>프론트에 보이면 안 되는 내용</think>\n공개 답변",
+                "sources": [],
+            },
+        )
+
+    result = asyncio.run(
+        HttpLlmClient(httpx.MockTransport(handler)).post_json("/chat", {})
+    )
+
+    assert result["answer"] == "공개 답변"
+
+
+def test_v1_client_buffers_stream_and_only_emits_public_answer() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        body = (
+            'event: token\ndata: {"token":"<thi"}\n\n'
+            'event: token\ndata: {"token":"nk>내부 사고</think>"}\n\n'
+            'event: token\ndata: {"token":"최종 답변"}\n\n'
+            "event: done\ndata: {}\n\n"
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    async def collect() -> list[str]:
+        client = HttpLlmClient(httpx.MockTransport(handler))
+        return [token async for token in client.stream_sse("/chat/stream", {})]
+
+    assert asyncio.run(collect()) == ["최종 답변"]

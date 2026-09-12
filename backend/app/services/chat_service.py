@@ -20,6 +20,11 @@ from app.services.vector_rag import VectorRag, vector_enabled
 
 
 logger = logging.getLogger(__name__)
+_NO_GROUNDED_CONTEXT_TYPE = "no_grounded_context"
+_NO_GROUNDED_CONTEXT_ANSWER = (
+    "첨부된 자료에서 이 질문을 뒷받침할 근거를 찾지 못했습니다. "
+    "관련 내용이 있는 자료나 구체적인 페이지를 추가해 주세요."
+)
 
 
 class ChatServiceError(RuntimeError):
@@ -90,8 +95,18 @@ class ChatService:
                 reverse=True,
             )[:4]
             selected_documents = [
-                self.context_selector.select(item, request.message) for item in ranked
+                selected
+                for item in ranked
+                if (selected := self.context_selector.select(item, request.message))
+                is not None
             ]
+            if not selected_documents:
+                return persona, effective_request, ranked[0].model_copy(update={
+                    "filename": "검색 결과 없음",
+                    "document_type": _NO_GROUNDED_CONTEXT_TYPE,
+                    "sections": [],
+                    "full_text": "",
+                })
             sections = []
             blocks = []
             used = 0
@@ -108,6 +123,7 @@ class ChatService:
                         "text": block,
                         "source_document_id": item.document_id,
                         "source_filename": item.filename,
+                        "source_document_type": item.document_type,
                     }))
                     used += len(block) + (2 if len(blocks) > 1 else 0)
                 if used >= limit:
@@ -127,7 +143,12 @@ class ChatService:
             ReviewSource(
                 document_id=section.source_document_id or document.document_id,
                 filename=section.source_filename or document.filename,
-                page=(section.index if document.document_type in {"pdf", "pptx"} else None),
+                page=(
+                    section.index
+                    if (section.source_document_type or document.document_type)
+                    in {"pdf", "pptx"}
+                    else None
+                ),
                 excerpt=section.text[:500],
             )
             for section in document.sections
@@ -141,6 +162,19 @@ class ChatService:
             agent_id, request, owner_id
         )
         context_finished = perf_counter()
+        if document is not None and document.document_type == _NO_GROUNDED_CONTEXT_TYPE:
+            chat = ChatHistoryItem(
+                message_id=uuid4(), owner_id=owner_id, agent_id=agent_id,
+                document_id=effective_request.document_id, message=request.message,
+                answer=_NO_GROUNDED_CONTEXT_ANSWER, sources=[],
+                timing=ChatTiming(
+                    context_ms=round((context_finished - started) * 1000),
+                    total_ms=round((context_finished - started) * 1000),
+                    output_characters=len(_NO_GROUNDED_CONTEXT_ANSWER), output_lines=1,
+                ),
+            )
+            await self.chat_repository.save(chat)
+            return chat
         try:
             generated = await self.generator.generate(persona, effective_request, document)
             generation_finished = perf_counter()
@@ -188,6 +222,21 @@ class ChatService:
             raise ChatServiceError("Streaming chat is unavailable")
 
         async def events() -> AsyncIterator[dict[str, Any]]:
+            if document is not None and document.document_type == _NO_GROUNDED_CONTEXT_TYPE:
+                chat = ChatHistoryItem(
+                    message_id=uuid4(), owner_id=owner_id, agent_id=agent_id,
+                    document_id=effective_request.document_id, message=request.message,
+                    answer=_NO_GROUNDED_CONTEXT_ANSWER, sources=[],
+                    timing=ChatTiming(
+                        context_ms=round((context_finished - started) * 1000),
+                        total_ms=round((perf_counter() - started) * 1000),
+                        output_characters=len(_NO_GROUNDED_CONTEXT_ANSWER), output_lines=1,
+                    ),
+                )
+                await self.chat_repository.save(chat)
+                yield {"event": "token", "data": {"token": _NO_GROUNDED_CONTEXT_ANSWER}}
+                yield {"event": "done", "data": chat.model_dump(mode="json", exclude={"owner_id"})}
+                return
             parts: list[str] = []
             llm_started = perf_counter()
             first_content_at: float | None = None

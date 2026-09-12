@@ -64,6 +64,7 @@ async def test_vector_context_keeps_hits_from_multiple_documents() -> None:
     ]
     assert "presentation.pdf" in selected.full_text
     assert "investor.pdf" in selected.full_text
+    assert all(section.source_document_type == "pdf" for section in selected.sections)
 
 
 @pytest.mark.asyncio
@@ -105,3 +106,38 @@ async def test_index_failure_does_not_fail_document_upload(
     )
 
     await index_after_save(uuid4(), uuid4())
+
+
+@pytest.mark.asyncio
+async def test_vector_search_filters_weak_hits_and_applies_final_k(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.vector_rag as module
+
+    monkeypatch.setenv("VECTOR_RAG_MAX_DISTANCE", "0.4")
+    monkeypatch.setenv("VECTOR_RAG_FINAL_K", "2")
+    owner = uuid4()
+    document = _document("slides.pdf", "근거")
+    rows = [
+        {
+            "document_id": document.document_id,
+            "filename": document.filename,
+            "chunk_index": index,
+            "content": f"근거 {index}",
+            "distance": distance,
+        }
+        for index, distance in [(1, 0.1), (2, 0.2), (3, 0.3), (4, 0.8)]
+    ]
+    session = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = rows
+    session.execute.return_value = result
+    session.__aenter__.return_value = session
+    monkeypatch.setattr(module, "get_session_factory", lambda: lambda: session)
+    client = AsyncMock()
+    client.model = "bge-m3:latest"
+    client.embed.return_value = [[1.0] * 1024]
+
+    hits = await VectorRag(client).search_hits([document], "근거", owner)
+
+    assert [hit.chunk_index for hit in hits] == [1, 2]

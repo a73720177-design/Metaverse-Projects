@@ -5,6 +5,12 @@ from typing import Any
 
 import httpx
 
+from app.integrations.llm.response_sanitizer import (
+    clean_model_text,
+    extract_json_object,
+    sanitize_llm_payload,
+)
+
 
 class LlmServiceConnectionError(RuntimeError):
     pass
@@ -41,6 +47,7 @@ class HttpLlmClient:
     async def stream_sse(
         self, path: str, payload: dict[str, Any]
     ) -> AsyncIterator[str]:
+        buffered_tokens: list[str] = []
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout, transport=self.transport
@@ -62,12 +69,17 @@ class HttpLlmClient:
                         elif line.startswith("data:"):
                             data = json.loads(line.removeprefix("data:").strip())
                             if event == "token" and isinstance(data.get("token"), str):
-                                yield data["token"]
+                                # 토큰 경계 사이에서 <think> 태그나 JSON이 나뉠 수
+                                # 있으므로 완료될 때까지 모은 뒤 공개 답변만 전달한다.
+                                buffered_tokens.append(data["token"])
                             elif event == "error":
                                 raise LlmServiceResponseError(
                                     "LLM 서비스 스트리밍 중 오류가 발생했습니다."
                                 )
                             event = "message"
+            cleaned = clean_model_text("".join(buffered_tokens))
+            if cleaned:
+                yield cleaned
         except LlmServiceResponseError:
             raise
         except (httpx.RequestError, ValueError) as exc:
@@ -99,8 +111,13 @@ class HttpLlmClient:
             )
         try:
             body = response.json()
-        except ValueError as exc:
-            raise LlmServiceResponseError("LLM 서비스가 잘못된 JSON을 반환했습니다.") from exc
+        except ValueError:
+            try:
+                body = extract_json_object(response.text)
+            except json.JSONDecodeError as exc:
+                raise LlmServiceResponseError(
+                    "LLM 서비스가 잘못된 JSON을 반환했습니다."
+                ) from exc
         if not isinstance(body, dict):
             raise LlmServiceResponseError("LLM 응답은 JSON 객체여야 합니다.")
-        return body
+        return sanitize_llm_payload(body)

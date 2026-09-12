@@ -107,6 +107,25 @@ def get_embedding_timeout_seconds() -> int:
     return _get_positive_int("EMBEDDING_TIMEOUT_SECONDS", 8)
 
 
+def get_vector_rag_candidate_k() -> int:
+    return _get_positive_int("VECTOR_RAG_CANDIDATE_K", 12)
+
+
+def get_vector_rag_final_k() -> int:
+    return _get_positive_int("VECTOR_RAG_FINAL_K", 6)
+
+
+def get_vector_rag_max_distance() -> float:
+    value = os.getenv("VECTOR_RAG_MAX_DISTANCE", "0.65").strip()
+    try:
+        distance = float(value)
+    except ValueError as exc:
+        raise RuntimeError("VECTOR_RAG_MAX_DISTANCE must be a number.") from exc
+    if not 0 < distance <= 2:
+        raise RuntimeError("VECTOR_RAG_MAX_DISTANCE must be greater than 0 and at most 2.")
+    return distance
+
+
 def get_jwt_secret_key() -> str:
     secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
     if len(secret_key.encode("utf-8")) < 32:

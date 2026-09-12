@@ -52,12 +52,29 @@ def test_selector_reuses_cached_chunks() -> None:
     assert selector._cache[DOCUMENT_ID][1] is cached
 
 
-def test_selector_falls_back_to_opening_chunks_when_query_has_no_match() -> None:
+def test_selector_returns_no_context_when_query_has_no_match() -> None:
     selector = DocumentContextSelector(chunk_size=300, overlap=20, max_chunks=1)
     selected = selector.select(_document(), "전혀없는검색어")
 
-    assert len(selected.sections) == 1
-    assert selected.sections[0].index == 1
+    assert selected is None
+
+
+def test_selector_prefers_sentence_boundaries() -> None:
+    document = DocumentParseResponse(
+        document_id=DOCUMENT_ID,
+        filename="script.docx",
+        document_type="docx",
+        saved_path=Path("script.docx"),
+        sections=[DocumentSection(index=1, text="첫 문장입니다. 두 번째 핵심 문장입니다. 세 번째 결론입니다.")],
+        full_text="첫 문장입니다. 두 번째 핵심 문장입니다. 세 번째 결론입니다.",
+    )
+    selector = DocumentContextSelector(chunk_size=24, overlap=5, max_chunks=3)
+
+    chunks = selector._chunks(document)
+
+    assert len(chunks) >= 2
+    assert chunks[0].text.endswith(".")
+    assert chunks[1].text.endswith(".")
 
 
 def test_selector_respects_configured_context_character_limit() -> None:

@@ -17,6 +17,9 @@ from app.config import (
     get_embedding_url,
     get_rag_max_context_chars,
     get_rag_mode,
+    get_vector_rag_candidate_k,
+    get_vector_rag_final_k,
+    get_vector_rag_max_distance,
 )
 from app.db.database import get_session_factory
 from app.models.document import DocumentParseResponse, DocumentSection
@@ -147,11 +150,13 @@ class VectorRag:
         query: str,
         owner_id: UUID,
         *,
-        limit: int = 12,
+        limit: int | None = None,
     ) -> list[VectorSearchHit]:
         if not documents or not query.strip():
             return []
         vector = (await self.client.embed([query]))[0]
+        candidate_limit = limit or get_vector_rag_candidate_k()
+        max_distance = get_vector_rag_max_distance()
         async with get_session_factory()() as session:
             rows = (
                 await session.execute(
@@ -176,11 +181,11 @@ class VectorRag:
                         "ids": [document.document_id for document in documents],
                         "model": self.client.model,
                         "vector": json.dumps(vector),
-                        "limit": limit,
+                        "limit": candidate_limit,
                     },
                 )
             ).mappings().all()
-        return [
+        hits = [
             VectorSearchHit(
                 document_id=row["document_id"],
                 filename=row["filename"],
@@ -189,7 +194,9 @@ class VectorRag:
                 distance=float(row["distance"]),
             )
             for row in rows
+            if float(row["distance"]) <= max_distance
         ]
+        return hits[: get_vector_rag_final_k()]
 
     async def select_context(
         self,
@@ -224,6 +231,7 @@ class VectorRag:
                     text=content,
                     source_document_id=hit.document_id,
                     source_filename=hit.filename,
+                    source_document_type=document.document_type,
                 )
             )
             remaining -= len(header) + len(content) + separator

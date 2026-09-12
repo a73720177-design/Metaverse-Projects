@@ -10,6 +10,7 @@ class DocumentSection(BaseModel):
     text: str
     source_document_id: UUID | None = None
     source_filename: str | None = None
+    source_document_type: str | None = None
 
 
 class DocumentParseResponse(BaseModel):
