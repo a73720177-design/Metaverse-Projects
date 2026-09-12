@@ -373,14 +373,14 @@ $processId = (Get-NetTCPConnection -State Listen -LocalPort 8000).OwningProcess
 Get-Process -Id $processId
 ```
 
-해당 프로세스가 이 프로젝트의 이전 Backend 프로세스인지 확인한 후에만 정상 종료를 요청합니다.
+먼저 해당 서버를 실행한 터미널에서 Ctrl+C로 정상 종료를 요청합니다. Windows의 Stop-Process는 애플리케이션의 정상 종료 절차를 보장하지 않습니다. 실행 창에 접근할 수 없고 종료가 꼭 필요한 경우에만, 해당 PID가 이 프로젝트의 프로세스인지 확인한 뒤 아래 명령을 마지막 수단으로 사용합니다. 진행 중인 업로드나 답변은 유실될 수 있습니다.
 
 ```powershell
 Stop-Process -Id $processId
 Wait-Process -Id $processId -ErrorAction SilentlyContinue
 ```
 
-정상 종료가 되지 않을 때만 마지막 수단으로 강제 종료합니다.
+위 명령이 권한 확인 등으로 종료하지 못한 경우에만 강제 종료 여부를 판단합니다.
 
 ```powershell
 Stop-Process -Id $processId -Force
@@ -410,6 +410,18 @@ Stop-Process -Id $processId -Force
 7. 수정 후 전체를 무조건 재시작하기보다 실패한 하위 서비스부터 재시작합니다.
 
 ## 9. 종료 전 체크리스트
+
+### DB 스키마 업데이트가 필요한 경우
+
+현재 질문별 대화 이력 분리에는 `backend/database/011_add_chat_conversation.sql`이 필요합니다. 기존 008·009 파일을 덮어쓰거나 이미 적용한 SQL을 수정하지 않습니다. DB 담당자가 백업 및 대상 DB를 확인한 뒤 Backend 폴더에서 실행합니다.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\apply_migrations.py --dry-run
+# 표시된 대상 DB와 대기 마이그레이션 확인 후에만 실행 (실제 DB 이름으로 변경)
+.\.venv\Scripts\python.exe scripts\apply_migrations.py --apply --confirm-database 실제_DB_이름
+```
+
+기본 실행은 읽기 전용 계획 확인입니다. `.env`의 DATABASE_URL을 사용합니다. 이력이 없는 기존 스키마는 자동 재적용하지 않으며, DB 담당자의 검토가 필요합니다. `create_all`이나 서버 재시작만으로 기존 테이블에 새 컬럼이 추가되지는 않습니다.
 
 - [ ] 파일 업로드·파싱이 끝났습니다.
 - [ ] LLM 답변 생성이 끝났습니다.

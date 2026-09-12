@@ -6,7 +6,6 @@ from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstrai
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.config import get_embedding_dimension
 from app.db.database import Base
 
 
@@ -100,7 +99,7 @@ class DocumentChunkTable(Base):
         "metadata", JSONB, nullable=False, default=dict
     )
     embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(get_embedding_dimension()), nullable=True
+        Vector(1024), nullable=True
     )
     embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -161,6 +160,10 @@ class ChatMessageTable(Base):
     __table_args__ = (
         Index("ix_chat_messages_owner_deleted", "owner_id", "deleted_at"),
         Index("ix_chat_messages_agent_id", "agent_id"),
+        Index(
+            "ix_chat_messages_conversation",
+            "owner_id", "agent_id", "conversation_id", "created_at",
+        ),
     )
 
     message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
@@ -173,6 +176,7 @@ class ChatMessageTable(Base):
     document_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="SET NULL")
     )
+    conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     message: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

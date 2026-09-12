@@ -8,6 +8,7 @@ Schema로 강제하는 것(response_schema), 연결 오류 처리만 담당한�
 
 import os
 import json
+import math
 from collections.abc import Iterator
 from threading import BoundedSemaphore
 
@@ -23,6 +24,8 @@ OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
 OLLAMA_REVIEW_MODEL = os.getenv("OLLAMA_REVIEW_MODEL", "qwen3:8b").strip()
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
 OLLAMA_EMBED_BATCH = int(os.getenv("OLLAMA_EMBED_BATCH", "32"))
+if OLLAMA_EMBED_BATCH < 1:
+    raise RuntimeError("OLLAMA_EMBED_BATCH must be at least 1")
 
 # 응답 생성이 오래 걸릴 수 있어 타임아웃을 넉넉히 잡는다 (초 단위)
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
@@ -89,6 +92,9 @@ def call_llm(
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            "temperature": 0.35,
+            "repetition_penalty": 1.18,
+            "chat_template_kwargs": {"enable_thinking": think},
         }
         if response_schema is not None:
             payload["structured_outputs"] = {"json": response_schema}
@@ -134,7 +140,14 @@ def call_llm(
             f"Ollama 서버 호출 실패 (host={OLLAMA_HOST}, model={model or OLLAMA_MODEL}): {e}"
         ) from e
 
-    return response.json().get("response", "")
+    try:
+        body = response.json()
+        text = body.get("response", "")
+        if body.get("error") or not isinstance(text, str):
+            raise ValueError("invalid generation response")
+        return text
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise LLMError("Ollama 응답 형식이 올바르지 않습니다.") from exc
 
 
 def stream_llm(
@@ -149,6 +162,9 @@ def stream_llm(
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            "temperature": 0.35,
+            "repetition_penalty": 1.18,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         try:
             with _GENERATION_SLOTS:
@@ -169,11 +185,19 @@ def stream_llm(
                         data = decoded.removeprefix("data:").strip()
                         if data == "[DONE]":
                             break
-                        chunk = json.loads(data)["choices"][0]["delta"].get("content", "")
+                        event = json.loads(data)
+                        if event.get("error"):
+                            raise LLMError("vLLM 스트리밍 호출 실패")
+                        choices = event.get("choices")
+                        if choices == []:  # Optional usage-only SSE event.
+                            continue
+                        chunk = choices[0]["delta"].get("content", "")
+                        if chunk is not None and not isinstance(chunk, str):
+                            raise ValueError("invalid stream content")
                         if chunk:
                             yield chunk
             return
-        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             raise LLMError("vLLM 스트리밍 호출 실패") from exc
 
     payload = {
@@ -198,22 +222,20 @@ def stream_llm(
                 stream=True,
             ) as response:
                 response.raise_for_status()
-                emitted = ""
                 for line in response.iter_lines():
                     if not line:
                         continue
-                    chunk = json.loads(line).get("response", "")
+                    event = json.loads(line)
+                    if event.get("error"):
+                        raise LLMError("Ollama 스트리밍 호출 실패")
+                    chunk = event.get("response", "")
+                    if not isinstance(chunk, str):
+                        raise ValueError("invalid stream content")
                     if chunk:
-                        remaining_lines = 30 - emitted.count("\n")
-                        if remaining_lines <= 0:
-                            break
-                        if chunk.count("\n") >= remaining_lines:
-                            chunk = "\n".join(chunk.split("\n")[:remaining_lines])
-                        emitted += chunk
                         yield chunk
-                        if emitted.count("\n") >= 30:
-                            break
-    except (requests.RequestException, ValueError) as exc:
+                    if event.get("done"):
+                        break
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         raise LLMError("Ollama 스트리밍 호출 실패") from exc
 
 
@@ -263,7 +285,14 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             batch_embeddings = response.json().get("embeddings")
             if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch):
                 raise ValueError("invalid embedding response")
-        except (requests.RequestException, ValueError) as exc:
+            if any(
+                not isinstance(vector, list) or not vector or any(
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) for value in vector
+                ) for vector in batch_embeddings
+            ):
+                raise ValueError("invalid embedding vector")
+        except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
             raise LLMError("임베딩 모델 호출 실패") from exc
         embeddings.extend(batch_embeddings)
     return embeddings

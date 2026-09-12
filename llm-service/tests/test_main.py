@@ -175,6 +175,40 @@ def test_chat_rejects_empty_text_response(monkeypatch):
     assert response.status_code == 502
 
 
+def test_chat_hides_reasoning_and_limits_duplicate_long_answer(monkeypatch):
+    answer = "<think>private</think>" + "\n".join(f"줄 {i}" for i in range(69))
+    monkeypatch.setattr("app.main.call_llm", lambda *a, **k: answer)
+    response = client.post(
+        "/api/v1/chat", json={"persona": _persona_payload(), "message": "질문"}
+    )
+    assert response.status_code == 200
+    assert "private" not in response.text
+    assert len(response.json()["answer"].splitlines()) == 30
+
+
+def test_chat_stream_hides_split_reasoning_and_signals_empty_answer(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.stream_llm", lambda *a, **k: iter(["<thi", "nk>private", "</think>"])
+    )
+    response = client.post(
+        "/api/v1/chat/stream", json={"persona": _persona_payload(), "message": "안녕"}
+    )
+    assert "private" not in response.text
+    assert "event: error" in response.text
+    assert "event: done" not in response.text
+
+
+def test_no_document_chat_still_checks_context_capacity(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_MODEL_LEN", "1024")
+    monkeypatch.setenv("LLM_CONTEXT_SAFETY_TOKENS", "512")
+    response = client.post(
+        "/api/v1/chat", json={
+            "persona": _persona_payload(), "message": "안녕", "max_output_tokens": 1024
+        }
+    )
+    assert response.status_code == 422
+
+
 def test_chat_stream_returns_token_and_done_events(monkeypatch):
     monkeypatch.setattr("app.main.stream_llm", lambda *a, **k: iter(["안녕", "하세요"]))
     response = client.post(

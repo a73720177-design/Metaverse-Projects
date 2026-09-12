@@ -17,7 +17,6 @@ import json
 import logging
 import math
 import os
-import re
 from typing import TypeVar
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -44,6 +43,7 @@ from app.prompts import (
     SUMMARY_GENERATION_PROMPT,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
+from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
 from app.summary_pipeline import (
     generate_summary_map_reduce,
     persona_block,
@@ -82,11 +82,6 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# response_schema로 구조화 출력을 강제해도, Ollama 버전에 따라 강제가 안 통하는
-# 경우를 대비한 방어적 처리로 코드펜스 제거는 남겨둔다.
-_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
-
-
 @app.get("/health")
 def health_check():
     """서버가 살아있는지 확인용. 배포/모니터링 담당자가 헬스체크에 사용."""
@@ -122,15 +117,11 @@ def _call_llm_as_json(
         logger.exception("Ollama 호출 실패")
         raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
 
-    cleaned = _CODE_FENCE_RE.sub("", raw).strip()
     try:
-        data, _end = json.JSONDecoder().raw_decode(cleaned)
-        if not isinstance(data, dict):
-            raise json.JSONDecodeError("root is not an object", cleaned, 0)
-        return data
-    except json.JSONDecodeError:
+        return sanitize_payload(extract_json_object(raw, response_schema.get("required", [])))
+    except (json.JSONDecodeError, TypeError, AttributeError):
         # 모델 원본 출력 전체를 로그에 남기지 않는다 (문서 내용이 섞여 있을 수 있음).
-        logger.error("LLM 응답이 JSON 형식이 아님 (길이=%d)", len(raw))
+        logger.error("LLM 응답이 JSON 형식이 아님")
         raise HTTPException(status_code=502, detail="LLM 응답을 해석할 수 없습니다.")
 
 
@@ -152,10 +143,13 @@ def _call_llm_as_text(
     prompt: str, *, model: str | None = None, max_tokens: int | None = None
 ) -> str:
     try:
-        answer = call_llm(prompt, model=model, max_tokens=max_tokens).strip()
+        raw = call_llm(prompt, model=model, max_tokens=max_tokens)
     except LLMError:
         logger.exception("Ollama 채팅 호출 실패")
         raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
+    answer = clean_chat_text(raw)
     if not answer:
         raise HTTPException(status_code=502, detail="LLM이 빈 답변을 반환했습니다.")
     return answer
@@ -306,9 +300,6 @@ def _positive_env_int(name: str, default: int) -> int:
 
 def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
     """Reserve output/KV budget and trim only retrieved document context."""
-    if request.document is None:
-        return request
-
     max_model_len = _positive_env_int("LLM_MAX_MODEL_LEN", 8192)
     safety_tokens = _positive_env_int("LLM_CONTEXT_SAFETY_TOKENS", 512)
     try:
@@ -317,7 +308,7 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
         raise HTTPException(
             status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
         ) from exc
-    if chars_per_token <= 0:
+    if not math.isfinite(chars_per_token) or chars_per_token <= 0:
         raise HTTPException(
             status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
         )
@@ -329,7 +320,10 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
             detail="출력 길이가 모델 컨텍스트에 비해 너무 큽니다.",
         )
 
-    empty_document = request.document.model_copy(update={"full_text": ""})
+    empty_document = (
+        request.document.model_copy(update={"full_text": ""})
+        if request.document is not None else None
+    )
     base_request = request.model_copy(update={"document": empty_document})
     base_tokens = math.ceil(len(_build_effective_chat_prompt(base_request)) / chars_per_token)
     available_document_tokens = input_budget - base_tokens
@@ -338,6 +332,9 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
             status_code=422,
             detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.",
         )
+
+    if request.document is None:
+        return request
 
     max_document_chars = max(1, math.floor(available_document_tokens * chars_per_token))
     if len(request.document.full_text) <= max_document_chars:
@@ -428,13 +425,19 @@ def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
 
     def events():
         try:
-            for token in stream_llm(
+            emitted = False
+            for token in safe_stream(stream_llm(
                 _build_effective_chat_prompt(effective_request),
                 model=CHAT_MODEL,
                 max_tokens=request.max_output_tokens,
-            ):
+            )):
+                emitted = emitted or bool(token.strip())
                 data = json.dumps({"token": token}, ensure_ascii=False)
                 yield f"event: token\ndata: {data}\n\n"
+            if not emitted:
+                data = json.dumps({"message": "LLM이 빈 답변을 반환했습니다."}, ensure_ascii=False)
+                yield f"event: error\ndata: {data}\n\n"
+                return
             yield "event: done\ndata: {}\n\n"
         except LLMError:
             logger.exception("Ollama 채팅 스트리밍 실패")

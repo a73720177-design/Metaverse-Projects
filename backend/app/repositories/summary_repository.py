@@ -1,7 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.models.summary import SummaryResult, SummaryStyle
 from app.db.database import get_session_factory
@@ -11,7 +11,7 @@ from app.db.tables import SummaryTable
 class SummaryRepository(Protocol):
     """Backend가 DB 팀에 요구하는 요약 저장 계약입니다."""
 
-    async def save(self, summary: SummaryResult, owner_id: UUID) -> None: ...
+    async def save(self, summary: SummaryResult, owner_id: UUID) -> SummaryResult: ...
     async def get(self, summary_id: UUID, owner_id: UUID) -> SummaryResult | None: ...
     async def find_cached(
         self, document_id: UUID, style: SummaryStyle, agent_id: UUID | None, owner_id: UUID
@@ -24,8 +24,14 @@ class InMemorySummaryRepository:
     def __init__(self) -> None:
         self._summaries: dict[UUID, tuple[UUID, SummaryResult]] = {}
 
-    async def save(self, summary: SummaryResult, owner_id: UUID) -> None:
+    async def save(self, summary: SummaryResult, owner_id: UUID) -> SummaryResult:
+        existing = await self.find_cached(
+            summary.document_id, summary.style, summary.agent_id, owner_id
+        )
+        if existing is not None:
+            summary = summary.model_copy(update={"summary_id": existing.summary_id})
         self._summaries[summary.summary_id] = (owner_id, summary)
+        return summary
 
     async def get(self, summary_id: UUID, owner_id: UUID) -> SummaryResult | None:
         stored = self._summaries.get(summary_id)
@@ -46,9 +52,9 @@ class InMemorySummaryRepository:
 
 
 class PostgresSummaryRepository:
-    async def save(self, summary: SummaryResult, owner_id: UUID) -> None:
+    async def save(self, summary: SummaryResult, owner_id: UUID) -> SummaryResult:
         data = summary.model_dump(mode="json")
-        row = SummaryTable(
+        values = dict(
             summary_id=summary.summary_id,
             owner_id=owner_id,
             document_id=summary.document_id,
@@ -57,10 +63,31 @@ class PostgresSummaryRepository:
             summary=summary.summary,
             key_topics=data["key_topics"],
             outline=data["outline"],
+            created_at=summary.created_at,
         )
         async with get_session_factory()() as session:
-            await session.merge(row)
-            await session.commit()
+            async with session.begin():
+                # NULL agent_id is not unique under migration 010. Serialize the
+                # logical cache key across workers, including no-persona summaries.
+                cache_key = f"summary:{owner_id}:{summary.document_id}:{summary.agent_id}:{summary.style.value}"
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": cache_key},
+                )
+                row = await session.scalar(
+                    self._cached_query(summary.document_id, summary.style, summary.agent_id, owner_id)
+                )
+                if row is None:
+                    row = SummaryTable(**values)
+                    session.add(row)
+                else:
+                    values.pop("summary_id")
+                    for field, value in values.items():
+                        setattr(row, field, value)
+                await session.flush()
+                saved = self._to_result(row)
+        assert saved is not None
+        return saved
 
     async def get(self, summary_id: UUID, owner_id: UUID) -> SummaryResult | None:
         async with get_session_factory()() as session:
@@ -76,17 +103,22 @@ class PostgresSummaryRepository:
         self, document_id: UUID, style: SummaryStyle, agent_id: UUID | None, owner_id: UUID
     ) -> SummaryResult | None:
         async with get_session_factory()() as session:
-            conditions = [
+            row = await session.scalar(self._cached_query(document_id, style, agent_id, owner_id))
+        return self._to_result(row)
+
+    @staticmethod
+    def _cached_query(document_id: UUID, style: SummaryStyle, agent_id: UUID | None, owner_id: UUID):
+        return (
+            select(SummaryTable)
+            .where(
                 SummaryTable.document_id == document_id,
                 SummaryTable.owner_id == owner_id,
                 SummaryTable.style == style.value,
-            ]
-            conditions.append(
-                SummaryTable.agent_id == agent_id if agent_id is not None
-                else SummaryTable.agent_id.is_(None)
+                SummaryTable.agent_id == agent_id,
             )
-            row = await session.scalar(select(SummaryTable).where(*conditions))
-        return self._to_result(row)
+            .order_by(SummaryTable.created_at.desc(), SummaryTable.summary_id.desc())
+            .limit(1)
+        )
 
     @staticmethod
     def _to_result(row: SummaryTable | None) -> SummaryResult | None:

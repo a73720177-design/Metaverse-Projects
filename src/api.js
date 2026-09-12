@@ -11,10 +11,19 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api-backend')
 async function describeHttpError(response) {
   try {
     const payload = await response.json()
-    return payload?.error?.message || payload?.detail || payload?.message || response.statusText
+    const detail = payload?.error?.message || payload?.detail || payload?.message
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) return detail.map((item) => item.msg || '입력값을 확인해주세요.').join(' ')
+    return response.statusText || '서버 요청을 처리하지 못했습니다.'
   } catch {
     return response.statusText || '서버 응답을 처리하지 못했습니다.'
   }
+}
+
+function httpError(message, status) {
+  const error = new Error(`${message} (${status})`)
+  error.status = status
+  return error
 }
 
 function authHeaders(token) {
@@ -32,7 +41,7 @@ async function apiFetch(path, options = {}) {
 
   if (!response.ok) {
     const message = await describeHttpError(response)
-    throw new Error(`${message} (${response.status})`)
+    throw httpError(message, response.status)
   }
   if (response.status === 204) return null
   return response.json()
@@ -112,6 +121,7 @@ export async function streamChat({
   message,
   documentId = null,
   documentIds = [],
+  conversationId = null,
   responseDetail = 'detailed',
   token,
   signal,
@@ -130,6 +140,7 @@ export async function streamChat({
           message,
           document_id: documentId,
           document_ids: documentIds,
+          conversation_id: conversationId,
           response_detail: responseDetail,
         }),
         signal,
@@ -142,7 +153,7 @@ export async function streamChat({
 
   if (!response.ok) {
     const errorMessage = await describeHttpError(response)
-    throw new Error(`${errorMessage} (${response.status})`)
+    throw httpError(errorMessage, response.status)
   }
   if (!response.body) throw new Error('Backend가 스트리밍 응답을 제공하지 않았습니다.')
 
@@ -187,17 +198,22 @@ export async function streamChat({
     if (event === 'error') throw new Error(data.message || '채팅 스트리밍 중 오류가 발생했습니다.')
   }
 
-  while (true) {
-    const { value, done } = await reader.read()
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-    const blocks = buffer.split(/\r?\n\r?\n/)
-    buffer = blocks.pop() || ''
-    blocks.forEach(handleEvent)
-    if (done) break
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+      const blocks = buffer.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() || ''
+      blocks.forEach(handleEvent)
+      if (done || completedItem) break
+    }
+    if (!completedItem && buffer.trim()) handleEvent(buffer)
+    if (!completedItem) throw new Error('Backend 스트리밍이 완료 결과 없이 종료되었습니다.')
+    return completedItem
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
-  if (buffer.trim()) handleEvent(buffer)
-  if (!completedItem) throw new Error('Backend 스트리밍이 완료 결과 없이 종료되었습니다.')
-  return completedItem
 }
 
 export function updateAgentDocuments(agentId, documentIds, token, signal) {

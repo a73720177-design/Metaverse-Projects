@@ -61,7 +61,9 @@ class ChatService:
     ) -> tuple[PersonaProfile, ChatRequest, DocumentParseResponse | None, list[ChatTurn]]:
         persona, previous_chats = await asyncio.gather(
             self.agent_repository.get(agent_id, owner_id),
-            self.chat_repository.list_recent(owner_id, agent_id, self.history_turns),
+            self.chat_repository.list_recent(
+                owner_id, agent_id, self.history_turns, request.conversation_id
+            ),
         )
         if persona is None:
             raise ChatResourceNotFoundError("Agent not found")
@@ -201,6 +203,7 @@ class ChatService:
         context_finished = perf_counter()
         if document is not None and document.document_type == _NO_GROUNDED_CONTEXT_TYPE:
             chat = ChatHistoryItem(
+                conversation_id=request.conversation_id,
                 message_id=uuid4(), owner_id=owner_id, agent_id=agent_id,
                 document_id=effective_request.document_id, message=request.message,
                 answer=_NO_GROUNDED_CONTEXT_ANSWER, sources=[],
@@ -222,6 +225,7 @@ class ChatService:
             chat = ChatHistoryItem.model_validate(
                 {
                     **generated,
+                    "conversation_id": request.conversation_id,
                     "message_id": uuid4(),
                     "owner_id": owner_id,
                     "agent_id": agent_id,
@@ -265,6 +269,7 @@ class ChatService:
         async def events() -> AsyncIterator[dict[str, Any]]:
             if document is not None and document.document_type == _NO_GROUNDED_CONTEXT_TYPE:
                 chat = ChatHistoryItem(
+                    conversation_id=request.conversation_id,
                     message_id=uuid4(), owner_id=owner_id, agent_id=agent_id,
                     document_id=effective_request.document_id, message=request.message,
                     answer=_NO_GROUNDED_CONTEXT_ANSWER, sources=[],
@@ -296,6 +301,7 @@ class ChatService:
                 # never delayed by the check.
                 answer, grounding = await self._apply_grounding(answer, document)
                 chat = ChatHistoryItem(
+                    conversation_id=request.conversation_id,
                     message_id=uuid4(),
                     owner_id=owner_id,
                     agent_id=agent_id,

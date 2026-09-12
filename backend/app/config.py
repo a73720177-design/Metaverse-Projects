@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -203,13 +204,26 @@ def validate_runtime_contract() -> None:
         raise RuntimeError(
             "REPOSITORY_MODE=postgres requires DATABASE_URL."
         )
+    if repository_mode == "postgres":
+        try:
+            target = urlsplit(os.environ["DATABASE_URL"].strip())
+            valid_url = (
+                target.scheme in {"postgres", "postgresql", "postgresql+asyncpg"}
+                and bool(target.hostname)
+                and bool(target.path.lstrip("/"))
+                and (target.port is None or 0 < target.port <= 65535)
+            )
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise RuntimeError("DATABASE_URL must be a valid PostgreSQL URL with a host and database name.")
     if rag_mode == "vector" and repository_mode != "postgres":
         raise RuntimeError(
             "RAG_MODE=vector requires REPOSITORY_MODE=postgres."
         )
-    if rag_mode == "vector" and get_embedding_dimension() != 1024:
+    if repository_mode == "postgres" and get_embedding_dimension() != 1024:
         raise RuntimeError(
-            "RAG_MODE=vector requires EMBEDDING_DIMENSION=1024 to match migration 009."
+            "REPOSITORY_MODE=postgres requires EMBEDDING_DIMENSION=1024 to match migration 009."
         )
     if rag_mode == "vector" and get_db_auto_create():
         raise RuntimeError(

@@ -37,14 +37,18 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        detail = exc.detail
+        error = (
+            {**detail, "code": detail.get("code", f"http_{exc.status_code}"),
+             "message": detail.get("message", "요청을 처리하지 못했습니다.")}
+            if isinstance(detail, dict)
+            else {"code": f"http_{exc.status_code}", "message": str(detail)}
+        )
         return JSONResponse(
             status_code=exc.status_code,
             headers=exc.headers,
             content={
-                "error": {
-                    "code": f"http_{exc.status_code}",
-                    "message": str(exc.detail),
-                }
+                "error": error
             },
         )
 

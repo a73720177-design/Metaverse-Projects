@@ -79,7 +79,7 @@ class HttpChatGenerator:
                     ReviewSource(
                         document_id=section.source_document_id or document.document_id,
                         filename=section.source_filename or document.filename,
-                        page=(section.index if document.document_type in {"pdf", "pptx"} else None),
+                        page=(section.index if (section.source_document_type or document.document_type) in {"pdf", "pptx"} else None),
                         excerpt=section.text[:500],
                     ).model_dump(mode="json")
                     for section in document.sections

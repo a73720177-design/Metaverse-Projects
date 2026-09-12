@@ -66,8 +66,7 @@ class SummaryService:
             )
         except (SummaryGeneratorError, ValidationError) as exc:
             raise SummaryServiceError("Summary generator returned an invalid response") from exc
-        await self.repository.save(summary, owner_id)
-        return summary
+        return await self.repository.save(summary, owner_id)
 
     async def get(self, document_id: UUID, owner_id: UUID) -> SummaryResult | None:
         document = await self.document_repository.get(document_id, owner_id)

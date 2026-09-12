@@ -22,6 +22,10 @@ class ChatTurn(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    conversation_id: UUID | None = Field(
+        default=None,
+        description="질문별 대화 UUID. 생략하면 기존 일반 대화 이력만 사용합니다.",
+    )
     message: str = Field(
         min_length=1,
         max_length=5000,
@@ -52,6 +56,7 @@ class Grounding(BaseModel):
 
 class ChatResponse(BaseModel):
     message_id: UUID = Field(default_factory=uuid4)
+    conversation_id: UUID | None = None
     agent_id: UUID
     answer: str
     sources: list[ReviewSource] = Field(default_factory=list)

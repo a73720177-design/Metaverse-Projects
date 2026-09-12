@@ -91,7 +91,8 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         return []
     if len(text) <= chunk_size:
         return [text]
-    step = chunk_size - overlap
+    overlap = min(max(0, overlap), chunk_size // 2)
+    step = max(1, chunk_size - overlap)
     pieces: list[str] = []
     start = 0
     while start < len(text):

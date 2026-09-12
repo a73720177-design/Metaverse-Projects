@@ -13,7 +13,8 @@ class ChatRepository(Protocol):
     async def get(self, message_id: UUID, owner_id: UUID) -> ChatHistoryItem | None: ...
     async def list(self, owner_id: UUID, *, deleted: bool) -> list[ChatHistoryItem]: ...
     async def list_recent(
-        self, owner_id: UUID, agent_id: UUID, limit: int
+        self, owner_id: UUID, agent_id: UUID, limit: int,
+        conversation_id: UUID | None = None,
     ) -> list[ChatHistoryItem]: ...
     async def set_deleted(
         self, message_id: UUID, owner_id: UUID, *, deleted: bool
@@ -41,13 +42,15 @@ class InMemoryChatRepository:
         return sorted(chats, key=lambda chat: chat.created_at, reverse=True)
 
     async def list_recent(
-        self, owner_id: UUID, agent_id: UUID, limit: int
+        self, owner_id: UUID, agent_id: UUID, limit: int,
+        conversation_id: UUID | None = None,
     ) -> list[ChatHistoryItem]:
         chats = [
             chat
             for chat in self._chats.values()
             if chat.owner_id == owner_id
             and chat.agent_id == agent_id
+            and chat.conversation_id == conversation_id
             and chat.deleted_at is None
         ]
         chats.sort(key=lambda chat: chat.created_at, reverse=True)
@@ -79,6 +82,7 @@ def _to_model(row: ChatMessageTable) -> ChatHistoryItem:
     return ChatHistoryItem.model_validate(
         {
             "message_id": row.message_id,
+            "conversation_id": row.conversation_id,
             "owner_id": row.owner_id,
             "agent_id": row.agent_id,
             "document_id": row.document_id,
@@ -96,6 +100,7 @@ class PostgresChatRepository:
     async def save(self, chat: ChatHistoryItem) -> None:
         row = ChatMessageTable(
             message_id=chat.message_id,
+            conversation_id=chat.conversation_id,
             owner_id=chat.owner_id,
             agent_id=chat.agent_id,
             document_id=chat.document_id,
@@ -137,7 +142,8 @@ class PostgresChatRepository:
         return [_to_model(row) for row in rows]
 
     async def list_recent(
-        self, owner_id: UUID, agent_id: UUID, limit: int
+        self, owner_id: UUID, agent_id: UUID, limit: int,
+        conversation_id: UUID | None = None,
     ) -> list[ChatHistoryItem]:
         async with get_session_factory()() as session:
             rows = (
@@ -146,6 +152,7 @@ class PostgresChatRepository:
                     .where(
                         ChatMessageTable.owner_id == owner_id,
                         ChatMessageTable.agent_id == agent_id,
+                        ChatMessageTable.conversation_id == conversation_id,
                         ChatMessageTable.deleted_at.is_(None),
                     )
                     .order_by(ChatMessageTable.created_at.desc())

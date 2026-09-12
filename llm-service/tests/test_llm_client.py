@@ -1,6 +1,7 @@
 import json
+import pytest
 
-from app.llm_client import call_llm, check_ollama_health, stream_llm
+from app.llm_client import LLMError, call_llm, check_ollama_health, embed_texts, stream_llm
 
 
 class FakeResponse:
@@ -43,6 +44,7 @@ def test_vllm_non_stream_payload_and_structured_output(monkeypatch):
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["json"]["max_tokens"] == 1536
     assert captured["json"]["structured_outputs"] == {"json": schema}
+    assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert captured["headers"] == {"Authorization": "Bearer secret"}
 
 
@@ -71,3 +73,51 @@ def test_vllm_health_uses_models_endpoint(monkeypatch):
     monkeypatch.setattr("app.llm_client.requests.get", fake_get)
     assert check_ollama_health() is True
     assert captured["url"].endswith("/v1/models")
+
+
+def test_vllm_stream_skips_reasoning_and_usage_events(monkeypatch):
+    captured = {}
+    lines = [
+        'data: {"choices":[{"delta":{"reasoning_content":"private"}}]}',
+        'data: {"choices":[{"delta":{"content":"답변"}}]}',
+        'data: {"choices":[],"usage":{"completion_tokens":10}}',
+        'data: [DONE]',
+    ]
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse(lines=lines)
+
+    monkeypatch.setenv("LLM_PROVIDER", "vllm")
+    monkeypatch.setenv("VLLM_MODEL", "quantized-model")
+    monkeypatch.setattr("app.llm_client.requests.post", fake_post)
+    assert list(stream_llm("prompt")) == ["답변"]
+    assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize("payload", [[], {"response": None}, {"error": "failed"}])
+def test_ollama_malformed_generation_is_a_controlled_error(monkeypatch, payload):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setattr("app.llm_client.requests.post", lambda *a, **k: FakeResponse(payload))
+    with pytest.raises(LLMError):
+        call_llm("prompt")
+
+
+def test_ollama_stream_error_event_is_not_success(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setattr(
+        "app.llm_client.requests.post",
+        lambda *a, **k: FakeResponse(lines=['{"error":"model unloaded"}']),
+    )
+    with pytest.raises(LLMError):
+        list(stream_llm("prompt"))
+
+
+@pytest.mark.parametrize("vector", [None, [], [True], [float("nan")], [float("inf")], ["1"]])
+def test_embeddings_reject_invalid_vectors_before_database_insert(monkeypatch, vector):
+    monkeypatch.setattr(
+        "app.llm_client.requests.post",
+        lambda *a, **k: FakeResponse({"embeddings": [vector]}),
+    )
+    with pytest.raises(LLMError):
+        embed_texts(["문서"])

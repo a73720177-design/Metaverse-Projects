@@ -103,7 +103,7 @@ def health() -> dict[str, str]:
     summary="DB 연결 상태 확인",
     description="현재 Repository 모드와 PostgreSQL 연결 가능 여부를 확인합니다.",
 )
-async def db_health() -> dict[str, str]:
+async def db_health() -> dict[str, object]:
     repository_mode = get_repository_mode()
     if repository_mode == "memory":
         return {
@@ -113,12 +113,12 @@ async def db_health() -> dict[str, str]:
         }
     try:
         await check_db()
+        contract = await inspect_db_contract(require_vector=get_rag_mode() == "vector")
     except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail="PostgreSQL 연결을 확인할 수 없습니다.",
         ) from exc
-    contract = await inspect_db_contract(require_vector=get_rag_mode() == "vector")
     if contract["status"] != "ok":
         raise HTTPException(
             status_code=503,

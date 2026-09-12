@@ -112,7 +112,7 @@ def _quote_identifier(value: str) -> str:
 async def create_database_if_missing(target: DatabaseTarget) -> bool:
     import asyncpg
 
-    connection = await asyncpg.connect(target.admin_url)
+    connection = await asyncpg.connect(target.admin_url, timeout=10, command_timeout=120)
     try:
         exists = await connection.fetchval(
             "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
@@ -128,16 +128,88 @@ async def create_database_if_missing(target: DatabaseTarget) -> bool:
         await connection.close()
 
 
+async def read_migration_history(connection) -> dict[str, dict[str, str]]:
+    exists = await connection.fetchval(
+        "SELECT to_regclass(current_schema() || '.schema_migrations') IS NOT NULL"
+    )
+    if not exists:
+        return {}
+    return {
+        row["version"]: dict(row)
+        for row in await connection.fetch(
+            "SELECT version, filename, checksum FROM schema_migrations"
+        )
+    }
+
+
+def pending_migrations(
+    migrations: list[Migration], history: dict[str, dict[str, str]]
+) -> list[Migration]:
+    known = {migration.version for migration in migrations}
+    if unknown := history.keys() - known:
+        raise RuntimeError(
+            "Database contains migrations absent from this checkout: "
+            + ", ".join(sorted(unknown))
+        )
+    pending = []
+    # Check *all* previous checksums before executing any pending SQL.
+    for migration in migrations:
+        existing = history.get(migration.version)
+        if existing is None:
+            pending.append(migration)
+        elif (
+            existing["filename"] != migration.filename
+            or existing["checksum"] != migration.checksum
+        ):
+            raise RuntimeError(
+                f"Applied migration {migration.version} no longer matches {migration.filename}."
+            )
+    return pending
+
+
+async def inspect_migration_plan(connection, migrations: list[Migration]) -> dict:
+    history = await read_migration_history(connection)
+    pending = pending_migrations(migrations, history)
+    untracked = not history and bool(await connection.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = current_schema() "
+        "AND table_name = ANY($1::text[]))",
+        ["users", "agents", "documents", "document_chunks", "chat_messages", "summaries"],
+    ))
+    return {"pending": pending, "untracked_schema": untracked}
+
+
+async def plan_migrations(target: DatabaseTarget, migrations: list[Migration]) -> dict:
+    import asyncpg
+
+    connection = await asyncpg.connect(target.database_url, timeout=10, command_timeout=120)
+    try:
+        async with connection.transaction(readonly=True):
+            return await inspect_migration_plan(connection, migrations)
+    finally:
+        await connection.close()
+
+
 async def apply_migrations(
-    target: DatabaseTarget, migrations: list[Migration]
+    target: DatabaseTarget, migrations: list[Migration], *, allow_untracked_schema: bool = False
 ) -> list[str]:
     import asyncpg
 
-    connection = await asyncpg.connect(target.database_url)
+    connection = await asyncpg.connect(target.database_url, timeout=10, command_timeout=120)
     applied: list[str] = []
     lock_name = "metaverse-projects-schema-migrations"
+    locked = False
     try:
-        await connection.execute("SELECT pg_advisory_lock(hashtext($1))", lock_name)
+        locked = bool(await connection.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", lock_name))
+        if not locked:
+            raise RuntimeError("Another migration runner is active; try again after it completes.")
+        plan = await inspect_migration_plan(connection, migrations)
+        if plan["untracked_schema"] and not allow_untracked_schema:
+            raise RuntimeError(
+                "Existing application tables have no tracked migration history. "
+                "Back up and review the schema before using --allow-untracked-schema."
+            )
+        await connection.execute("SET lock_timeout = '10s'")
         await connection.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -149,22 +221,7 @@ async def apply_migrations(
             """
         )
 
-        for migration in migrations:
-            existing = await connection.fetchrow(
-                "SELECT filename, checksum FROM schema_migrations WHERE version = $1",
-                migration.version,
-            )
-            if existing:
-                if (
-                    existing["filename"] != migration.filename
-                    or existing["checksum"] != migration.checksum
-                ):
-                    raise RuntimeError(
-                        f"Applied migration {migration.version} no longer matches "
-                        f"{migration.filename}."
-                    )
-                continue
-
+        for migration in plan["pending"]:
             async with connection.transaction():
                 await connection.execute(migration.sql)
                 await connection.execute(
@@ -180,7 +237,8 @@ async def apply_migrations(
         return applied
     finally:
         try:
-            await connection.execute("SELECT pg_advisory_unlock(hashtext($1))", lock_name)
+            if locked:
+                await connection.execute("SELECT pg_advisory_unlock(hashtext($1))", lock_name)
         finally:
             await connection.close()
 

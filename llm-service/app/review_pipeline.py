@@ -69,6 +69,9 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         return []
     if len(text) <= chunk_size:
         return [text]
+    # Small configured chunks must still advance without producing thousands
+    # of almost identical windows when overlap consumes the complete chunk.
+    overlap = min(max(0, overlap), chunk_size // 2)
     step = max(1, chunk_size - overlap)
     pieces: list[str] = []
     start = 0
