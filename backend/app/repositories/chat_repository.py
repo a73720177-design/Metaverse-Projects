@@ -12,6 +12,9 @@ class ChatRepository(Protocol):
     async def save(self, chat: ChatHistoryItem) -> None: ...
     async def get(self, message_id: UUID, owner_id: UUID) -> ChatHistoryItem | None: ...
     async def list(self, owner_id: UUID, *, deleted: bool) -> list[ChatHistoryItem]: ...
+    async def list_recent(
+        self, owner_id: UUID, agent_id: UUID, limit: int
+    ) -> list[ChatHistoryItem]: ...
     async def set_deleted(
         self, message_id: UUID, owner_id: UUID, *, deleted: bool
     ) -> ChatHistoryItem | None: ...
@@ -36,6 +39,19 @@ class InMemoryChatRepository:
             if chat.owner_id == owner_id and (chat.deleted_at is not None) == deleted
         ]
         return sorted(chats, key=lambda chat: chat.created_at, reverse=True)
+
+    async def list_recent(
+        self, owner_id: UUID, agent_id: UUID, limit: int
+    ) -> list[ChatHistoryItem]:
+        chats = [
+            chat
+            for chat in self._chats.values()
+            if chat.owner_id == owner_id
+            and chat.agent_id == agent_id
+            and chat.deleted_at is None
+        ]
+        chats.sort(key=lambda chat: chat.created_at, reverse=True)
+        return list(reversed(chats[:limit]))
 
     async def set_deleted(
         self, message_id: UUID, owner_id: UUID, *, deleted: bool
@@ -119,6 +135,24 @@ class PostgresChatRepository:
                 )
             ).all()
         return [_to_model(row) for row in rows]
+
+    async def list_recent(
+        self, owner_id: UUID, agent_id: UUID, limit: int
+    ) -> list[ChatHistoryItem]:
+        async with get_session_factory()() as session:
+            rows = (
+                await session.scalars(
+                    select(ChatMessageTable)
+                    .where(
+                        ChatMessageTable.owner_id == owner_id,
+                        ChatMessageTable.agent_id == agent_id,
+                        ChatMessageTable.deleted_at.is_(None),
+                    )
+                    .order_by(ChatMessageTable.created_at.desc())
+                    .limit(limit)
+                )
+            ).all()
+        return [_to_model(row) for row in reversed(rows)]
 
     async def set_deleted(
         self, message_id: UUID, owner_id: UUID, *, deleted: bool

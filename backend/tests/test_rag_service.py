@@ -52,6 +52,23 @@ def test_selector_reuses_cached_chunks() -> None:
     assert selector._cache[DOCUMENT_ID][1] is cached
 
 
+def test_fingerprint_is_stable_across_selector_instances() -> None:
+    """A restarted worker (=a brand new selector/cache) must still recognize
+    unchanged content as unchanged, so hashing cannot depend on the
+    randomized builtin hash() (PYTHONHASHSEED varies per process)."""
+    document = _document()
+    assert (
+        DocumentContextSelector._fingerprint(document)
+        == DocumentContextSelector._fingerprint(document)
+        == DocumentContextSelector(cache_size=1)._fingerprint(document)
+    )
+
+    changed = document.model_copy(update={"full_text": document.full_text + " "})
+    assert DocumentContextSelector._fingerprint(changed) != DocumentContextSelector._fingerprint(
+        document
+    )
+
+
 def test_selector_returns_no_context_when_query_has_no_match() -> None:
     selector = DocumentContextSelector(chunk_size=300, overlap=20, max_chunks=1)
     selected = selector.select(_document(), "전혀없는검색어")

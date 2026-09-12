@@ -50,6 +50,15 @@ docker compose up -d postgres minio
 docker compose ps
 ```
 
+PostgreSQL을 처음 연결하거나 migration 009·010이 아직 적용되지 않았다면 Backend를 시작하기 전에 다음 명령을 실행합니다. 기존 DB는 먼저 백업하고, `backend/.env`의 `DATABASE_URL`이 올바른 DB를 가리키는지 확인합니다.
+
+```powershell
+Set-Location C:\meta_projects\backend
+.\.venv\Scripts\python.exe scripts\apply_migrations.py
+```
+
+적용 후 Backend의 `/health/db`에서 `contract.status`가 `ok`인지 확인합니다. `RAG_MODE=vector`에서는 PostgreSQL의 `vector` 확장과 migration 009의 1024차원 임베딩 컬럼이 필수입니다.
+
 `backend/.env`가 아래 개발 모드라면 이 단계는 건너뜁니다.
 
 ```env

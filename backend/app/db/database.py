@@ -73,6 +73,74 @@ async def check_db() -> None:
         await connection.execute(text("SELECT 1"))
 
 
+async def inspect_db_contract(*, require_vector: bool = False) -> dict[str, object]:
+    """Read-only validation of tables/columns required by Backend repositories."""
+
+    required_columns = {
+        "users": {"user_id", "username", "password_hash"},
+        "agents": {"agent_id", "owner_id", "gender", "age"},
+        "documents": {"document_id", "owner_id", "full_text"},
+        "document_files": {"document_id", "bucket", "object_key"},
+        "document_chunks": {"chunk_id", "document_id", "chunk_index", "content"},
+        "reviews": {"review_id", "owner_id", "agent_id", "document_id"},
+        "agent_documents": {"agent_id", "document_id"},
+        "chat_messages": {"message_id", "owner_id", "timing"},
+        "summaries": {"summary_id", "owner_id", "document_id", "style"},
+    }
+    if require_vector:
+        required_columns["document_chunks"].update(
+            {"embedding", "embedding_model", "embedded_at", "content_hash"}
+        )
+
+    async with get_engine().connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    """
+                    SELECT table_name, column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = ANY(CAST(:tables AS text[]))
+                    """
+                ),
+                {"tables": list(required_columns)},
+            )
+        ).mappings().all()
+        actual: dict[str, set[str]] = {}
+        for row in rows:
+            actual.setdefault(row["table_name"], set()).add(row["column_name"])
+
+        vector_installed = bool(
+            await connection.scalar(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+            )
+        )
+        migration_table_exists = bool(
+            await connection.scalar(
+                text("SELECT to_regclass(current_schema() || '.schema_migrations') IS NOT NULL")
+            )
+        )
+        latest_migration = None
+        if migration_table_exists:
+            latest_migration = await connection.scalar(
+                text("SELECT max(version) FROM schema_migrations")
+            )
+
+    missing = {
+        table: sorted(columns - actual.get(table, set()))
+        for table, columns in required_columns.items()
+        if columns - actual.get(table, set())
+    }
+    if require_vector and not vector_installed:
+        missing["extensions"] = ["vector"]
+    return {
+        "status": "ok" if not missing else "mismatch",
+        "latest_migration": latest_migration,
+        "vector_extension": "installed" if vector_installed else "not_installed",
+        "missing": missing,
+    }
+
+
 async def close_db() -> None:
     global _engine, _session_factory
     if _engine is not None:

@@ -1,10 +1,12 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import get_embedding_dimension
 from app.db.database import Base
 
 
@@ -97,6 +99,12 @@ class DocumentChunkTable(Base):
     metadata_json: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(get_embedding_dimension()), nullable=True
+    )
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -173,3 +181,29 @@ class ChatMessageTable(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class SummaryTable(Base):
+    __tablename__ = "summaries"
+    __table_args__ = (
+        UniqueConstraint("document_id", "agent_id", "style", name="uq_summaries_document_agent_style"),
+        Index("ix_summaries_owner_id", "owner_id"),
+    )
+
+    summary_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="SET NULL")
+    )
+    style: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    key_topics: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    outline: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

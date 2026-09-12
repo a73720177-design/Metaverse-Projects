@@ -233,12 +233,12 @@ class FakeReviewGenerator:
 
 
 class FakeChatGenerator:
-    async def generate(self, persona, request: ChatRequest, document) -> dict:
+    async def generate(self, persona, request: ChatRequest, document, history) -> dict:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
 
 
 class FakeStreamingChatGenerator(FakeChatGenerator):
-    async def stream(self, persona, request: ChatRequest, document):
+    async def stream(self, persona, request: ChatRequest, document, history):
         yield "Evaluator "
         yield f"response: {request.message}"
 

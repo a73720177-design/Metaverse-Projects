@@ -4,6 +4,8 @@ import os
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import (
+    get_chat_history_turns,
+    get_chunk_cache_size,
     get_jwt_access_token_expire_minutes,
     get_jwt_secret_key,
     get_login_rate_limit_attempts,
@@ -16,16 +18,19 @@ from app.integrations.llm.generators import (
     HttpChatGenerator,
     HttpPersonaGenerator,
     HttpReviewGenerator,
+    HttpSummaryGenerator,
 )
 from app.integrations.llm.legacy_generators import (
     LegacyQuestionReviewGenerator,
     LocalPersonaGenerator,
     UnsupportedLegacyChatGenerator,
+    UnsupportedLegacySummaryGenerator,
 )
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
 from app.repositories.chat_repository import ChatRepository, InMemoryChatRepository, PostgresChatRepository
+from app.repositories.summary_repository import InMemorySummaryRepository, PostgresSummaryRepository, SummaryRepository
 from app.repositories.user_repository import (
     InMemoryUserRepository,
     PostgresUserRepository,
@@ -34,9 +39,11 @@ from app.repositories.user_repository import (
 from app.services.auth_service import AuthService
 from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.chat_service import ChatService
+from app.services.rag_service import DocumentContextSelector
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
 from app.services.practice_service import PracticeService
+from app.services.summary_service import SummaryService
 from app.models.user import UserResponse
 from app.services.auth_service import InvalidCredentialsError
 from app.storage.minio_storage import MinioStorage
@@ -79,6 +86,11 @@ def get_review_repository() -> ReviewRepository:
 @lru_cache
 def get_chat_repository() -> ChatRepository:
     return PostgresChatRepository() if get_repository_mode() == "postgres" else InMemoryChatRepository()
+
+
+@lru_cache
+def get_summary_repository() -> SummaryRepository:
+    return PostgresSummaryRepository() if get_repository_mode() == "postgres" else InMemorySummaryRepository()
 
 
 @lru_cache
@@ -183,6 +195,23 @@ def get_chat_service() -> ChatService:
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         chat_repository=get_chat_repository(),
+        context_selector=DocumentContextSelector(cache_size=get_chunk_cache_size()),
+        history_turns=get_chat_history_turns(),
+    )
+
+
+@lru_cache
+def get_summary_service() -> SummaryService:
+    generator = (
+        UnsupportedLegacySummaryGenerator()
+        if get_llm_contract_mode() == "legacy_questions"
+        else HttpSummaryGenerator(get_llm_client())
+    )
+    return SummaryService(
+        generator=generator,
+        repository=get_summary_repository(),
+        agent_repository=get_agent_repository(),
+        document_repository=get_document_repository(),
     )
 
 

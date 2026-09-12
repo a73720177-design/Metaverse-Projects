@@ -155,12 +155,67 @@ def _get_positive_int(name: str, default: int) -> int:
     return parsed
 
 
+def _get_unit_interval_float(name: str, default: float) -> float:
+    value = os.getenv(name, str(default)).strip()
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number.") from exc
+    if not 0 <= parsed <= 1:
+        raise RuntimeError(f"{name} must be between 0 and 1.")
+    return parsed
+
+
 def get_login_rate_limit_attempts() -> int:
     return _get_positive_int("LOGIN_RATE_LIMIT_ATTEMPTS", 5)
 
 
 def get_login_rate_limit_window_seconds() -> int:
     return _get_positive_int("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def get_chat_history_turns() -> int:
+    return _get_positive_int("CHAT_HISTORY_TURNS", 6)
+
+
+def get_chunk_cache_size() -> int:
+    return _get_positive_int("CHUNK_CACHE_SIZE", 32)
+
+
+def get_grounding_mode() -> str:
+    return _get_choice("GROUNDING_MODE", "off", {"off", "annotate", "strict"})
+
+
+def get_grounding_threshold() -> float:
+    return _get_unit_interval_float("GROUNDING_THRESHOLD", 0.35)
+
+
+def get_grounding_min_score() -> float:
+    return _get_unit_interval_float("GROUNDING_MIN_SCORE", 0.5)
+
+
+def validate_runtime_contract() -> None:
+    """서로 호환되지 않는 Backend·DB 설정을 서버 시작 시 거부한다."""
+
+    repository_mode = get_repository_mode()
+    rag_mode = get_rag_mode()
+    if repository_mode == "postgres" and not os.getenv("DATABASE_URL", "").strip():
+        raise RuntimeError(
+            "REPOSITORY_MODE=postgres requires DATABASE_URL."
+        )
+    if rag_mode == "vector" and repository_mode != "postgres":
+        raise RuntimeError(
+            "RAG_MODE=vector requires REPOSITORY_MODE=postgres."
+        )
+    if rag_mode == "vector" and get_embedding_dimension() != 1024:
+        raise RuntimeError(
+            "RAG_MODE=vector requires EMBEDDING_DIMENSION=1024 to match migration 009."
+        )
+    if rag_mode == "vector" and get_db_auto_create():
+        raise RuntimeError(
+            "DB_AUTO_CREATE cannot install migration 009; apply numbered migrations "
+            "and set DB_AUTO_CREATE=false."
+        )
 
 
 def get_chat_output_token_budgets() -> dict[str, int]:

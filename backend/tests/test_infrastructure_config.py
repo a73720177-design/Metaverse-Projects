@@ -8,6 +8,7 @@ from app.config import (
     get_object_storage_mode,
     get_rag_max_context_chars,
     get_repository_mode,
+    validate_runtime_contract,
 )
 from app.controllers.document_controller import build_document_object_key
 from app.dependencies import get_user_repository
@@ -40,6 +41,29 @@ def test_invalid_repository_mode_fails_early(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("REPOSITORY_MODE", "unknown")
     with pytest.raises(RuntimeError, match="REPOSITORY_MODE"):
         get_repository_mode()
+
+
+def test_vector_rag_requires_postgres_and_migration_dimension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_MODE", "vector")
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+    with pytest.raises(RuntimeError, match="REPOSITORY_MODE=postgres"):
+        validate_runtime_contract()
+
+    monkeypatch.setenv("REPOSITORY_MODE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://qwen:pw@localhost/qwendb")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "768")
+    with pytest.raises(RuntimeError, match="EMBEDDING_DIMENSION=1024"):
+        validate_runtime_contract()
+
+
+def test_postgres_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "postgres")
+    monkeypatch.setenv("RAG_MODE", "lexical")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        validate_runtime_contract()
 
 
 def test_upload_limit_is_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:

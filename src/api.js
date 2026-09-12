@@ -312,3 +312,24 @@ export function permanentlyDeleteChat(messageId, token, signal) {
     signal,
   })
 }
+
+// Creates (or returns the cached) summary for a document. Same
+// (documentId, agentId, style) combination is cached server-side; pass
+// refresh: true to force regeneration. -> SummaryResult
+export function createSummary(documentId, { style = 'brief', agentId = null, refresh = false } = {}, token, signal) {
+  const query = refresh ? '?refresh=true' : ''
+  return apiFetch(`/documents/${encodeURIComponent(documentId)}/summary${query}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ style, agent_id: agentId }),
+    signal,
+  })
+}
+
+// Fetches the cached default (brief, no persona) summary. -> SummaryResult
+export function getSummary(documentId, token, signal) {
+  return apiFetch(`/documents/${encodeURIComponent(documentId)}/summary`, {
+    headers: authHeaders(token),
+    signal,
+  })
+}

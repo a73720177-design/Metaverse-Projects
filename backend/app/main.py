@@ -8,6 +8,8 @@ from app.config import (
     get_frontend_origin_regex,
     get_frontend_origins,
     get_repository_mode,
+    get_rag_mode,
+    validate_runtime_contract,
 )
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.auth_controller import router as auth_router
@@ -16,7 +18,7 @@ from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.controllers.practice_controller import router as practice_router
 from app.dependencies import get_llm_client
-from app.db.database import check_db, close_db, init_db
+from app.db.database import check_db, close_db, init_db, inspect_db_contract
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
     HttpLlmClient,
@@ -27,6 +29,7 @@ from app.integrations.llm.client import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI): # 아래의 작업  FastAPI에 등록
+    validate_runtime_contract()
     postgres_enabled = get_repository_mode() == "postgres"
     if postgres_enabled and get_db_auto_create():
         await init_db()
@@ -115,10 +118,21 @@ async def db_health() -> dict[str, str]:
             status_code=503,
             detail="PostgreSQL 연결을 확인할 수 없습니다.",
         ) from exc
+    contract = await inspect_db_contract(require_vector=get_rag_mode() == "vector")
+    if contract["status"] != "ok":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DB_SCHEMA_MISMATCH",
+                "message": "Backend가 요구하는 DB migration이 적용되지 않았습니다.",
+                "contract": contract,
+            },
+        )
     return {
         "status": "ok",
         "repository_mode": "postgres",
         "database": "connected",
+        "contract": contract,
     }
 
 
@@ -173,11 +187,22 @@ async def services_health(
                 "message": "PostgreSQL에 연결할 수 없습니다.",
             }
         else:
+            try:
+                contract = await inspect_db_contract(
+                    require_vector=get_rag_mode() == "vector"
+                )
+            except Exception:
+                contract = {"status": "unavailable"}
             services["database"] = {
-                "status": "ok",
+                "status": "ok" if contract["status"] == "ok" else "unavailable",
                 "label": "DB",
                 "mode": "postgres",
-                "message": "PostgreSQL 연결이 정상입니다.",
+                "message": (
+                    "PostgreSQL 연결과 스키마 계약이 정상입니다."
+                    if contract["status"] == "ok"
+                    else "PostgreSQL migration 상태가 Backend 계약과 맞지 않습니다."
+                ),
+                "contract": contract,
             }
 
     try:
