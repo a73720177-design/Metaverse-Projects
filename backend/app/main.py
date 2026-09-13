@@ -59,6 +59,7 @@ app = FastAPI(
     ],
 )
 
+register_error_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_frontend_origins(),
@@ -66,6 +67,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Retry-After"],
 )
 
 app.include_router(agent_router)
@@ -74,7 +76,6 @@ app.include_router(document_router)
 app.include_router(review_router)
 app.include_router(chat_router)
 app.include_router(practice_router)
-register_error_handlers(app)
 
 
 @app.get(

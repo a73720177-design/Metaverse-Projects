@@ -16,6 +16,7 @@ from app.models.practice import (
 from app.models.review import ReviewSource
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
+from app.services.rag_service import DocumentContextSelector
 from app.services.vector_rag import VectorRag, vector_enabled
 
 
@@ -164,27 +165,34 @@ class PracticeService:
                 full_text=combined,
             )
             all_documents = [*presentation_documents, *valid_references]
-            if vector_enabled():
-                retrieval_query = " ".join(
-                    value
-                    for value in (
-                        persona.role,
-                        persona.description,
-                        instructions,
-                    )
-                    if value and value.strip()
+            retrieval_query = " ".join(
+                value
+                for value in (
+                    persona.role,
+                    persona.description,
+                    instructions,
                 )
+                if value and value.strip()
+            )
+            retrieved = None
+            if vector_enabled():
                 try:
                     retrieved = await VectorRag().select_context(
                         all_documents, retrieval_query, owner_id
                     )
-                    if retrieved is not None:
-                        synthetic = retrieved
                 except Exception:
                     logger.warning(
                         "Expected-question vector search failed; using lexical document context",
                         exc_info=True,
                     )
+            if retrieved is not None:
+                synthetic = retrieved
+            else:
+                # 기존 문서는 vector migration 전에 저장되어 embedding이 없을 수 있다.
+                # 이 경우에도 전체 문서를 LLM에 보내지 않고 lexical RAG 제한을 적용한다.
+                synthetic = DocumentContextSelector().select(
+                    synthetic, retrieval_query
+                )
             try:
                 generated = await self.generator.generate(persona, synthetic, instructions)
             except ReviewGeneratorError as exc:

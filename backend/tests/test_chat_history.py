@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import pytest
+
 from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.models.persona import PersonaProfile
@@ -153,3 +155,44 @@ def test_reply_rewrites_retrieval_query_so_bare_follow_up_finds_prior_topic_chun
     _, _, second_document = calls[1]
     assert second_document is not None
     assert any(section.index == 2 for section in second_document.sections)
+
+
+@pytest.mark.parametrize("vector_failure", [False, True])
+def test_chat_combines_explicit_and_agent_files_without_starvation(monkeypatch, vector_failure):
+    from unittest.mock import AsyncMock
+    from app.services.vector_rag import VectorRag
+
+    monkeypatch.setenv("RAG_MODE", "vector" if vector_failure else "lexical")
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "4000")
+    monkeypatch.setattr(VectorRag, "select_context", AsyncMock(side_effect=RuntimeError("offline")))
+    documents = [_document().model_copy(update={
+        "document_id": uuid4(), "filename": f"reference-{i}.pdf", "document_type": "pdf",
+    }) for i in range(5)]
+    persona = _persona().model_copy(update={
+        "document_ids": [document.document_id for document in documents[2:]],
+    })
+    generator = RecordingChatGenerator()
+
+    async def run():
+        agents = InMemoryAgentRepository()
+        repository = InMemoryDocumentRepository()
+        await agents.save(persona, OWNER_ID)
+        for document in documents:
+            await repository.save(document, OWNER_ID)
+        service = ChatService(generator, agents, repository, InMemoryChatRepository())
+        await service.reply(persona.agent_id, ChatRequest(
+            message="모든 자료의 매출 성장률을 비교해줘",
+            document_id=documents[0].document_id,
+            document_ids=[documents[1].document_id, documents[2].document_id],
+        ), OWNER_ID)
+
+    asyncio.run(run())
+    context = generator.calls[0][2]
+    assert context is not None
+    assert len(context.full_text) <= 4000
+    assert {section.source_document_id for section in context.sections} == {
+        document.document_id for document in documents
+    }
+    sources = ChatService._sources(context)
+    assert all(source.page == 2 for source in sources)
+    assert {source.filename for source in sources} == {document.filename for document in documents}

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createAgent, createSummary, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
-import { newConversation, readWorkspace, validateFiles } from './workspace-utils.mjs'
+import { newConversation, readWorkspace, validateFiles as checkFiles } from './workspace-utils.mjs'
+import { reportLocalError, subscribeErrors } from './api-errors.mjs'
 
 const ACCEPTED = [
   '.pdf',
@@ -14,8 +15,19 @@ const sec = (ms = 0) => `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}초`
 const adaptPersona = (p) => ({ ...p, id: p.agent_id, documentIds: p.document_ids || [] })
 const isCancelled = (error) => error?.name === 'AbortError'
 const textLength = (doc) => doc.text_length ?? doc.full_text?.length ?? 0
-function stored(key) { try { return localStorage.getItem(key) } catch { return null } }
-function remember(key, value) { try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value) } catch { /* Browser storage is optional. */ } }
+let storageWarningShown = false
+function storageWarning() {
+  if (storageWarningShown) return
+  storageWarningShown = true
+  queueMicrotask(() => reportLocalError('브라우저에 로그인·작업 상태를 저장할 수 없습니다.', 'storage_unavailable'))
+}
+function stored(key) { try { return localStorage.getItem(key) } catch { storageWarning(); return null } }
+function remember(key, value) { try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value) } catch { storageWarning() } }
+function validateFiles(files) {
+  const result = checkFiles(files)
+  if (result.errors.length) reportLocalError(result.errors.join('\n'), 'file_validation')
+  return result
+}
 
 function useRequestScope() {
   const scope = useMemo(() => {
@@ -322,6 +334,9 @@ function DocumentSummaryPanel({ doc, token }) {
 export default function App() {
   const [token, setToken] = useState(() => stored('authToken'))
   function changeToken(value) { remember('authToken', value); setToken(value) }
+  useEffect(() => subscribeErrors((error) => {
+    if (error?.status === 401 && error.authenticated) changeToken(null)
+  }), [])
   return token ? <Workspace key={token} token={token} onLogout={() => changeToken(null)} /> : <Auth onLogin={changeToken} />
 }
 

@@ -145,6 +145,9 @@ async def read_migration_history(connection) -> dict[str, dict[str, str]]:
 def pending_migrations(
     migrations: list[Migration], history: dict[str, dict[str, str]]
 ) -> list[Migration]:
+    # Older callers supply records; newer planners index the same records.
+    if not isinstance(history, dict):
+        history = {row["version"]: dict(row) for row in history}
     known = {migration.version for migration in migrations}
     if unknown := history.keys() - known:
         raise RuntimeError(
@@ -162,7 +165,7 @@ def pending_migrations(
             or existing["checksum"] != migration.checksum
         ):
             raise RuntimeError(
-                f"Applied migration {migration.version} no longer matches {migration.filename}."
+                f"Applied migration {migration.version} no longer matches {migration.filename}. No migrations were applied."
             )
     return pending
 
@@ -191,7 +194,8 @@ async def plan_migrations(target: DatabaseTarget, migrations: list[Migration]) -
 
 
 async def apply_migrations(
-    target: DatabaseTarget, migrations: list[Migration], *, allow_untracked_schema: bool = False
+    target: DatabaseTarget, migrations: list[Migration], *, allow_untracked_schema: bool = False,
+    only_versions: set[str] | None = None,
 ) -> list[str]:
     import asyncpg
 
@@ -203,26 +207,32 @@ async def apply_migrations(
         locked = bool(await connection.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", lock_name))
         if not locked:
             raise RuntimeError("Another migration runner is active; try again after it completes.")
-        plan = await inspect_migration_plan(connection, migrations)
-        if plan["untracked_schema"] and not allow_untracked_schema:
-            raise RuntimeError(
-                "Existing application tables have no tracked migration history. "
-                "Back up and review the schema before using --allow-untracked-schema."
+        # A failure must roll back the entire batch, including history creation.
+        async with connection.transaction(readonly=False):
+            plan = await inspect_migration_plan(connection, migrations)
+            if plan["untracked_schema"] and not allow_untracked_schema:
+                raise RuntimeError(
+                    "Existing application tables have no tracked migration history. "
+                    "Back up and review the schema before using --allow-untracked-schema."
+                )
+            if only_versions is not None:
+                known = {migration.version for migration in migrations}
+                if only_versions - known:
+                    raise ValueError("Unknown selected migration version.")
+            await connection.execute("SET LOCAL lock_timeout = '10s'")
+            await connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version VARCHAR(3) PRIMARY KEY,
+                    filename TEXT NOT NULL UNIQUE,
+                    checksum CHAR(64) NOT NULL,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
             )
-        await connection.execute("SET lock_timeout = '10s'")
-        await connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version VARCHAR(3) PRIMARY KEY,
-                filename TEXT NOT NULL UNIQUE,
-                checksum CHAR(64) NOT NULL,
-                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            """
-        )
-
-        for migration in plan["pending"]:
-            async with connection.transaction():
+            for migration in plan["pending"]:
+                if only_versions is not None and migration.version not in only_versions:
+                    continue
                 await connection.execute(migration.sql)
                 await connection.execute(
                     """
@@ -233,7 +243,7 @@ async def apply_migrations(
                     migration.filename,
                     migration.checksum,
                 )
-            applied.append(migration.filename)
+                applied.append(migration.filename)
         return applied
     finally:
         try:

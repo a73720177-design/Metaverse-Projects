@@ -38,6 +38,70 @@ def should_use_document(
     return _SMALL_TALK_RE.fullmatch(message.strip()) is None
 
 
+def combine_document_contexts(
+    documents: list[DocumentParseResponse], max_context_chars: int
+) -> DocumentParseResponse | None:
+    """파일별로 분량을 나누고 짧은 파일의 남는 분량은 다른 파일에 배분합니다."""
+    groups = []
+    for document in documents:
+        chunks = [
+            (section, f"[파일: {document.filename} / 구간 {section.index}]\n", section.text.strip())
+            for section in document.sections if section.text.strip()
+        ]
+        if chunks:
+            groups.append((document, chunks))
+    # Even a tiny budget must contain a complete source label and some text.
+    while groups and (
+        sum(len(chunks[0][1]) + 1 for _, chunks in groups)
+        + 2 * (len(groups) - 1) > max_context_chars
+    ):
+        groups.pop()
+    if not groups:
+        return None
+
+    sizes = [
+        sum(len(header) + len(text) for _, header, text in chunks) + 2 * (len(chunks) - 1)
+        for _, chunks in groups
+    ]
+    budgets = [len(chunks[0][1]) + 1 for _, chunks in groups]
+    remaining = max_context_chars - sum(budgets) - 2 * (len(groups) - 1)
+    while remaining > 0:
+        active = [i for i, size in enumerate(sizes) if budgets[i] < size]
+        if not active:
+            break
+        share = max(1, remaining // len(active))
+        for i in active:
+            added = min(share, sizes[i] - budgets[i], remaining)
+            budgets[i] += added
+            remaining -= added
+
+    sections = []
+    blocks = []
+    for (document, chunks), budget in zip(groups, budgets):
+        used = 0
+        for section, header, text in chunks:
+            separator = 2 if used else 0
+            available = budget - used - separator - len(header)
+            if available <= 0:
+                break
+            content = text[:available]
+            blocks.append(header + content)
+            sections.append(section.model_copy(update={
+                "text": content,
+                "source_document_id": document.document_id,
+                "source_filename": document.filename,
+                "source_document_type": document.document_type,
+            }))
+            used += separator + len(header) + len(content)
+    first = groups[0][0]
+    return first.model_copy(update={
+        "filename": "통합 참고 자료" if len(groups) > 1 else first.filename,
+        "document_type": "collection" if len(groups) > 1 else first.document_type,
+        "sections": sections,
+        "full_text": "\n\n".join(blocks),
+    })
+
+
 class DocumentContextSelector:
     """외부 검색엔진 없이 관련 문서 청크만 고르는 경량 lexical retriever."""
 

@@ -105,3 +105,42 @@ def test_expected_questions_replace_placeholder_model_output() -> None:
     assert len(questions) == 5
     assert all(len(item.question) >= 12 for item in questions)
     assert all("Question " not in item.question for item in questions)
+
+
+def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) -> None:
+    captured = {}
+
+    class CapturingGenerator:
+        async def generate(self, persona, document, instructions):
+            captured["document"] = document
+            return {"questions": []}
+
+    monkeypatch.setattr("app.services.practice_service.vector_enabled", lambda: False)
+    owner_id = uuid4()
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    document = DocumentParseResponse(
+        filename="긴발표.pdf",
+        document_type="pdf",
+        saved_path=Path("긴발표.pdf"),
+        sections=[DocumentSection(index=1, text="핵심 검증 근거 " * 2000)],
+        full_text="핵심 검증 근거 " * 2000,
+    )
+    persona = PersonaProfile(name="검증자", description="핵심 근거를 검증한다")
+
+    async def run():
+        await document_repository.save(document, owner_id)
+        await agent_repository.save(persona, owner_id)
+        await PracticeService(
+            CapturingGenerator(), agent_repository, document_repository
+        ).generate_expected_questions(
+            ExpectedQuestionRequest(
+                persona_ids=[persona.agent_id],
+                presentation_document_ids=[document.document_id],
+            ),
+            owner_id,
+        )
+
+    asyncio.run(run())
+    assert len(captured["document"].full_text) <= 4000
+    assert len(captured["document"].sections) <= 3

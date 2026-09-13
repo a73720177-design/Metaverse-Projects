@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -95,6 +96,47 @@ async def test_vector_search_limits_query_to_owner_and_requested_documents(
 
 
 @pytest.mark.asyncio
+async def test_vector_context_keeps_second_file_when_first_has_long_hits(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "4000")
+    first = _document("first.pdf", "a" * 6000)
+    second = _document("second.pdf", "b" * 3000)
+    service = VectorRag(AsyncMock())
+    service.search_hits = AsyncMock(return_value=[
+        VectorSearchHit(first.document_id, first.filename, 1, "a" * 3000, 0.1),
+        VectorSearchHit(first.document_id, first.filename, 2, "a" * 3000, 0.11),
+        VectorSearchHit(second.document_id, second.filename, 4, "b" * 3000, 0.2),
+    ])
+
+    selected = await service.select_context([first, second], "compare", uuid4())
+
+    assert selected is not None
+    assert len(selected.full_text) <= 4000
+    assert {section.source_document_id for section in selected.sections} == {
+        first.document_id, second.document_id,
+    }
+    assert next(section for section in selected.sections
+                if section.source_document_id == second.document_id).text.startswith("b" * 1000)
+
+
+@pytest.mark.asyncio
+async def test_vector_context_includes_unindexed_file_using_lexical_context() -> None:
+    indexed = _document("indexed.pdf", "indexed evidence")
+    unindexed = _document("unindexed.pdf", "unindexed evidence")
+    service = VectorRag(AsyncMock())
+    service.search_hits = AsyncMock(return_value=[
+        VectorSearchHit(indexed.document_id, indexed.filename, 1, indexed.full_text, 0.1),
+    ])
+
+    selected = await service.select_context([indexed, unindexed], "evidence", uuid4())
+
+    assert selected is not None
+    assert "unindexed evidence" in selected.full_text
+    assert {section.source_document_id for section in selected.sections} == {
+        indexed.document_id, unindexed.document_id,
+    }
+
+
+@pytest.mark.asyncio
 async def test_index_failure_does_not_fail_document_upload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -106,6 +148,66 @@ async def test_index_failure_does_not_fail_document_upload(
     )
 
     await index_after_save(uuid4(), uuid4())
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")
+async def test_postgres_vector_search_diversifies_hits_and_excludes_other_sources(monkeypatch):
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from app.db.database import normalize_database_url
+    import app.services.vector_rag as module
+
+    engine = create_async_engine(normalize_database_url(os.environ["TEST_DATABASE_URL"]))
+    owner, other_owner = uuid4(), uuid4()
+    first, second, private, unrequested = [
+        _document(name, name) for name in ("first.pdf", "second.pdf", "private.pdf", "unrequested.pdf")
+    ]
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+            try:
+                # Session-local tables shadow production names and are always rolled back.
+                await connection.execute(text("""
+                    CREATE TEMP TABLE documents (
+                        document_id uuid PRIMARY KEY, owner_id uuid, filename text
+                    ) ON COMMIT DROP
+                """))
+                await connection.execute(text("""
+                    CREATE TEMP TABLE document_chunks (
+                        chunk_id uuid PRIMARY KEY, document_id uuid, chunk_index integer,
+                        content text, embedding vector(3), embedding_model text, content_hash text
+                    ) ON COMMIT DROP
+                """))
+                for document, document_owner, count, vector in (
+                    (first, owner, 15, "[1,0,0]"),
+                    (second, owner, 1, "[0.8,0.2,0]"),
+                    (private, other_owner, 1, "[1,0,0]"),
+                    (unrequested, owner, 1, "[1,0,0]"),
+                ):
+                    await connection.execute(text(
+                        "INSERT INTO documents VALUES (:id, :owner, :filename)"
+                    ), {"id": document.document_id, "owner": document_owner, "filename": document.filename})
+                    for index in range(1, count + 1):
+                        await connection.execute(text("""
+                            INSERT INTO document_chunks VALUES (
+                                :chunk, :document, :index, 'evidence', CAST(:vector AS vector),
+                                'test-model', encode(sha256(convert_to('evidence', 'UTF8')), 'hex')
+                            )
+                        """), {"chunk": uuid4(), "document": document.document_id,
+                               "index": index, "vector": vector})
+                monkeypatch.setattr(module, "get_session_factory", lambda: lambda: AsyncSession(bind=connection))
+                client = AsyncMock()
+                client.model = "test-model"
+                client.embed.return_value = [[1.0, 0.0, 0.0]]
+                hits = await VectorRag(client).search_hits([first, second, private], "compare", owner)
+                assert len(hits) == 12
+                assert {hit.document_id for hit in hits[:2]} == {first.document_id, second.document_id}
+                assert {hit.document_id for hit in hits} == {first.document_id, second.document_id}
+            finally:
+                await transaction.rollback()
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

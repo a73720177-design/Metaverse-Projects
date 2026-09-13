@@ -4,7 +4,9 @@ from uuid import UUID
 import pytest
 
 from app.models.document import DocumentParseResponse, DocumentSection
-from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.rag_service import (
+    DocumentContextSelector, combine_document_contexts, should_use_document,
+)
 
 
 DOCUMENT_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -123,3 +125,46 @@ def test_selector_respects_configured_context_character_limit() -> None:
 def test_selector_rejects_invalid_limits(kwargs: dict[str, int]) -> None:
     with pytest.raises(ValueError):
         DocumentContextSelector(**kwargs)
+
+
+def test_combined_context_shares_budget_and_preserves_source_metadata() -> None:
+    from uuid import uuid4
+
+    documents = [
+        _document().model_copy(update={
+            "document_id": uuid4(), "filename": f"file-{i}.pdf", "document_type": "pdf",
+            "sections": [DocumentSection(index=7, text=str(i) * 4000)],
+        }) for i in range(5)
+    ]
+    context = combine_document_contexts(documents, 4000)
+
+    assert context is not None
+    assert len(context.full_text) <= 4000
+    assert {section.source_document_id for section in context.sections} == {
+        document.document_id for document in documents
+    }
+    assert all(len(section.text) > 500 for section in context.sections)
+    assert all(section.source_document_type == "pdf" for section in context.sections)
+    assert all(section.index == 7 for section in context.sections)
+
+
+def test_combined_context_reuses_short_document_budget() -> None:
+    from uuid import uuid4
+
+    short = _document().model_copy(update={
+        "sections": [DocumentSection(index=1, text="short evidence")],
+    })
+    long = short.model_copy(update={
+        "document_id": uuid4(), "filename": "long.pdf",
+        "sections": [DocumentSection(index=1, text="long evidence " * 500)],
+    })
+    context = combine_document_contexts([short, long], 1000)
+
+    assert context is not None
+    assert len(context.full_text) == 1000
+    assert context.sections[0].text == "short evidence"
+    assert len(context.sections[1].text) > 800
+
+
+def test_combined_context_does_not_emit_header_without_evidence() -> None:
+    assert combine_document_contexts([_document()], 10) is None

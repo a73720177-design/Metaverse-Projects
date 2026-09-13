@@ -571,6 +571,7 @@ def test_database_failure_uses_safe_common_error_response() -> None:
             "error": {
                 "code": "database_unavailable",
                 "message": "데이터베이스를 일시적으로 사용할 수 없습니다.",
+                "request_id": response.headers["x-request-id"],
             }
         }
         assert "sensitive" not in response.text

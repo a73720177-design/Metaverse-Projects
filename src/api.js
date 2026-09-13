@@ -3,48 +3,21 @@
 // In development, Vite proxies this same-origin prefix to Backend. This keeps
 // remote browsers from needing direct access to port 8000 and avoids CORS/PNA
 // differences between machines. Deployments can still set an absolute URL.
+import { createApiClient } from './api-client.mjs'
+import { AppError, reportError } from './api-errors.mjs'
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api-backend')
   .replace(/\/$/, '')
 
-// Backend errors are `{ error: { code, message } }`; some paths (validation,
-// FastAPI defaults) instead send `{ detail }` or `{ message }`.
-async function describeHttpError(response) {
-  try {
-    const payload = await response.json()
-    const detail = payload?.error?.message || payload?.detail || payload?.message
-    if (typeof detail === 'string') return detail
-    if (Array.isArray(detail)) return detail.map((item) => item.msg || '입력값을 확인해주세요.').join(' ')
-    return response.statusText || '서버 요청을 처리하지 못했습니다.'
-  } catch {
-    return response.statusText || '서버 응답을 처리하지 못했습니다.'
-  }
-}
+const client = createApiClient(API_BASE_URL)
+const apiFetch = (path, options) => client.json(path, options)
 
-function httpError(message, status) {
-  const error = new Error(`${message} (${status})`)
-  error.status = status
-  return error
+export function getServiceStatus(signal) {
+  return apiFetch('/health/services', { signal, timeoutMs: 15000 })
 }
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-async function apiFetch(path, options = {}) {
-  let response
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, options)
-  } catch (error) {
-    if (error.name === 'AbortError') throw error
-    throw new Error('Backend에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인해주세요.')
-  }
-
-  if (!response.ok) {
-    const message = await describeHttpError(response)
-    throw httpError(message, response.status)
-  }
-  if (response.status === 204) return null
-  return response.json()
 }
 
 // Backend validates: username 3-32 chars [A-Za-z0-9_] (lowercased server-side),
@@ -107,6 +80,7 @@ export function uploadDocument(file, token, signal) {
   const formData = new FormData()
   formData.append('file', file)
   return apiFetch('/documents/parse', {
+    timeoutMs: 180000,
     method: 'POST',
     headers: authHeaders(token),
     body: formData,
@@ -127,12 +101,9 @@ export async function streamChat({
   signal,
   onToken,
 }) {
-  if (!agentId) throw new Error('먼저 Backend에 등록된 페르소나를 선택해주세요.')
-
-  let response
-  try {
-    response = await fetch(
-      `${API_BASE_URL}/agents/${encodeURIComponent(agentId)}/chat/stream`,
+  if (!agentId) throw reportError(new AppError('먼저 질문자를 선택해주세요.', { code: 'validation_error' }))
+  return client.stream(
+      `/agents/${encodeURIComponent(agentId)}/chat/stream`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
@@ -144,76 +115,8 @@ export async function streamChat({
           response_detail: responseDetail,
         }),
         signal,
-      },
-    )
-  } catch (error) {
-    if (error.name === 'AbortError') throw error
-    throw new Error('Backend에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인해주세요.')
-  }
-
-  if (!response.ok) {
-    const errorMessage = await describeHttpError(response)
-    throw httpError(errorMessage, response.status)
-  }
-  if (!response.body) throw new Error('Backend가 스트리밍 응답을 제공하지 않았습니다.')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let completedItem = null
-  let displayBuffer = ''
-
-  const flushDisplayBuffer = (force = false) => {
-    if (!displayBuffer) return
-    const naturalBoundary = /(?:\n|[.!?。！？]\s*)$/.test(displayBuffer)
-    if (!force && !naturalBoundary && displayBuffer.length < 80) return
-    onToken?.(displayBuffer)
-    displayBuffer = ''
-  }
-
-  const handleEvent = (block) => {
-    let event = 'message'
-    const dataLines = []
-    for (const line of block.split(/\r?\n/)) {
-      if (line.startsWith('event:')) event = line.slice(6).trim()
-      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
-    }
-    if (dataLines.length === 0) return
-
-    let data
-    try {
-      data = JSON.parse(dataLines.join('\n'))
-    } catch {
-      throw new Error('Backend 스트리밍 응답 형식이 올바르지 않습니다.')
-    }
-
-    if (event === 'token') {
-      displayBuffer += data.token || ''
-      flushDisplayBuffer(false)
-    }
-    if (event === 'done') {
-      flushDisplayBuffer(true)
-      completedItem = data
-    }
-    if (event === 'error') throw new Error(data.message || '채팅 스트리밍 중 오류가 발생했습니다.')
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-      const blocks = buffer.split(/\r?\n\r?\n/)
-      buffer = blocks.pop() || ''
-      blocks.forEach(handleEvent)
-      if (done || completedItem) break
-    }
-    if (!completedItem && buffer.trim()) handleEvent(buffer)
-    if (!completedItem) throw new Error('Backend 스트리밍이 완료 결과 없이 종료되었습니다.')
-    return completedItem
-  } finally {
-    await reader.cancel().catch(() => {})
-    reader.releaseLock()
-  }
+      }, onToken,
+  )
 }
 
 export function updateAgentDocuments(agentId, documentIds, token, signal) {
@@ -244,6 +147,7 @@ export function deleteAgent(agentId, token, signal) {
 
 export function generateExpectedQuestions({ personaIds, presentationDocumentIds, questionCount = 5 }, token, signal) {
   return apiFetch('/practice/questions', {
+    timeoutMs: 300000,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
     body: JSON.stringify({
@@ -335,6 +239,7 @@ export function permanentlyDeleteChat(messageId, token, signal) {
 export function createSummary(documentId, { style = 'brief', agentId = null, refresh = false } = {}, token, signal) {
   const query = refresh ? '?refresh=true' : ''
   return apiFetch(`/documents/${encodeURIComponent(documentId)}/summary${query}`, {
+    timeoutMs: 180000,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
     body: JSON.stringify({ style, agent_id: agentId }),

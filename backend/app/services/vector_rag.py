@@ -23,6 +23,7 @@ from app.config import (
 )
 from app.db.database import get_session_factory
 from app.models.document import DocumentParseResponse, DocumentSection
+from app.services.rag_service import DocumentContextSelector, combine_document_contexts
 
 
 logger = logging.getLogger(__name__)
@@ -162,8 +163,13 @@ class VectorRag:
                 await session.execute(
                     text(
                         """
+                        WITH ranked AS (
                         SELECT c.document_id, d.filename, c.chunk_index, c.content,
-                               c.embedding <=> CAST(:vector AS vector) AS distance
+                               c.embedding <=> CAST(:vector AS vector) AS distance,
+                               row_number() OVER (
+                                   PARTITION BY c.document_id
+                                   ORDER BY c.embedding <=> CAST(:vector AS vector), c.chunk_id
+                               ) AS document_rank
                         FROM document_chunks c
                         JOIN documents d ON d.document_id = c.document_id
                         WHERE d.owner_id = :owner
@@ -172,7 +178,10 @@ class VectorRag:
                           AND c.embedding_model = :model
                           AND c.content_hash =
                             encode(sha256(convert_to(c.content, 'UTF8')), 'hex')
-                        ORDER BY distance, c.chunk_id
+                        )
+                        SELECT document_id, filename, chunk_index, content, distance
+                        FROM ranked
+                        ORDER BY document_rank, distance, document_id, chunk_index
                         LIMIT :limit
                         """
                     ),
@@ -181,7 +190,7 @@ class VectorRag:
                         "ids": [document.document_id for document in documents],
                         "model": self.client.model,
                         "vector": json.dumps(vector),
-                        "limit": candidate_limit,
+                        "limit": max(candidate_limit, len({item.document_id for item in documents})),
                     },
                 )
             ).mappings().all()
@@ -209,44 +218,25 @@ class VectorRag:
         if not hits:
             return None
         by_id = {document.document_id: document for document in documents}
-        sections: list[DocumentSection] = []
-        rendered: list[str] = []
-        remaining = get_rag_max_context_chars()
+        grouped: dict[UUID, list[DocumentSection]] = {}
         for hit in hits:
-            document = by_id.get(hit.document_id)
-            if document is None:
+            if hit.document_id not in by_id or not hit.content.strip():
                 continue
-            header = f"[파일: {hit.filename} / 구간 {hit.chunk_index}]\n"
-            separator = 2 if rendered else 0
-            available = remaining - len(header) - separator
-            if available <= 0:
-                break
-            content = hit.content[:available]
-            if not content:
-                continue
-            rendered.append(header + content)
-            sections.append(
-                DocumentSection(
-                    index=hit.chunk_index,
-                    text=content,
-                    source_document_id=hit.document_id,
-                    source_filename=hit.filename,
-                    source_document_type=document.document_type,
-                )
+            grouped.setdefault(hit.document_id, []).append(
+                DocumentSection(index=hit.chunk_index, text=hit.content)
             )
-            remaining -= len(header) + len(content) + separator
-            if remaining <= 0:
-                break
-        if not sections:
-            return None
-        first = by_id[sections[0].source_document_id]
-        return first.model_copy(
-            update={
-                "filename": "벡터 검색 통합 자료",
-                "document_type": "collection",
-                "sections": sections,
-                "full_text": "\n\n".join(rendered),
-            }
+        selected = [
+            by_id[document_id].model_copy(update={"sections": sections})
+            for document_id, sections in grouped.items()
+        ]
+        # An unindexed file must not disappear just because another file has hits.
+        selector = DocumentContextSelector()
+        selected.extend(
+            selector.select(document, query)
+            for document_id, document in by_id.items() if document_id not in grouped
+        )
+        return combine_document_contexts(
+            selected, get_rag_max_context_chars()
         )
 
 

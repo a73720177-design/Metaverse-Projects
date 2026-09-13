@@ -17,7 +17,9 @@ from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.grounding_service import GroundingChecker
-from app.services.rag_service import DocumentContextSelector, should_use_document
+from app.services.rag_service import (
+    DocumentContextSelector, combine_document_contexts, should_use_document,
+)
 from app.services.vector_rag import VectorRag, vector_enabled
 
 
@@ -81,9 +83,9 @@ class ChatService:
         )
         previous_used_document = bool(previous_chats) and previous_chats[-1].document_id is not None
         requested_ids = list(dict.fromkeys(
-            [*request.document_ids, *persona.document_ids]
-            if request.document_ids
-            else ([request.document_id] if request.document_id else persona.document_ids)
+            [*request.document_ids,
+             *([request.document_id] if request.document_id else []),
+             *persona.document_ids]
         ))
         candidates = []
         if requested_ids:
@@ -121,7 +123,7 @@ class ChatService:
                 candidates,
                 key=lambda item: self.context_selector.relevance_score(item, retrieval_query),
                 reverse=True,
-            )[:4]
+            )
             selected_documents = [
                 selected
                 for item in ranked
@@ -161,6 +163,9 @@ class ChatService:
                 "sections": sections,
                 "full_text": "\n\n".join(blocks),
             })
+            document = combine_document_contexts(
+                selected_documents, self.context_selector.max_context_chars
+            )
         return persona, effective_request, document, history
 
     async def _apply_grounding(
