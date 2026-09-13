@@ -59,6 +59,13 @@ class DocumentIn(BaseModel):
     full_text: str = Field(max_length=300_000)
 
 
+class QuestionStrategy(BaseModel):
+    criticalness: int = Field(default=3, ge=1, le=5)
+    difficulty: int = Field(default=3, ge=1, le=5)
+    evidence_required: bool = True
+    follow_up_depth: int = Field(default=1, ge=1, le=3)
+
+
 class PersonaProfileIn(BaseModel):
     agent_id: UUID
     name: str
@@ -66,6 +73,7 @@ class PersonaProfileIn(BaseModel):
     role: str = "Evaluator"
     expertise: list[PersonaTrait] = Field(default_factory=list, max_length=10)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list, max_length=10)
+    question_strategy: QuestionStrategy = Field(default_factory=QuestionStrategy)
 
 
 class ClaimVerdict(StrEnum):
