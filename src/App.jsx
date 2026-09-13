@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { createAgent, createSummary, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
+import { DEFAULT_QUESTION_STRATEGY, createAgent, createSummary, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
 import { newConversation, readWorkspace, validateFiles } from './workspace-utils.mjs'
 
 const ACCEPTED = [
@@ -12,6 +12,8 @@ const ACCEPTED = [
 ].join(',')
 const sec = (ms = 0) => `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}초`
 const adaptPersona = (p) => ({ ...p, id: p.agent_id, documentIds: p.document_ids || [] })
+const composeDescription = (role, focus) => `${role.trim()} · 중점: ${focus.join(', ')}`
+const focusFromPersona = (persona) => persona.expertise?.map((trait) => trait.value) || []
 const isCancelled = (error) => error?.name === 'AbortError'
 const textLength = (doc) => doc.text_length ?? doc.full_text?.length ?? 0
 function stored(key) { try { return localStorage.getItem(key) } catch { return null } }
@@ -95,11 +97,44 @@ function Heading({ title, text, count }) {
   return <div className="section-heading"><div><h3>{title}</h3><p>{text}</p></div>{count && <span className="count-pill">{count}</span>}</div>
 }
 
+const CRITICALNESS_LABELS = ['1 온건', '2', '3 보통', '4', '5 매우 날카로움']
+const DIFFICULTY_LABELS = ['1 기초', '2', '3 표준', '4', '5 심화']
+const FOLLOW_UP_LABELS = ['1 한 번만', '2 두 단계', '3 집요하게']
+
+function FocusInput({ focus, onChange, disabled }) {
+  const [draft, setDraft] = useState('')
+  function add() {
+    const value = draft.trim()
+    if (!value || focus.includes(value) || focus.length >= 6) return
+    onChange([...focus, value]); setDraft('')
+  }
+  return <div className="focus-input">
+    <div className="file-chip-row">{focus.map((item) => <span className="file-chip" key={item}>{item}<button type="button" disabled={disabled} aria-label={`${item} 관점 삭제`} onClick={() => onChange(focus.filter((f) => f !== item))}>×</button></span>)}</div>
+    {focus.length < 6 && <div className="chip-add-row"><input value={draft} disabled={disabled} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="예: 기술 선택 근거" maxLength={40} /><button type="button" className="text-btn" disabled={disabled || !draft.trim()} onClick={add}>추가</button></div>}
+  </div>
+}
+
+function ScaleButtons({ value, onChange, labels, disabled }) {
+  return <div className="summary-style-row">{labels.map((label, i) => <button type="button" key={label} disabled={disabled} className={value === i + 1 ? 'active' : ''} onClick={() => onChange(i + 1)}>{label}</button>)}</div>
+}
+
+function QuestionStrategyFields({ strategy, onChange, disabled }) {
+  const set = (patch) => onChange({ ...strategy, ...patch })
+  return <div className="strategy-field">
+    <label>질문 강도<ScaleButtons value={strategy.criticalness} onChange={(v) => set({ criticalness: v })} labels={CRITICALNESS_LABELS} disabled={disabled} /></label>
+    <label>질문 난이도<ScaleButtons value={strategy.difficulty} onChange={(v) => set({ difficulty: v })} labels={DIFFICULTY_LABELS} disabled={disabled} /></label>
+    <label className="checkbox-field"><input type="checkbox" checked={strategy.evidence_required} disabled={disabled} onChange={(e) => set({ evidence_required: e.target.checked })} /> 답변에 근거·수치를 반드시 요구</label>
+    <label>후속 질문 깊이<ScaleButtons value={strategy.follow_up_depth} onChange={(v) => set({ follow_up_depth: v })} labels={FOLLOW_UP_LABELS} disabled={disabled} /></label>
+  </div>
+}
+
 function PersonaCreator({ token, onCreated, onDocuments }) {
   const requests = useRequestScope()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
+  const [role, setRole] = useState('')
+  const [focus, setFocus] = useState([])
+  const [questionStrategy, setQuestionStrategy] = useState(DEFAULT_QUESTION_STRATEGY)
   const [gender, setGender] = useState('unspecified')
   const [age, setAge] = useState('')
   const [files, setFiles] = useState([])
@@ -127,8 +162,8 @@ function PersonaCreator({ token, onCreated, onDocuments }) {
     try {
       setStage('페르소나 준비 중')
       await requests.run(async (signal) => {
-        const result = await createAgent({ name: name.trim(), description: description.trim(), gender, age: age ? Number(age) : null, documentIds: files.map((d) => d.document_id) }, token, signal)
-        if (!signal.aborted) { onCreated(adaptPersona(result), files); setName(''); setDescription(''); setGender('unspecified'); setAge(''); setFiles([]); setOpen(false) }
+        const result = await createAgent({ name: name.trim(), description: composeDescription(role, focus), role: role.trim(), focus, questionStrategy, gender, age: age ? Number(age) : null, documentIds: files.map((d) => d.document_id) }, token, signal)
+        if (!signal.aborted) { onCreated(adaptPersona(result), files); setName(''); setRole(''); setFocus([]); setQuestionStrategy(DEFAULT_QUESTION_STRATEGY); setGender('unspecified'); setAge(''); setFiles([]); setOpen(false) }
       })
     } catch (err) { if (!isCancelled(err)) setError(err.message) } finally { setBusy(false); setStage('') }
   }
@@ -136,7 +171,9 @@ function PersonaCreator({ token, onCreated, onDocuments }) {
   return <form className="persona-form" onSubmit={submit}>
     <Heading title="새 질문자" text="교수, 투자자, 심사위원의 역할과 질문 성향을 설정합니다." />
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 기술 심사위원" required /></label>
-    <label>역할과 질문 성향<textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="기술 근거와 구현 가능성을 중점적으로 질문합니다." required /></label>
+    <label>역할<input value={role} onChange={(e) => setRole(e.target.value)} placeholder="예: 컴퓨터공학 전공 교수" required /></label>
+    <label>중점 관점 (최대 6개)<FocusInput focus={focus} onChange={setFocus} disabled={busy} /></label>
+    <QuestionStrategyFields strategy={questionStrategy} onChange={setQuestionStrategy} disabled={busy} />
     <div className="demographic-fields">
       <label>성별<select value={gender} onChange={(e) => setGender(e.target.value)}><option value="unspecified">선택 안 함</option><option value="female">여성</option><option value="male">남성</option><option value="other">기타</option></select></label>
       <label>나이<input type="number" min="1" max="120" value={age} onChange={(e) => setAge(e.target.value)} placeholder="예: 45" /></label>
@@ -144,14 +181,16 @@ function PersonaCreator({ token, onCreated, onDocuments }) {
     <label className="file-button">PDF·PPTX·DOCX 참고자료 추가<input className="visually-hidden" multiple disabled={busy} type="file" accept={ACCEPTED} onChange={(e) => { attachFiles([...e.target.files]); e.target.value = '' }} /></label>
     <div className="file-chip-row">{files.map((f) => <span className="file-chip" key={f.document_id}>{f.filename}<ParseStatus doc={f} /><button type="button" disabled={busy} aria-label={`${f.filename} 첨부 해제`} onClick={() => setFiles((old) => old.filter((item) => item.document_id !== f.document_id))}>×</button></span>)}</div>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="button-row"><button type="button" className="text-btn" disabled={busy} onClick={() => setOpen(false)}>닫기</button><button className="primary-btn" disabled={busy || !name.trim() || !description.trim()}>{busy ? <Spinner label={stage} /> : '페르소나 생성'}</button></div>
+    <div className="button-row"><button type="button" className="text-btn" disabled={busy} onClick={() => setOpen(false)}>닫기</button><button className="primary-btn" disabled={busy || !name.trim() || !role.trim() || !focus.length}>{busy ? <Spinner label={stage} /> : '페르소나 생성'}</button></div>
   </form>
 }
 
 function PersonaEditor({ persona, documents, token, onSaved, onChanged, onCancel, onDocuments }) {
   const requests = useRequestScope()
   const [name, setName] = useState(persona.name)
-  const [description, setDescription] = useState(persona.description || '')
+  const [role, setRole] = useState(persona.role || '')
+  const [focus, setFocus] = useState(focusFromPersona(persona))
+  const [questionStrategy, setQuestionStrategy] = useState(persona.question_strategy || DEFAULT_QUESTION_STRATEGY)
   const [gender, setGender] = useState(persona.gender || 'unspecified')
   const [age, setAge] = useState(persona.age || '')
   const [documentIds, setDocumentIds] = useState(persona.documentIds)
@@ -192,7 +231,7 @@ function PersonaEditor({ persona, documents, token, onSaved, onChanged, onCancel
     e.preventDefault(); if (busy) return; setBusy(true); setError('')
     try {
       await requests.run(async (signal) => {
-        const saved = adaptPersona(await updateAgent(persona.id, { name: name.trim(), description: description.trim(), gender, age: age ? Number(age) : null, documentIds }, token, signal))
+        const saved = adaptPersona(await updateAgent(persona.id, { name: name.trim(), description: composeDescription(role, focus), role: role.trim(), focus, questionStrategy, gender, age: age ? Number(age) : null, documentIds }, token, signal))
         if (!signal.aborted) onSaved(saved)
       })
     } catch (err) { if (!isCancelled(err)) setError(err.message) } finally { setBusy(false) }
@@ -200,12 +239,14 @@ function PersonaEditor({ persona, documents, token, onSaved, onChanged, onCancel
   return <form className="persona-form persona-edit-form" onSubmit={submit}>
     <Heading title={`${persona.name} 수정`} text="참고자료 연결 변경은 즉시 저장됩니다. 이름과 역할은 수정 저장을 눌러주세요." />
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-    <label>역할과 질문 성향<textarea value={description} onChange={(e) => setDescription(e.target.value)} required /></label>
+    <label>역할<input value={role} onChange={(e) => setRole(e.target.value)} required /></label>
+    <label>중점 관점 (최대 6개)<FocusInput focus={focus} onChange={setFocus} disabled={busy} /></label>
+    <QuestionStrategyFields strategy={questionStrategy} onChange={setQuestionStrategy} disabled={busy} />
     <div className="demographic-fields"><label>성별<select value={gender} onChange={(e) => setGender(e.target.value)}><option value="unspecified">선택 안 함</option><option value="female">여성</option><option value="male">남성</option><option value="other">기타</option></select></label><label>나이<input type="number" min="1" max="120" value={age} onChange={(e) => setAge(e.target.value)} /></label></div>
     <div><strong>현재 첨부자료 {linked.length}개</strong><div className="persona-source-list">{linked.length ? linked.map((doc) => <div key={doc.document_id}><span title={doc.filename}>📎 {doc.filename}<ParseStatus doc={doc} /></span><button type="button" disabled={busy} aria-label={`${doc.filename} 질문자 자료 연결 해제`} onClick={() => removeDocument(doc.document_id)}>연결 해제</button></div>) : <p>첨부된 자료가 없습니다.</p>}</div></div>
     <label className="file-button">＋ 새 자료 즉시 첨부<input className="visually-hidden" multiple disabled={busy} type="file" accept={ACCEPTED} onChange={(e) => { attachFiles([...e.target.files]); e.target.value = '' }} /></label>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="button-row"><button type="button" className="text-btn" disabled={busy} onClick={onCancel}>닫기</button><button className="primary-btn" disabled={busy || !name.trim() || !description.trim()}>{busy ? <Spinner label="수정·자료 저장 중" /> : '수정 저장'}</button></div>
+    <div className="button-row"><button type="button" className="text-btn" disabled={busy} onClick={onCancel}>닫기</button><button className="primary-btn" disabled={busy || !name.trim() || !role.trim() || !focus.length}>{busy ? <Spinner label="수정·자료 저장 중" /> : '수정 저장'}</button></div>
   </form>
 }
 
@@ -392,8 +433,9 @@ function Workspace({ token, onLogout }) {
           <Heading title="2. 질문자 선택" text="질문자별 자료를 확인하고 수정할 수 있습니다." count={`${selected.length} / 4`} />
           <div className="persona-grid">{personas.map((p) => {
             const linked = p.documentIds.map((id) => documents.find((doc) => doc.document_id === id)).filter(Boolean)
+            const focus = focusFromPersona(p)
             return <article className={`persona-entry ${selected.includes(p.id) ? 'selected' : ''}`} key={p.id}>
-              <button type="button" className="persona-choice" disabled={!selected.includes(p.id) && selected.length === 4} onClick={() => togglePersona(p.id)}><span className="avatar-fallback">{p.name.slice(0, 2)}</span><span><strong>{p.name}</strong><small>{p.role} · {p.age ? `${p.age}세 · ` : ''}자료 {linked.length}개</small></span><b>{selected.includes(p.id) ? '✓' : '+'}</b></button>
+              <button type="button" className="persona-choice" disabled={!selected.includes(p.id) && selected.length === 4} onClick={() => togglePersona(p.id)}><span className="avatar-fallback">{p.name.slice(0, 2)}</span><span><strong>{p.name}</strong><small>{p.role} · {p.age ? `${p.age}세 · ` : ''}자료 {linked.length}개</small>{focus.length > 0 && <small className="persona-focus-hint">중점: {focus.join(', ')}</small>}</span><b>{selected.includes(p.id) ? '✓' : '+'}</b></button>
               <div className="persona-inline-sources">{linked.length ? linked.map((doc) => <span key={doc.document_id}>📎 {doc.filename}</span>) : <small>첨부자료 없음</small>}</div>
               <div className="persona-actions"><button type="button" onClick={() => setEditingPersonaId((id) => id === p.id ? null : p.id)}>수정</button><button type="button" className="danger-action" onClick={() => removePersona(p)}>삭제</button></div>
               {editingPersonaId === p.id && <PersonaEditor persona={p} documents={documents} token={token} onCancel={() => setEditingPersonaId(null)} onDocuments={(docs) => setDocuments((current) => [...current, ...docs.filter((doc) => !current.some((item) => item.document_id === doc.document_id))])} onChanged={(changed) => setPersonas((items) => items.map((item) => item.id === changed.id ? changed : item))} onSaved={(saved) => { setPersonas((items) => items.map((item) => item.id === saved.id ? saved : item)); setEditingPersonaId(null) }} />}

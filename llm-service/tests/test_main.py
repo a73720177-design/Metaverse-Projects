@@ -286,7 +286,10 @@ def test_chat_trims_document_to_reserved_context_budget(monkeypatch):
         return "문서 기반 답변"
 
     monkeypatch.setattr("app.main.call_llm", fake_call)
-    monkeypatch.setenv("LLM_MAX_MODEL_LEN", "1024")
+    # 페르소나 블록에 질문 전략 지침이 추가되며 페르소나만으로도 프롬프트가
+    # 커졌으므로, 여유 있는 모델 길이를 줘서 트리밍 자체(문서만 잘리는지)를
+    # 검증한다. 너무 타이트하면 페르소나 지침만으로 예산을 넘겨 422가 난다.
+    monkeypatch.setenv("LLM_MAX_MODEL_LEN", "2048")
     monkeypatch.setenv("LLM_CONTEXT_SAFETY_TOKENS", "128")
     monkeypatch.setenv("LLM_APPROX_CHARS_PER_TOKEN", "1")
     document = _document_payload()

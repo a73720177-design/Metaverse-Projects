@@ -202,6 +202,94 @@ def test_create_and_get_agent_through_contracts() -> None:
         app.dependency_overrides.clear()
 
 
+class ExplodingPersonaGenerator:
+    async def generate(self, request: PersonaCreateRequest) -> dict:
+        raise AssertionError("role/focus가 지정되면 LLM 추론을 호출하지 않아야 합니다.")
+
+
+def test_create_agent_with_direct_role_and_focus_skips_generator() -> None:
+    service = PersonaService(ExplodingPersonaGenerator(), InMemoryAgentRepository())
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        created = client.post(
+            "/agents",
+            json={
+                "name": "기술 타당성 심사위원",
+                "description": "placeholder",
+                "role": "컴퓨터공학 전공 교수",
+                "focus": ["기술 선택 근거", "시스템 구조"],
+                "question_strategy": {
+                    "criticalness": 4,
+                    "difficulty": 4,
+                    "evidence_required": True,
+                    "follow_up_depth": 2,
+                },
+            },
+        )
+        assert created.status_code == 201
+        payload = created.json()
+        assert payload["role"] == "컴퓨터공학 전공 교수"
+        assert [item["value"] for item in payload["expertise"]] == ["기술 선택 근거", "시스템 구조"]
+        assert all(item["status"] == "user_stated" for item in payload["expertise"])
+        assert payload["question_strategy"] == {
+            "criticalness": 4,
+            "difficulty": 4,
+            "evidence_required": True,
+            "follow_up_depth": 2,
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_agent_applies_role_focus_and_question_strategy() -> None:
+    service = PersonaService(
+        FakePersonaGenerator(), InMemoryAgentRepository(), InMemoryDocumentRepository()
+    )
+    app.dependency_overrides[get_persona_service] = lambda: service
+    try:
+        created = client.post(
+            "/agents",
+            json={
+                "name": "A",
+                "description": "d",
+                "role": "교수",
+                "focus": ["관점1"],
+                "question_strategy": {
+                    "criticalness": 2, "difficulty": 2, "evidence_required": False, "follow_up_depth": 1,
+                },
+            },
+        ).json()
+
+        updated = client.put(
+            f"/agents/{created['agent_id']}",
+            json={
+                "name": "A",
+                "description": "d2",
+                "role": "새 역할",
+                "focus": ["관점A", "관점B"],
+                "question_strategy": {
+                    "criticalness": 5, "difficulty": 5, "evidence_required": True, "follow_up_depth": 3,
+                },
+            },
+        )
+        assert updated.status_code == 200
+        payload = updated.json()
+        assert payload["role"] == "새 역할"
+        assert [item["value"] for item in payload["expertise"]] == ["관점A", "관점B"]
+        assert payload["question_strategy"]["criticalness"] == 5
+        assert payload["question_strategy"]["follow_up_depth"] == 3
+
+        # role/focus를 생략하면 기존 값을 유지한다.
+        kept = client.put(
+            f"/agents/{created['agent_id']}",
+            json={"name": "A", "description": "d3"},
+        ).json()
+        assert kept["role"] == "새 역할"
+        assert [item["value"] for item in kept["expertise"]] == ["관점A", "관점B"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_agent_is_hidden_from_another_user() -> None:
     service = PersonaService(FakePersonaGenerator(), InMemoryAgentRepository())
     app.dependency_overrides[get_persona_service] = lambda: service

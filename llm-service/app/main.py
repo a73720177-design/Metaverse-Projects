@@ -34,13 +34,12 @@ from app.llm_client import (
     stream_llm,
 )
 from app.prompts import (
-    CHAT_PROMPT,
-    CONCEPT_EXTRACTION_PROMPT,
-    FREE_CHAT_PROMPT,
-    PERSONA_GENERATION_PROMPT,
-    QUESTION_GENERATION_PROMPT,
-    REVIEW_GENERATION_PROMPT,
     SUMMARY_GENERATION_PROMPT,
+    build_concept_prompt,
+    build_effective_chat_prompt,
+    build_persona_prompt,
+    build_question_prompt,
+    build_review_prompt,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
 from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
@@ -60,10 +59,8 @@ from app.schemas import (
 from app.schemas_v1 import (
     ChatGenerationRequest,
     ChatGenerationResponse,
-    ChatTurn,
     PersonaGenerationRequest,
     PersonaGenerationResponse,
-    PersonaProfileIn,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
     EmbeddingRequest,
@@ -86,21 +83,6 @@ app = FastAPI(
 def health_check():
     """서버가 살아있는지 확인용. 배포/모니터링 담당자가 헬스체크에 사용."""
     return {"status": "ok"}
-
-
-def _build_concept_prompt(paper_text: str) -> str:
-    return CONCEPT_EXTRACTION_PROMPT.format(paper_text=paper_text)
-
-
-def _build_question_prompt(request: QuestionGenerationRequest) -> str:
-    concepts_json = json.dumps(
-        [c.model_dump() for c in request.concepts], ensure_ascii=False
-    )
-    return QUESTION_GENERATION_PROMPT.format(
-        critical_points=request.critical_points,
-        concepts_json=concepts_json,
-        script_text=request.script_text,
-    )
 
 
 def _call_llm_as_json(
@@ -157,61 +139,12 @@ def _call_llm_as_text(
 
 @app.post("/extract-concepts", response_model=ConceptExtractionResponse)
 def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
-    return _generate(_build_concept_prompt(request.paper_text), ConceptExtractionResponse)
+    return _generate(build_concept_prompt(request.paper_text), ConceptExtractionResponse)
 
 
 @app.post("/generate-questions", response_model=QuestionGenerationResponse)
 def generate_questions(request: QuestionGenerationRequest) -> QuestionGenerationResponse:
-    return _generate(_build_question_prompt(request), QuestionGenerationResponse)
-
-
-def _persona_json(persona: PersonaProfileIn) -> str:
-    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
-
-
-def _build_persona_prompt(request: PersonaGenerationRequest) -> str:
-    return PERSONA_GENERATION_PROMPT.format(
-        name=request.name, description=request.description
-    )
-
-
-def _build_review_prompt(request: ReviewGenerationRequest) -> str:
-    return REVIEW_GENERATION_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        filename=request.document.filename,
-        full_text=request.document.full_text,
-        instructions=request.instructions or "(없음)",
-    )
-
-
-def _history_block(history: list[ChatTurn]) -> str:
-    if not history:
-        return "(이전 대화 없음)"
-    max_chars = _positive_env_int("CHAT_HISTORY_MAX_CHARS", 2000)
-    lines = [
-        f"{'사용자' if turn.role == 'user' else '평가자'}: {turn.content}"
-        for turn in history
-    ]
-    # Oldest turns are least relevant to the current question, so drop from
-    # the front first when the block would blow the token budget.
-    while lines and sum(len(line) + 1 for line in lines) > max_chars:
-        lines.pop(0)
-    return "\n".join(lines) if lines else "(이전 대화 없음)"
-
-
-def _build_chat_prompt(request: ChatGenerationRequest) -> str:
-    document_block = (
-        f"파일명: {request.document.filename}\n{request.document.full_text}"
-        if request.document is not None
-        else "(제공된 문서 없음)"
-    )
-    return CHAT_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        document_block=document_block,
-        history_block=_history_block(request.history),
-        message=request.message,
-        answer_guidance=_answer_guidance(request.max_output_tokens),
-    )
+    return _generate(build_question_prompt(request), QuestionGenerationResponse)
 
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -231,60 +164,10 @@ def health_check_v1():
 
 @v1_router.post("/personas", response_model=PersonaGenerationResponse)
 def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
+    # PERSONA_GENERATION_PROMPT의 개수/길이 상한(전문 분야·평가 스타일 각
+    # 2~4개, evidence 1개·60자 이내)이면 512 토큰 안에 충분히 들어온다.
     return _generate(
-        _build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
-    )
-
-
-_DOCUMENT_TOPIC_MARKERS = (
-    "발표", "자료", "문서", "슬라이드", "첨부", "내용", "주장", "근거",
-    "평가", "요약", "분석", "페이지", "개선", "질문", "document", "slide",
-    "presentation", "evidence", "source", "summary",
-)
-_FREE_CHAT_MARKERS = (
-    "안녕", "반가", "고마", "너는 누구", "넌 누구", "정체가", "날씨", "농담",
-    "hello", "thank", "who are you", "weather", "tell me a joke",
-)
-
-
-def _is_off_topic(request: ChatGenerationRequest) -> bool:
-    """Classify obvious cases locally so chat latency does not double."""
-    message = " ".join(request.message.lower().split())
-    has_document_topic = any(marker in message for marker in _DOCUMENT_TOPIC_MARKERS)
-    if request.document is not None:
-        if has_document_topic:
-            return False
-        # Once a conversation is under way, a bare greeting/thanks marker in a
-        # follow-up ("고마워, 근데 그거 무슨 뜻이야?") should not bounce it out
-        # of the grounded document prompt.
-        if not request.history and any(marker in message for marker in _FREE_CHAT_MARKERS):
-            return True
-        # With selected context, ambiguous questions should stay grounded.
-        return False
-    # Without a document, explicit presentation questions retain the evaluator
-    # prompt while everything else uses concise free conversation.
-    return not has_document_topic
-
-
-def _build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
-    if not _is_off_topic(request):
-        return _build_chat_prompt(request)
-    return FREE_CHAT_PROMPT.format(
-        persona_json=_persona_json(request.persona),
-        history_block=_history_block(request.history),
-        message=request.message,
-        answer_guidance=_answer_guidance(request.max_output_tokens),
-    )
-
-
-def _answer_guidance(max_output_tokens: int) -> str:
-    if max_output_tokens <= 512:
-        return "핵심 결론을 먼저 말하고 1~3문장 안에서 답하세요."
-    if max_output_tokens <= 1024:
-        return "핵심 결론과 이유를 나누어 설명하되 불필요한 반복 없이 답하세요."
-    return (
-        "핵심 결론, 문서 근거, 개선 제안 순서로 최대 약 30줄 안에서 충분히 설명하세요. "
-        "내용이 끝나면 최대 길이를 채우지 말고 즉시 종료하세요."
+        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
     )
 
 
@@ -325,7 +208,7 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
         if request.document is not None else None
     )
     base_request = request.model_copy(update={"document": empty_document})
-    base_tokens = math.ceil(len(_build_effective_chat_prompt(base_request)) / chars_per_token)
+    base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
     available_document_tokens = input_budget - base_tokens
     if available_document_tokens < 1:
         raise HTTPException(
@@ -355,9 +238,12 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
             generate=_generate,
             model=OLLAMA_REVIEW_MODEL,
         )
+    # claims를 3~5개(스키마 상한 20보다 훨씬 보수적으로)로 제한해도, 근거
+    # 인용(excerpt)·questions까지 더하면 기존 1024 토큰은 여유가 빠듯해
+    # 502(JSON 파싱 실패)로 이어지기 쉬웠다. 1536으로 올려 여유를 둔다.
     return _generate(
-        _build_review_prompt(request), ReviewGenerationResponse,
-        max_tokens=1024, model=OLLAMA_REVIEW_MODEL,
+        build_review_prompt(request), ReviewGenerationResponse,
+        max_tokens=1536, model=OLLAMA_REVIEW_MODEL,
     )
 
 
@@ -411,7 +297,7 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
     effective_request = _fit_chat_context(request)
     return ChatGenerationResponse(
         answer=_call_llm_as_text(
-            _build_effective_chat_prompt(effective_request),
+            build_effective_chat_prompt(effective_request),
             model=CHAT_MODEL,
             max_tokens=request.max_output_tokens,
         ),
@@ -427,7 +313,7 @@ def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
         try:
             emitted = False
             for token in safe_stream(stream_llm(
-                _build_effective_chat_prompt(effective_request),
+                build_effective_chat_prompt(effective_request),
                 model=CHAT_MODEL,
                 max_tokens=request.max_output_tokens,
             )):

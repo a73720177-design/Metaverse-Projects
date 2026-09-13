@@ -38,6 +38,16 @@ class AgentTable(Base):
     age: Mapped[int | None] = mapped_column(nullable=True)
     expertise: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     evaluation_style: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    question_strategy: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: {
+            "criticalness": 3,
+            "difficulty": 3,
+            "evidence_required": True,
+            "follow_up_depth": 1,
+        },
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

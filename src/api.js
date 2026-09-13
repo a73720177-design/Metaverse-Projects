@@ -78,13 +78,15 @@ export function getCurrentUser(token, signal) {
   })
 }
 
+export const DEFAULT_QUESTION_STRATEGY = { criticalness: 3, difficulty: 3, evidence_required: true, follow_up_depth: 1 }
+
 // Requires auth — Backend scopes agents to the caller. ->
-// { agent_id, name, description, role, expertise, evaluation_style }
-export function createAgent({ name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
+// { agent_id, name, description, role, expertise, evaluation_style, question_strategy }
+export function createAgent({ name, description, role = null, focus = [], questionStrategy = DEFAULT_QUESTION_STRATEGY, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
   return apiFetch('/agents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
+    body: JSON.stringify({ name, description, role, focus, question_strategy: questionStrategy, gender, age, document_ids: documentIds }),
     signal,
   })
 }
@@ -225,11 +227,11 @@ export function updateAgentDocuments(agentId, documentIds, token, signal) {
   })
 }
 
-export function updateAgent(agentId, { name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
+export function updateAgent(agentId, { name, description, role = null, focus = [], questionStrategy = DEFAULT_QUESTION_STRATEGY, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
   return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
+    body: JSON.stringify({ name, description, role, focus, question_strategy: questionStrategy, gender, age, document_ids: documentIds }),
     signal,
   })
 }

@@ -3,7 +3,8 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.persona import (
-    PersonaCreateRequest, PersonaHistoryItem, PersonaProfile, PersonaUpdateRequest,
+    EvidenceStatus, PersonaCreateRequest, PersonaHistoryItem, PersonaProfile, PersonaTrait,
+    PersonaUpdateRequest,
 )
 from app.integrations.llm.contracts import PersonaGenerator, PersonaGeneratorError
 from app.repositories.agent_repository import AgentRepository
@@ -20,6 +21,14 @@ class PersonaNotFoundError(RuntimeError):
 
 class PersonaDocumentNotFoundError(RuntimeError):
     pass
+
+
+def _focus_to_expertise(focus: list[str]) -> list[PersonaTrait]:
+    """사용자가 직접 입력한 focus 목록을 근거 있는(user_stated) trait로 담는다."""
+    return [
+        PersonaTrait(value=item, status=EvidenceStatus.USER_STATED, confidence=1.0)
+        for item in focus
+    ]
 
 
 class PersonaService:
@@ -41,7 +50,16 @@ class PersonaService:
                 if await self.document_repository.get(document_id, owner_id) is None:
                     raise PersonaDocumentNotFoundError("Document not found")
         try:
-            generated = await self.generator.generate(request)
+            if request.role and request.focus:
+                # 사용자가 role/focus를 직접 지정했으므로, 설명에서 역할과
+                # 전문 분야를 추론하는 LLM 호출을 건너뛰고 입력값을 그대로 쓴다.
+                generated = {
+                    "role": request.role,
+                    "expertise": _focus_to_expertise(request.focus),
+                    "evaluation_style": [],
+                }
+            else:
+                generated = await self.generator.generate(request)
             persona = PersonaProfile.model_validate(
                 {
                     **generated,
@@ -50,6 +68,7 @@ class PersonaService:
                     "description": request.description,
                     "gender": request.gender,
                     "age": request.age,
+                    "question_strategy": request.question_strategy,
                     "document_ids": request.document_ids,
                 }
             )
@@ -75,13 +94,18 @@ class PersonaService:
         for document_id in request.document_ids:
             if await self.document_repository.get(document_id, owner_id) is None:
                 raise PersonaDocumentNotFoundError("연결할 자료를 찾을 수 없습니다.")
-        updated = current.model_copy(update={
+        updates: dict = {
             "name": request.name,
             "description": request.description,
             "gender": request.gender,
             "age": request.age,
+            "question_strategy": request.question_strategy,
             "document_ids": request.document_ids,
-        })
+        }
+        if request.role and request.focus:
+            updates["role"] = request.role
+            updates["expertise"] = _focus_to_expertise(request.focus)
+        updated = current.model_copy(update=updates)
         await self.repository.save(updated, owner_id)
         return updated
 

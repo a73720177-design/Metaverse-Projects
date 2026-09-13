@@ -100,6 +100,7 @@ def _to_history(row: AgentTable) -> PersonaHistoryItem:
             "age": row.age,
             "expertise": row.expertise,
             "evaluation_style": row.evaluation_style,
+            "question_strategy": row.question_strategy,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "deleted_at": row.deleted_at,
@@ -128,6 +129,7 @@ class PostgresAgentRepository:
             age=persona.age,
             expertise=data["expertise"],
             evaluation_style=data["evaluation_style"],
+            question_strategy=data["question_strategy"],
         )
         async with get_session_factory()() as session:
             await session.merge(row)

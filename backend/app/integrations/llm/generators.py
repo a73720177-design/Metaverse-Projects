@@ -24,7 +24,8 @@ class HttpPersonaGenerator:
             return await self.client.post_json(
                 "/personas",
                 request.model_dump(
-                    mode="json", exclude={"document_ids", "gender", "age"}
+                    mode="json",
+                    exclude={"document_ids", "gender", "age", "role", "focus", "question_strategy"},
                 ),
             )
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:

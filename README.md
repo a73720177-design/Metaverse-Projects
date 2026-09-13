@@ -39,6 +39,7 @@ Ollama :11434
 - `RAG_MODE=vector`(pgvector) 시 Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 시맨틱 검색. 기본값 `lexical`은 기존 키워드 검색만 사용
 - 문서 요약·핵심 주제 API(`brief`/`detailed`/`outline` 스타일, 선택적 페르소나 관점). 동일 (문서, 페르소나, 스타일) 조합은 캐시된 결과를 재사용하고 `refresh=true`일 때만 재생성. LLM Service는 긴 문서를 map-reduce로 나눠 처리
 - `GROUNDING_MODE`(`off`/`annotate`/`strict`)로 Chat 답변-근거 검증. LLM을 다시 부르지 않고 lexical 포함률 + 애매한 문장만 배치 임베딩 재확인으로 `grounding` 필드를 채움. 기본값 `off`
+- LLM Service `prompts.py`를 공통 정책 상수 + 렌더러(`truncate`/`render_persona`/`render_document`/`render_instructions`) + 빌더 구조로 재작성. 리뷰·페르소나 프롬프트에 스키마 상한보다 보수적인 개수·길이 지침을 추가해 502(JSON 잘림) 위험을 줄이고, 사용자 제어 입력(`full_text`/`instructions`/`filename`)을 구분자 블록 안에만 넣어 프롬프트 인젝션을 방어
 
 `backend/database/005_add_trash_and_chat_history.sql`은 `chat_messages`, `agents.deleted_at`, Agent 외래키 cascade와 휴지통 인덱스를 반영합니다. `009_add_document_chunk_embeddings.sql`은 `pgvector` 확장과 `document_chunks.embedding`/`embedding_model`/`embedded_at`/`content_hash` 컬럼을 추가합니다(테이블의 기존 의미는 바꾸지 않습니다). `010_add_summaries.sql`은 문서 요약을 저장하는 `summaries` 테이블을 추가합니다. `docker-compose.yml`의 postgres 이미지는 `pgvector/pgvector:pg16`을 사용합니다. Migration을 공유 DB에 적용하기 전에 별도 테스트 DB에서 적용·재실행·rollback을 검증해야 합니다.
 
