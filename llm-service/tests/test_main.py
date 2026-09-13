@@ -65,6 +65,11 @@ ENDPOINTS = [
         '{"claims": [], "feedback": {"positive": "p", "negative": "n"}, "questions": []}',
     ),
     (
+        "/api/v1/practice/questions",
+        {"persona": _persona_payload(), "document": _document_payload(), "instructions": "5개"},
+        '{"questions": ["첫 번째 발표 근거를 어떻게 검증했습니까?", "두 번째 실행 방법의 현실성을 어떻게 확인했습니까?", "세 번째 비교 대안보다 우수한 근거는 무엇입니까?", "네 번째 위험 요소에 대한 대응 계획은 무엇입니까?", "다섯 번째 자료의 한계를 어떻게 보완할 계획입니까?"]}',
+    ),
+    (
         "/api/v1/chat",
         {"persona": _persona_payload(), "message": "질문"},
         "짧은 답변",
@@ -122,6 +127,25 @@ def test_empty_paper_text_rejected_without_calling_llm(monkeypatch):
 
     assert response.status_code == 422
     assert called is False
+
+
+def test_summary_contract_accepts_large_parsed_pdf_for_map_reduce(monkeypatch):
+    monkeypatch.setenv("SUMMARY_SINGLE_PASS_CHARS", "10")
+    monkeypatch.setattr("app.main.generate_summary_map_reduce", lambda **kwargs: {
+        "summary": "요약", "key_topics": [], "outline": []
+    })
+    payload = {
+        "document": {
+            "document_id": "22222222-2222-2222-2222-222222222222",
+            "filename": "large.pdf",
+            "document_type": "pdf",
+            "sections": [],
+            "full_text": "가" * 1_700_000,
+        },
+        "style": "brief",
+    }
+    response = client.post("/api/v1/summaries", json=payload)
+    assert response.status_code == 200
 
 
 def test_legacy_health_ok():
@@ -501,7 +525,10 @@ def test_ollama_health_ok_when_embedding_model_pulled(monkeypatch):
 
         @staticmethod
         def json():
-            return {"models": [{"name": "bge-m3:latest"}]}
+                return {"models": [
+                    {"name": "bge-m3:latest"},
+                    {"name": "qwen3:4b"},
+                ]}
 
     monkeypatch.setattr("app.llm_client.requests.get", lambda *a, **k: FakeResponse())
     from app.llm_client import check_ollama_health

@@ -22,6 +22,8 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "").strip() or OLLAMA_MODEL
 OLLAMA_REVIEW_MODEL = os.getenv("OLLAMA_REVIEW_MODEL", "qwen3:8b").strip()
+OLLAMA_QUESTION_MODEL = os.getenv("OLLAMA_QUESTION_MODEL", "").strip() or OLLAMA_REVIEW_MODEL
+OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "").strip() or OLLAMA_REVIEW_MODEL
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
 OLLAMA_EMBED_BATCH = int(os.getenv("OLLAMA_EMBED_BATCH", "32"))
 if OLLAMA_EMBED_BATCH < 1:
@@ -261,7 +263,14 @@ def check_ollama_health() -> bool:
             str(model.get("name", "")).split(":")[0]
             for model in response.json().get("models", [])
         }
-        return OLLAMA_EMBEDDING_MODEL.split(":")[0] in available
+        required = {
+            OLLAMA_CHAT_MODEL.split(":")[0],
+            OLLAMA_REVIEW_MODEL.split(":")[0],
+            OLLAMA_QUESTION_MODEL.split(":")[0],
+            OLLAMA_SUMMARY_MODEL.split(":")[0],
+            OLLAMA_EMBEDDING_MODEL.split(":")[0],
+        }
+        return required <= available
     except (requests.RequestException, LLMError, ValueError):
         return False
 

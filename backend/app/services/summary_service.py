@@ -17,6 +17,10 @@ class SummaryResourceNotFoundError(RuntimeError):
     pass
 
 
+class SummarySourceUnavailableError(RuntimeError):
+    pass
+
+
 class SummaryService:
     def __init__(
         self,
@@ -41,6 +45,10 @@ class SummaryService:
         document = await self.document_repository.get(document_id, owner_id)
         if document is None:
             raise SummaryResourceNotFoundError("Document not found")
+        if not document.full_text.strip():
+            raise SummarySourceUnavailableError(
+                "문서에서 요약할 텍스트를 추출하지 못했습니다. 텍스트가 포함된 자료를 사용해 주세요."
+            )
         persona = None
         if request.agent_id is not None:
             persona = await self.agent_repository.get(request.agent_id, owner_id)

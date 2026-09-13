@@ -119,6 +119,26 @@ def test_create_summary_for_missing_document_returns_404() -> None:
         app.dependency_overrides.clear()
 
 
+def test_create_summary_for_document_without_text_returns_actionable_422() -> None:
+    service, _, document_repository, _ = _build_service()
+    empty = DocumentParseResponse(
+        document_id=UUID("33333333-3333-3333-3333-333333333333"),
+        filename="scan.pdf",
+        document_type="pdf",
+        saved_path=Path("scan.pdf"),
+        sections=[],
+        full_text="",
+    )
+    asyncio.run(document_repository.save(empty, TEST_USER.user_id))
+    app.dependency_overrides[get_summary_service] = lambda: service
+    try:
+        response = client.post(f"/documents/{empty.document_id}/summary", json={})
+        assert response.status_code == 422
+        assert "텍스트를 추출하지 못했습니다" in response.json()["error"]["message"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_create_summary_for_missing_agent_returns_404() -> None:
     service, _, _, _ = _build_service()
     app.dependency_overrides[get_summary_service] = lambda: service

@@ -30,7 +30,7 @@ from app.schemas_v1 import (
 )
 
 # 리뷰 품질 추적/회귀 비교용. 프롬프트 문구를 바꿀 때마다 갱신한다.
-PROMPT_VERSION = "2025-09-10"
+PROMPT_VERSION = "2026-09-13"
 
 # --- 공통 정책 상수 (여러 템플릿이 재사용) ---------------------------------
 
@@ -330,6 +330,35 @@ REVIEW_GENERATION_PROMPT = (
     + "\n"
 )
 
+EXPECTED_QUESTION_PROMPT = (
+    """당신은 아래 평가자 페르소나가 실제 발표 현장에서 질문할 예상 질문만 만듭니다.
+
+[평가자 페르소나]
+{persona_block}
+
+[발표 자료와 질문자 참고자료]
+{document_block}
+
+[생성 조건]
+{instructions_block}
+
+요구사항:
+1. 요청된 개수만큼 서로 다른 질문을 작성하세요.
+2. 각 질문은 자료에 실제로 등장한 구체적인 주장, 수치, 방법, 대상 또는 용어를 하나 이상 언급하세요.
+3. 질문자 참고자료는 평가 기준으로 사용하고 발표 자료는 검토 대상으로 사용하세요. 두 자료의 주장을 서로 바꾸어 말하지 마세요.
+4. 근거, 실행 가능성, 비교 대안, 위험, 한계 관점을 중복 없이 배분하세요.
+5. 페르소나의 이름만 반복하지 말고 역할·설명·참고자료에서 드러난 관점이 질문 내용에 나타나게 하세요.
+6. "질문 1", "더 설명해 주세요" 같은 범용 문장과 이미 작성한 질문의 표현만 바꾼 중복 질문은 금지합니다.
+7. 자료에 없는 사실을 단정하지 말고 확인 질문 형태로 작성하세요.
+8. 한글, 숫자와 자료에 나온 영문 기술명을 제외한 다른 문자 체계는 사용하지 마세요.
+9. 자료에서 뜻을 직접 설명하지 않은 약어를 임의로 풀어 쓰지 마세요.
+10. 자료에 나온 수치의 단위나 대상을 다른 단위·대상으로 바꾸지 마세요. 예를 들어 '20명'을 '20개 학교'로 바꾸면 안 됩니다.
+11. 질문은 반드시 발표 자료의 주장에 대한 것이어야 합니다. 질문자 참고자료는 관점과 평가 기준만 정하는 데 사용하고, 그 참고자료의 제목·저자·내용을 발표자가 사용했다고 전제하거나 직접 설명하라고 요구하지 마세요. 단, 같은 내용이 발표 자료에도 명시된 경우는 예외입니다.
+
+"""
+    + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE + "\n"
+)
+
 # REVIEW_MAP_PROMPT/REVIEW_REDUCE_PROMPT(긴 문서 map-reduce 경로)는 이번
 # 작업 범위 밖이라 문구를 그대로 유지한다.
 REVIEW_MAP_PROMPT = """당신은 아래 평가자 페르소나 입장에서 발표 자료의 일부 구간을 검토합니다. 이
@@ -476,6 +505,14 @@ def build_persona_prompt(request: PersonaGenerationRequest) -> str:
 
 def build_review_prompt(request: ReviewGenerationRequest) -> str:
     return REVIEW_GENERATION_PROMPT.format(
+        persona_block=render_persona(request.persona),
+        document_block=render_document(request.document, with_index=True),
+        instructions_block=render_instructions(request.instructions),
+    )
+
+
+def build_expected_question_prompt(request: ReviewGenerationRequest) -> str:
+    return EXPECTED_QUESTION_PROMPT.format(
         persona_block=render_persona(request.persona),
         document_block=render_document(request.document, with_index=True),
         instructions_block=render_instructions(request.instructions),

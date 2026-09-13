@@ -109,9 +109,15 @@ class ChatService:
         ):
             if vector_enabled():
                 try:
-                    document = await VectorRag().select_context(
-                        candidates, retrieval_query, owner_id
-                    )
+                    vector_rag = VectorRag()
+                    if await vector_rag.has_complete_index(candidates, owner_id):
+                        document = await vector_rag.select_context(
+                            candidates, retrieval_query, owner_id
+                        )
+                    else:
+                        logger.info(
+                            "Chat vector index is incomplete; using lexical retrieval"
+                        )
                 except Exception:
                     logger.warning(
                         "Vector search failed; falling back to lexical RAG",

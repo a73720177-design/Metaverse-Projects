@@ -88,6 +88,10 @@ def get_rag_max_context_chars() -> int:
     return _get_positive_int("RAG_MAX_CONTEXT_CHARS", 4000)
 
 
+def get_practice_max_concurrent_personas() -> int:
+    return _get_positive_int("PRACTICE_MAX_CONCURRENT_PERSONAS", 1)
+
+
 def get_rag_mode() -> str:
     return _get_choice("RAG_MODE", "lexical", {"lexical", "vector"})
 

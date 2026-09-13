@@ -56,7 +56,10 @@ class DocumentIn(BaseModel):
     filename: str
     document_type: str
     sections: list[DocumentSection] = Field(default_factory=list, max_length=1000)
-    full_text: str = Field(max_length=300_000)
+    # Long PDFs are sampled by the review/summary map-reduce pipelines before
+    # generation. Keep an HTTP safety cap while accepting the project's actual
+    # parsed corpus (currently up to about 1.7M characters).
+    full_text: str = Field(max_length=2_000_000)
 
 
 class QuestionStrategy(BaseModel):
@@ -123,6 +126,12 @@ class ReviewGenerationResponse(BaseModel):
     # map-reduce 경로에서만 채워진다. 기본값 None이라 Backend의
     # ReviewResult.model_validate()나 단일 패스 응답은 영향받지 않는다.
     coverage: ReviewCoverage | None = None
+
+
+class ExpectedQuestionGenerationResponse(BaseModel):
+    questions: list[Annotated[str, Field(min_length=12, max_length=500)]] = Field(
+        min_length=5, max_length=5
+    )
 
 
 class ChatTurn(BaseModel):

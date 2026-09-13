@@ -16,6 +16,7 @@ from app.prompts import (
     PERSONA_GENERATION_PROMPT,
     QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
+    EXPECTED_QUESTION_PROMPT,
     TRUNCATE_SUFFIX,
     build_chat_prompt,
     build_concept_prompt,
@@ -23,6 +24,7 @@ from app.prompts import (
     build_persona_prompt,
     build_question_prompt,
     build_review_prompt,
+    build_expected_question_prompt,
     render_document,
     render_instructions,
     render_persona,
@@ -312,6 +314,21 @@ def test_build_review_prompt_fills_all_placeholders():
     request = ReviewGenerationRequest(persona=_persona(), document=_document())
     prompt = build_review_prompt(request)
     assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
+
+
+def test_expected_question_prompt_is_focused_and_persona_grounded():
+    request = ReviewGenerationRequest(
+        persona=_persona(name="투자자", description="수익성을 검증한다"),
+        document=_document(sections=[], full_text="고객 전환율은 12%이다."),
+        instructions="예상 질문을 5개 생성하세요.",
+    )
+    prompt = build_expected_question_prompt(request)
+    assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
+    assert "고객 전환율은 12%" in prompt
+    assert "수익성을 검증한다" in prompt
+    assert "서로 다른 질문" in EXPECTED_QUESTION_PROMPT
+    assert "주장" in EXPECTED_QUESTION_PROMPT
+    assert "참고자료의 제목·저자·내용" in EXPECTED_QUESTION_PROMPT
 
 
 def test_build_chat_prompt_fills_all_placeholders():

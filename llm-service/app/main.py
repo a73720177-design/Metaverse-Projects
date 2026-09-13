@@ -27,6 +27,8 @@ from app.llm_client import (
     LLMError,
     CHAT_MODEL,
     OLLAMA_REVIEW_MODEL,
+    OLLAMA_QUESTION_MODEL,
+    OLLAMA_SUMMARY_MODEL,
     OLLAMA_EMBEDDING_MODEL,
     embed_texts,
     call_llm,
@@ -40,6 +42,7 @@ from app.prompts import (
     build_persona_prompt,
     build_question_prompt,
     build_review_prompt,
+    build_expected_question_prompt,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
 from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
@@ -63,6 +66,7 @@ from app.schemas_v1 import (
     PersonaGenerationResponse,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    ExpectedQuestionGenerationResponse,
     EmbeddingRequest,
     EmbeddingResponse,
     SummaryGenerationRequest,
@@ -87,11 +91,12 @@ def health_check():
 
 def _call_llm_as_json(
     prompt: str, response_schema: dict, max_tokens: int | None = None,
-    model: str | None = None,
+    model: str | None = None, *, think: bool = False,
 ) -> dict:
     try:
         raw = call_llm(
-            prompt, model=model, response_schema=response_schema, max_tokens=max_tokens
+            prompt, model=model, response_schema=response_schema,
+            max_tokens=max_tokens, think=think,
         )
     except LLMError:
         # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
@@ -109,10 +114,11 @@ def _call_llm_as_json(
 
 def _generate(
     prompt: str, response_model: type[T], max_tokens: int | None = None,
-    model: str | None = None,
+    model: str | None = None, *, think: bool = False,
 ) -> T:
     data = _call_llm_as_json(
-        prompt, response_model.model_json_schema(), max_tokens=max_tokens, model=model
+        prompt, response_model.model_json_schema(), max_tokens=max_tokens,
+        model=model, think=think,
     )
     try:
         return response_model.model_validate(data)
@@ -247,6 +253,20 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
     )
 
 
+@v1_router.post("/practice/questions", response_model=ExpectedQuestionGenerationResponse)
+def generate_expected_questions(
+    request: ReviewGenerationRequest,
+) -> ExpectedQuestionGenerationResponse:
+    return _generate(
+        build_expected_question_prompt(request),
+        ExpectedQuestionGenerationResponse,
+        # Five focused questions fit within this budget. Letting CPU-based
+        # structured generation run to 1024 caused repetition and timeouts.
+        max_tokens=640,
+        model=OLLAMA_QUESTION_MODEL,
+    )
+
+
 def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
     return SUMMARY_GENERATION_PROMPT.format(
         persona_block=persona_block(request.persona),
@@ -264,11 +284,11 @@ def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResp
             style=request.style,
             persona=request.persona,
             generate=_generate,
-            model=OLLAMA_REVIEW_MODEL,
+            model=OLLAMA_SUMMARY_MODEL,
         )
     return _generate(
         _build_summary_prompt(request), SummaryGenerationResponse,
-        max_tokens=style_max_tokens(request.style), model=OLLAMA_REVIEW_MODEL,
+        max_tokens=style_max_tokens(request.style), model=OLLAMA_SUMMARY_MODEL,
     )
 
 

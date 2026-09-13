@@ -162,6 +162,23 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
     assert result.claims[0].sources[0].document_id == document.document_id
 
 
+def test_expected_question_generator_uses_focused_endpoint() -> None:
+    persona = _persona()
+    document = _document()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/practice/questions"
+        payload = json.loads(request.content)
+        assert payload["persona"]["agent_id"] == str(persona.agent_id)
+        assert "saved_path" not in payload["document"]
+        return httpx.Response(200, json={"questions": ["발표 근거를 어떻게 검증했습니까?"]})
+
+    result = asyncio.run(HttpReviewGenerator(
+        HttpLlmClient(httpx.MockTransport(handler)), endpoint="/practice/questions"
+    ).generate(persona, document, "5개"))
+    assert result["questions"] == ["발표 근거를 어떻게 검증했습니까?"]
+
+
 @pytest.mark.parametrize("with_document", [False, True])
 def test_v1_chat_contract_supports_optional_document(with_document: bool) -> None:
     persona = _persona()

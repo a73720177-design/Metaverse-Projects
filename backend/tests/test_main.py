@@ -16,7 +16,7 @@ from app.dependencies import (
 )
 from app.main import app
 from app.models.chat import ChatRequest
-from app.models.persona import PersonaCreateRequest
+from app.models.persona import PersonaCreateRequest, PersonaUpdateRequest
 from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository
@@ -392,6 +392,60 @@ def test_agent_persists_owned_document_contract() -> None:
         assert updated.json()["document_ids"] == [str(document.document_id)]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> None:
+    class RecordingGenerator:
+        def __init__(self) -> None:
+            self.requests: list[PersonaCreateRequest] = []
+
+        async def generate(self, request: PersonaCreateRequest) -> dict:
+            self.requests.append(request)
+            return {
+                "role": f"generated-{len(self.requests)}",
+                "expertise": [],
+                "evaluation_style": [],
+            }
+
+    import asyncio
+
+    generator = RecordingGenerator()
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    document = DocumentParseResponse(
+        filename="criteria.pdf",
+        document_type="pdf",
+        saved_path=Path("criteria.pdf"),
+        sections=[{"index": 1, "text": "근거와 비용을 검증한다."}],
+        full_text="근거와 비용을 검증한다.",
+    )
+    asyncio.run(document_repository.save(document, TEST_USER.user_id))
+    service = PersonaService(generator, agent_repository, document_repository)
+
+    created = asyncio.run(service.create(
+        PersonaCreateRequest(
+            name="투자자",
+            description="사업성을 평가한다.",
+            document_ids=[document.document_id],
+        ),
+        TEST_USER.user_id,
+    ))
+    assert "근거와 비용을 검증한다." in generator.requests[0].description
+    assert created.description == "사업성을 평가한다."
+    assert created.role == "generated-1"
+
+    updated = asyncio.run(service.update(
+        created.agent_id,
+        PersonaUpdateRequest(
+            name="투자자",
+            description="시장성을 우선 평가한다.",
+            document_ids=[document.document_id],
+        ),
+        TEST_USER.user_id,
+    ))
+    assert "근거와 비용을 검증한다." in generator.requests[1].description
+    assert updated.description == "시장성을 우선 평가한다."
+    assert updated.role == "generated-2"
 
 
 def test_agent_rejects_document_owned_by_another_user() -> None:

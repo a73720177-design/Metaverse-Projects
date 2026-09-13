@@ -20,6 +20,7 @@ from app.repositories.agent_repository import AgentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
 from app.services.summary_service import (
     SummaryResourceNotFoundError, SummaryService, SummaryServiceError,
+    SummarySourceUnavailableError,
 )
 from app.storage.object_storage import ObjectStorage, ObjectStorageError
 
@@ -181,6 +182,8 @@ async def create_summary(
         return await service.create(document_id, request, current_user.user_id, refresh=refresh)
     except SummaryResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SummarySourceUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except SummaryServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

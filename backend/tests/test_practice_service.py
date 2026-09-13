@@ -69,6 +69,44 @@ def test_expected_questions_use_multiple_documents_and_personas() -> None:
     assert len(response.results[0].questions[0].sources) == 3
 
 
+def test_expected_question_http_calls_respect_persona_concurrency_limit() -> None:
+    class ConcurrencyGenerator:
+        def __init__(self):
+            self.active = 0
+            self.peak = 0
+
+        async def generate(self, persona, document, instructions):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return {"questions": []}
+
+    owner_id = uuid4()
+    agents = InMemoryAgentRepository()
+    documents = InMemoryDocumentRepository()
+    presentation = _document("발표.pdf")
+    personas = [PersonaProfile(name=f"질문자 {index}") for index in range(3)]
+    generator = ConcurrencyGenerator()
+
+    async def run():
+        await documents.save(presentation, owner_id)
+        for persona in personas:
+            await agents.save(persona, owner_id)
+        await PracticeService(
+            generator, agents, documents, max_concurrent_personas=1
+        ).generate_expected_questions(
+            ExpectedQuestionRequest(
+                persona_ids=[persona.agent_id for persona in personas],
+                presentation_document_ids=[presentation.document_id],
+            ),
+            owner_id,
+        )
+
+    asyncio.run(run())
+    assert generator.peak == 1
+
+
 def test_expected_questions_reject_more_than_four_personas() -> None:
     with pytest.raises(ValidationError):
         ExpectedQuestionRequest(
@@ -144,3 +182,77 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
     asyncio.run(run())
     assert len(captured["document"].full_text) <= 4000
     assert len(captured["document"].sections) <= 3
+
+
+def test_large_presentation_does_not_push_out_persona_reference(monkeypatch) -> None:
+    captured = {}
+
+    class CapturingGenerator:
+        async def generate(self, persona, document, instructions):
+            captured["text"] = document.full_text
+            return {"questions": []}
+
+    monkeypatch.setattr("app.services.practice_service.vector_enabled", lambda: False)
+    owner_id = uuid4()
+    agents = InMemoryAgentRepository()
+    documents = InMemoryDocumentRepository()
+    presentation = DocumentParseResponse(
+        filename="긴발표.pdf",
+        document_type="pdf",
+        saved_path=Path("긴발표.pdf"),
+        sections=[DocumentSection(index=1, text="발표 본문 " * 5000)],
+        full_text="발표 본문 " * 5000,
+    )
+    reference = _document("교수의 보안평가기준.pdf")
+    persona = PersonaProfile(name="교수", document_ids=[reference.document_id])
+
+    async def run():
+        await documents.save(presentation, owner_id)
+        await documents.save(reference, owner_id)
+        await agents.save(persona, owner_id)
+        await PracticeService(CapturingGenerator(), agents, documents).generate_expected_questions(
+            ExpectedQuestionRequest(
+                persona_ids=[persona.agent_id],
+                presentation_document_ids=[presentation.document_id],
+            ),
+            owner_id,
+        )
+
+    asyncio.run(run())
+    assert "[발표 자료: 긴발표.pdf]" in captured["text"]
+    assert "[질문자 참고자료: 교수의 보안평가기준.pdf]" in captured["text"]
+    assert "교수의 보안평가기준.pdf 본문" in captured["text"]
+
+
+def test_expected_questions_keep_bounded_overview_when_persona_terms_do_not_match(monkeypatch) -> None:
+    captured = {}
+
+    class CapturingGenerator:
+        async def generate(self, persona, document, instructions):
+            captured["document"] = document
+            return {"questions": [{"question": "잘못된 객체"}, "какие 질문", "실제 발표 내용의 검증 방법을 구체적으로 설명해 주시겠습니까?"]}
+
+    monkeypatch.setattr("app.services.practice_service.vector_enabled", lambda: False)
+    owner_id = uuid4()
+    agents = InMemoryAgentRepository()
+    documents = InMemoryDocumentRepository()
+    document = _document("양자역학.pdf")
+    persona = PersonaProfile(name="디자인 심사위원", description="색상과 조형을 검토한다")
+
+    async def run():
+        await documents.save(document, owner_id)
+        await agents.save(persona, owner_id)
+        return await PracticeService(CapturingGenerator(), agents, documents).generate_expected_questions(
+            ExpectedQuestionRequest(
+                persona_ids=[persona.agent_id],
+                presentation_document_ids=[document.document_id],
+            ),
+            owner_id,
+        )
+
+    result = asyncio.run(run())
+    assert captured["document"] is not None
+    assert "양자역학.pdf 본문" in captured["document"].full_text
+    assert len(captured["document"].full_text) <= 4000
+    assert not any(item.question.startswith("{'question'") for item in result.results[0].questions)
+    assert not any("какие" in item.question for item in result.results[0].questions)

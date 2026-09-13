@@ -207,6 +207,43 @@ class VectorRag:
         ]
         return hits[: get_vector_rag_final_k()]
 
+    async def has_complete_index(
+        self, documents: list[DocumentParseResponse], owner_id: UUID
+    ) -> bool:
+        """Return true only when every non-empty chunk has a current embedding."""
+        if not documents:
+            return False
+        async with get_session_factory()() as session:
+            rows = (await session.execute(text("""
+                SELECT c.document_id, count(*) AS total,
+                       count(*) FILTER (
+                         WHERE c.embedding IS NOT NULL
+                           AND c.embedding_model = :model
+                           AND c.content_hash = encode(sha256(convert_to(c.content, 'UTF8')), 'hex')
+                       ) AS indexed
+                FROM document_chunks c
+                JOIN documents d ON d.document_id = c.document_id
+                WHERE d.owner_id = :owner
+                  AND c.document_id = ANY(CAST(:ids AS uuid[]))
+                  AND btrim(c.content) <> ''
+                GROUP BY c.document_id
+            """), {
+                "owner": owner_id,
+                "ids": [document.document_id for document in documents],
+                "model": self.client.model,
+            })).mappings().all()
+        counts = {
+            row["document_id"]: (int(row["indexed"]), int(row["total"]))
+            for row in rows
+        }
+        expected = {document.document_id for document in documents if document.full_text.strip()}
+        return bool(expected) and all(
+            document_id in counts
+            and counts[document_id][1] > 0
+            and counts[document_id][0] == counts[document_id][1]
+            for document_id in expected
+        )
+
     async def select_context(
         self,
         documents: list[DocumentParseResponse],
@@ -225,16 +262,18 @@ class VectorRag:
             grouped.setdefault(hit.document_id, []).append(
                 DocumentSection(index=hit.chunk_index, text=hit.content)
             )
+        # An entirely unindexed file must not disappear just because another
+        # requested file has vector hits.
+        selector = DocumentContextSelector()
+        for document_id, document in by_id.items():
+            if document_id not in grouped:
+                lexical = selector.select(document, query)
+                if lexical is not None:
+                    grouped[document_id] = lexical.sections
         selected = [
             by_id[document_id].model_copy(update={"sections": sections})
-            for document_id, sections in grouped.items()
+            for document_id, sections in grouped.items() if sections
         ]
-        # An unindexed file must not disappear just because another file has hits.
-        selector = DocumentContextSelector()
-        selected.extend(
-            selector.select(document, query)
-            for document_id, document in by_id.items() if document_id not in grouped
-        )
         return combine_document_contexts(
             selected, get_rag_max_context_chars()
         )

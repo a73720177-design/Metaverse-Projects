@@ -11,6 +11,7 @@ from app.config import (
     get_login_rate_limit_attempts,
     get_login_rate_limit_window_seconds,
     get_object_storage_mode,
+    get_practice_max_concurrent_personas,
     get_repository_mode,
 )
 from app.integrations.llm.client import HttpLlmClient
@@ -220,10 +221,11 @@ def get_practice_service() -> PracticeService:
     generator = (
         LegacyQuestionReviewGenerator(get_llm_client())
         if get_llm_contract_mode() == "legacy_questions"
-        else HttpReviewGenerator(get_llm_client())
+        else HttpReviewGenerator(get_llm_client(), endpoint="/practice/questions")
     )
     return PracticeService(
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
+        max_concurrent_personas=get_practice_max_concurrent_personas(),
     )

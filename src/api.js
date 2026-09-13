@@ -147,7 +147,9 @@ export function deleteAgent(agentId, token, signal) {
 
 export function generateExpectedQuestions({ personaIds, presentationDocumentIds, questionCount = 5 }, token, signal) {
   return apiFetch('/practice/questions', {
-    timeoutMs: 300000,
+    // CPU-only laptop profile generates personas sequentially to avoid Ollama
+    // memory contention. Four personas can legitimately take over five minutes.
+    timeoutMs: 900000,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
     body: JSON.stringify({

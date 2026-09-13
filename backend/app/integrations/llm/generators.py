@@ -32,8 +32,9 @@ class HttpPersonaGenerator:
 
 
 class HttpReviewGenerator:
-    def __init__(self, client: HttpLlmClient) -> None:
+    def __init__(self, client: HttpLlmClient, endpoint: str = "/reviews") -> None:
         self.client = client
+        self.endpoint = endpoint
 
     async def generate(self, persona: PersonaProfile, document: DocumentParseResponse,
                        instructions: str | None) -> dict[str, Any]:
@@ -45,7 +46,7 @@ class HttpReviewGenerator:
             "instructions": instructions,
         }
         try:
-            return await self.client.post_json("/reviews", payload)
+            return await self.client.post_json(self.endpoint, payload)
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ReviewGeneratorError(str(exc)) from exc
 
