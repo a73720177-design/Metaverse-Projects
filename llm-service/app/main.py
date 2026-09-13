@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 from typing import TypeVar
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -130,17 +131,33 @@ def _generate(
 def _call_llm_as_text(
     prompt: str, *, model: str | None = None, max_tokens: int | None = None
 ) -> str:
-    try:
-        raw = call_llm(prompt, model=model, max_tokens=max_tokens)
-    except LLMError:
-        logger.exception("Ollama 채팅 호출 실패")
-        raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
-    if not isinstance(raw, str):
-        raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
-    answer = clean_chat_text(raw)
+    current_prompt = prompt
+    for attempt in range(2):
+        try:
+            raw = call_llm(current_prompt, model=model, max_tokens=max_tokens)
+        except LLMError:
+            logger.exception("Ollama 채팅 호출 실패")
+            raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
+        answer = clean_chat_text(raw)
+        if answer and not _contains_chinese_text(answer):
+            return answer
+        if attempt == 0:
+            current_prompt = (
+                prompt
+                + "\n\n[출력 언어 재확인]\n중국어 한자를 사용하지 말고 반드시 한국어로만 "
+                "최종 답변을 다시 작성하세요."
+            )
     if not answer:
         raise HTTPException(status_code=502, detail="LLM이 빈 답변을 반환했습니다.")
-    return answer
+    logger.warning("중국어가 포함된 채팅 응답을 차단함")
+    raise HTTPException(status_code=502, detail="한국어 답변을 생성하지 못했습니다. 다시 시도하세요.")
+
+
+def _contains_chinese_text(value: str) -> bool:
+    """Reject CJK ideographs so accidental Chinese output never reaches the UI."""
+    return re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value) is not None
 
 
 @app.post("/extract-concepts", response_model=ConceptExtractionResponse)
@@ -331,12 +348,19 @@ def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
 
     def events():
         try:
-            emitted = False
-            for token in safe_stream(stream_llm(
+            tokens = list(safe_stream(stream_llm(
                 build_effective_chat_prompt(effective_request),
                 model=CHAT_MODEL,
                 max_tokens=request.max_output_tokens,
-            )):
+            )))
+            if _contains_chinese_text("".join(tokens)):
+                tokens = [_call_llm_as_text(
+                    build_effective_chat_prompt(effective_request),
+                    model=CHAT_MODEL,
+                    max_tokens=request.max_output_tokens,
+                )]
+            emitted = False
+            for token in tokens:
                 emitted = emitted or bool(token.strip())
                 data = json.dumps({"token": token}, ensure_ascii=False)
                 yield f"event: token\ndata: {data}\n\n"

@@ -45,6 +45,7 @@ def test_vllm_non_stream_payload_and_structured_output(monkeypatch):
     assert captured["json"]["max_tokens"] == 1536
     assert captured["json"]["structured_outputs"] == {"json": schema}
     assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["json"]["messages"][0]["content"].endswith("\n/no_think")
     assert captured["headers"] == {"Authorization": "Bearer secret"}
 
 
@@ -111,6 +112,21 @@ def test_ollama_stream_error_event_is_not_success(monkeypatch):
     )
     with pytest.raises(LLMError):
         list(stream_llm("prompt"))
+
+
+def test_ollama_disables_thinking_in_option_and_prompt(monkeypatch):
+    captured = {}
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse({"response": "최종 답변"})
+
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setattr("app.llm_client.requests.post", fake_post)
+
+    assert call_llm("질문") == "최종 답변"
+    assert captured["json"]["think"] is False
+    assert captured["json"]["prompt"].endswith("\n/no_think")
 
 
 @pytest.mark.parametrize("vector", [None, [], [True], [float("nan")], [float("inf")], ["1"]])

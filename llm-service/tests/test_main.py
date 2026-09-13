@@ -199,6 +199,16 @@ def test_chat_rejects_empty_text_response(monkeypatch):
     assert response.status_code == 502
 
 
+def test_chat_retries_and_blocks_chinese_output(monkeypatch):
+    answers = iter(["这是中文回答", "한국어로 다시 작성한 답변입니다."])
+    monkeypatch.setattr("app.main.call_llm", lambda *a, **k: next(answers))
+    response = client.post(
+        "/api/v1/chat", json={"persona": _persona_payload(), "message": "질문"}
+    )
+    assert response.status_code == 200
+    assert response.json()["answer"] == "한국어로 다시 작성한 답변입니다."
+
+
 def test_chat_hides_reasoning_and_limits_duplicate_long_answer(monkeypatch):
     answer = "<think>private</think>" + "\n".join(f"줄 {i}" for i in range(69))
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: answer)
@@ -525,10 +535,11 @@ def test_ollama_health_ok_when_embedding_model_pulled(monkeypatch):
 
         @staticmethod
         def json():
-                return {"models": [
-                    {"name": "bge-m3:latest"},
-                    {"name": "qwen3:4b"},
-                ]}
+                    return {"models": [
+                        {"name": "bge-m3:latest"},
+                        {"name": "qwen3:4b"},
+                        {"name": "qwen2.5:7b"},
+                    ]}
 
     monkeypatch.setattr("app.llm_client.requests.get", lambda *a, **k: FakeResponse())
     from app.llm_client import check_ollama_health

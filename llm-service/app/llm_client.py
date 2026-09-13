@@ -69,6 +69,13 @@ def _vllm_model(model: str | None) -> str:
     return resolved
 
 
+def _disable_thinking_prompt(prompt: str, *, think: bool = False) -> str:
+    """Use Qwen's prompt switch as a second guard in addition to API options."""
+    if think or prompt.rstrip().endswith("/no_think"):
+        return prompt
+    return f"{prompt.rstrip()}\n/no_think"
+
+
 def call_llm(
     prompt: str,
     model: str | None = None,
@@ -88,10 +95,11 @@ def call_llm(
     Raises:
         LLMError: Ollama 서버 호출 실패 시
     """
+    guarded_prompt = _disable_thinking_prompt(prompt, think=think)
     if _provider() == "vllm":
         payload = {
             "model": _vllm_model(model),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": guarded_prompt}],
             "stream": False,
             "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
@@ -115,7 +123,7 @@ def call_llm(
 
     payload = {
         "model": model or OLLAMA_MODEL,
-        "prompt": prompt,
+        "prompt": guarded_prompt,
         "stream": False,
         "think": think,
         "keep_alive": OLLAMA_KEEP_ALIVE,
@@ -158,10 +166,11 @@ def stream_llm(
     max_tokens: int | None = None,
 ) -> Iterator[str]:
     """Ollama token chunks for latency-sensitive chat responses."""
+    guarded_prompt = _disable_thinking_prompt(prompt)
     if _provider() == "vllm":
         payload = {
             "model": _vllm_model(model),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": guarded_prompt}],
             "stream": True,
             "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
@@ -204,7 +213,7 @@ def stream_llm(
 
     payload = {
         "model": model or OLLAMA_MODEL,
-        "prompt": prompt,
+        "prompt": guarded_prompt,
         "stream": True,
         "think": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,

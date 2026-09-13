@@ -334,6 +334,8 @@ def test_expected_question_prompt_is_focused_and_persona_grounded():
 def test_build_chat_prompt_fills_all_placeholders():
     request = ChatGenerationRequest(persona=_persona(), message="매출은 얼마인가요?", document=_document())
     prompt = build_chat_prompt(request)
+    assert "영어로 질문을 받더라도 한국어로 답하세요" in prompt
+    assert "사용자에게 보여줄 최종 답변만 작성하세요" in prompt
     assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
     assert "[참고 문서]" in prompt
 
