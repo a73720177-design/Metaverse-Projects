@@ -33,7 +33,7 @@ Ollama :11434
 - Chat 이력, 휴지통 이동·복원·완전 삭제
 - Chat JSON 응답 및 SSE 스트리밍
 - `memory|postgres` Repository, `local|minio` Object Storage
-- LLM legacy 호환 API와 정식 `/api/v1` 계약
+- LLM `/api/v1` 단일 계약 (personas·reviews·practice·summaries·embeddings·chat)
 - 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
 - `RAG_MODE=vector`(pgvector) 시 Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 시맨틱 검색. 기본값 `lexical`은 기존 키워드 검색만 사용
