@@ -84,10 +84,10 @@ REPOSITORY_MODE=memory
 OBJECT_STORAGE_MODE=local
 DB_AUTO_CREATE=false
 LLM_SERVICE_URL=http://localhost:8001
-LLM_CONTRACT_MODE=legacy_questions
+LLM_API_PREFIX=/api/v1
 ```
 
-LLM v1 통합 검증 후에는 `LLM_CONTRACT_MODE=v1`, `LLM_API_PREFIX=/api/v1`을 사용합니다. 실제 DB URL, JWT secret, MinIO key는 Git에 포함하지 않는 `backend/.env`에만 입력합니다.
+실제 DB URL, JWT secret, MinIO key는 Git에 포함하지 않는 `backend/.env`에만 입력합니다.
 
 ### 4. Frontend
 

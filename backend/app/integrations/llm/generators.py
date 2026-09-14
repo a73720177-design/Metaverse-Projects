@@ -31,6 +31,23 @@ class HttpPersonaGenerator:
             raise PersonaGeneratorError(str(exc)) from exc
 
 
+class LocalPersonaGenerator:
+    """LLM 호출 없이 Backend 입력만으로 페르소나를 만든다.
+
+    PERSONA_FALLBACK_LOCAL=true일 때만 쓰인다 — LLM 서비스가 없거나 느린
+    환경에서 페르소나 생성이 전체 흐름을 막지 않게 하는 탈출구다.
+    """
+
+    async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]:
+        if not request.description.strip():
+            raise PersonaGeneratorError("평가자 설명이 필요합니다.")
+        return {
+            "role": "Evaluator",
+            "expertise": [],
+            "evaluation_style": [],
+        }
+
+
 class HttpReviewGenerator:
     def __init__(self, client: HttpLlmClient, endpoint: str = "/reviews") -> None:
         self.client = client

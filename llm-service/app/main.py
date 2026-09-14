@@ -8,9 +8,9 @@ LLM 서비스 API 서버.
     - Ollama가 로컬에서 실행 중이어야 함 (ollama serve)
     - qwen3:4b 모델이 pull 되어 있어야 함
 
-/extract-concepts, /generate-questions는 Backend의 legacy_questions 호환
-모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약이며,
-Backend가 legacy_questions에서 v1으로 전환하면 legacy 엔드포인트는 제거한다.
+API 계약은 /api/v1 하나뿐이다(personas, reviews, practice/questions,
+summaries, embeddings, chat). 프리픽스 없는 /health는 프로세스 생존만 보는
+헬스체크라 그대로 둔다 — integration/check_services.py가 쓴다.
 """
 
 import json
@@ -38,10 +38,8 @@ from app.llm_client import (
 )
 from app.prompts import (
     SUMMARY_GENERATION_PROMPT,
-    build_concept_prompt,
     build_effective_chat_prompt,
     build_persona_prompt,
-    build_question_prompt,
     build_review_prompt,
     build_expected_question_prompt,
     trim_context_to_chunks,
@@ -54,12 +52,6 @@ from app.summary_pipeline import (
     should_use_map_reduce as should_use_summary_map_reduce,
     style_guidance,
     style_max_tokens,
-)
-from app.schemas import (
-    ConceptExtractionRequest,
-    ConceptExtractionResponse,
-    QuestionGenerationRequest,
-    QuestionGenerationResponse,
 )
 from app.schemas_v1 import (
     ChatGenerationRequest,
@@ -81,7 +73,7 @@ T = TypeVar("T", bound=BaseModel)
 
 app = FastAPI(
     title="LLM Service",
-    description="발표 자료/대본 기반 개념 추출 및 비판 질문 생성 API",
+    description="발표 자료 기반 페르소나/리뷰/요약/채팅 생성 API",
     version="0.1.0",
 )
 
@@ -161,16 +153,6 @@ def _contains_chinese_text(value: str) -> bool:
     return re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value) is not None
 
 
-@app.post("/extract-concepts", response_model=ConceptExtractionResponse)
-def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
-    return _generate(build_concept_prompt(request.paper_text), ConceptExtractionResponse)
-
-
-@app.post("/generate-questions", response_model=QuestionGenerationResponse)
-def generate_questions(request: QuestionGenerationRequest) -> QuestionGenerationResponse:
-    return _generate(build_question_prompt(request), QuestionGenerationResponse)
-
-
 v1_router = APIRouter(prefix="/api/v1")
 
 
@@ -179,7 +161,7 @@ def health_check_v1():
     """Backend가 LLM 서비스와 Ollama 상태를 확인할 때 호출.
 
     정식 서비스 계약에 따라 이 프로세스뿐 아니라 Ollama 연결까지 확인한다.
-    legacy `/health`는 프로세스 생존만 확인하는 단순 버전으로 남겨둔다.
+    프리픽스 없는 `/health`는 프로세스 생존만 확인하는 단순 버전이다.
     """
     if not check_ollama_health():
         raise HTTPException(status_code=503, detail="Ollama에 연결할 수 없습니다.")

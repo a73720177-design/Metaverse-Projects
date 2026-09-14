@@ -11,14 +11,12 @@
 옮겼다.
 """
 
-import json
 import os
 import re
 
 from fastapi import HTTPException
 
 from app.routing import is_off_topic
-from app.schemas import QuestionGenerationRequest
 from app.schemas_v1 import (
     ChatGenerationRequest,
     ChatTurn,
@@ -316,49 +314,7 @@ def _answer_guidance(max_output_tokens: int) -> str:
 
 
 # --- 템플릿 -------------------------------------------------------------
-
-CONCEPT_EXTRACTION_PROMPT = (
-    """당신은 학술 문서 분석가입니다. 아래 논문에서 핵심 개념 8개를 추출하세요.
-저자가 이 논문에서 직접 제시/정의한 고유 개념만 선택하고, 일반적
-배경지식 용어는 제외하세요. 서로 의미가 겹치는 개념은 하나로 묶고,
-8개는 각각 뚜렷하게 구분되는 개념이어야 합니다.
-
-[논문 본문]
-{paper_text}
-
-위 논문 본문에서, 저자가 직접 제시/정의한 고유 개념 8개를 뽑으세요. """
-    + OUTPUT_LANGUAGE_RULE
-    + "\n"
-    + NO_REASONING_OUTPUT_RULE
-    + "\n"
-)
-
-QUESTION_GENERATION_PROMPT = (
-    """당신은 아래 concepts를 제시한 논문의 저자입니다. 또한 평소 다음과 같은
-점을 중요하게 여깁니다: {critical_points}
-
-아래 발표(대본)를 비판하는 질문 5개를 만드세요.
-
-질문 1~3: concepts 중 서로 다른 개념을 하나씩 활용해서 질문하세요.
-이 3개 질문은 concepts와 발표 대본 내용만 근거로 삼으세요. 각기 다른
-관점(정의의 타당성, 구현 가능성, 대본 내용과의 정합성 등)에서 질문하세요.
-
-질문 4~5: 위에서 언급한 평소 중요하게 여기는 점을 반영해서 질문하세요.
-
-일반적인 질문은 제외하세요.
-
-[concepts]
-{concepts_json}
-
-[발표 대본]
-{script_text}
-
-"""
-    + OUTPUT_LANGUAGE_RULE
-    + "\n"
-)
-
-# 아래 프롬프트들은 정식 /api/v1 계약(personas, reviews, chat)용이다.
+# 모두 정식 /api/v1 계약(personas, reviews, practice, chat, summaries)용이다.
 
 PERSONA_GENERATION_PROMPT = (
     """당신은 평가자 페르소나를 분석하는 어시스턴트입니다. 아래 이름과 설명을
@@ -591,19 +547,6 @@ FREE_CHAT_PROMPT = (
 
 
 # --- 빌더 -----------------------------------------------------------------
-
-
-def build_concept_prompt(paper_text: str) -> str:
-    return CONCEPT_EXTRACTION_PROMPT.format(paper_text=truncate(paper_text, FULL_TEXT_MAX_CHARS))
-
-
-def build_question_prompt(request: QuestionGenerationRequest) -> str:
-    concepts_json = json.dumps([c.model_dump() for c in request.concepts], ensure_ascii=False)
-    return QUESTION_GENERATION_PROMPT.format(
-        critical_points=request.critical_points,
-        concepts_json=concepts_json,
-        script_text=request.script_text,
-    )
 
 
 def build_persona_prompt(request: PersonaGenerationRequest) -> str:

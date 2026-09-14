@@ -15,19 +15,15 @@ from app.prompts import (
     CHUNK_LABEL_RE,
     CHUNK_LABEL_TEMPLATE,
     CITATION_RULE,
-    CONCEPT_EXTRACTION_PROMPT,
     FREE_CHAT_PROMPT,
     GROUNDING_RULE,
     PERSONA_GENERATION_PROMPT,
-    QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
     EXPECTED_QUESTION_PROMPT,
     TRUNCATE_SUFFIX,
     build_chat_prompt,
-    build_concept_prompt,
     build_free_chat_prompt,
     build_persona_prompt,
-    build_question_prompt,
     build_review_prompt,
     build_expected_question_prompt,
     render_document,
@@ -37,7 +33,6 @@ from app.prompts import (
     trim_context_to_chunks,
     truncate,
 )
-from app.schemas import Concept, QuestionGenerationRequest
 from app.schemas_v1 import (
     ChatGenerationRequest,
     DocumentIn,
@@ -291,23 +286,6 @@ def test_persona_generation_prompt_has_count_caps():
 
 
 # --- build_* placeholder 완전 치환 ------------------------------------------
-
-
-def test_build_concept_prompt_fills_all_placeholders():
-    prompt = build_concept_prompt("논문 본문 내용")
-    assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
-    assert "논문 본문 내용" in prompt
-
-
-def test_build_question_prompt_fills_all_placeholders():
-    request = QuestionGenerationRequest(
-        concepts=[Concept(name="a", definition="b")],
-        critical_points="근거 중심",
-        script_text="발표 대본",
-    )
-    prompt = build_question_prompt(request)
-    assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
-    assert "발표 대본" in prompt
 
 
 def test_build_persona_prompt_fills_all_placeholders():
