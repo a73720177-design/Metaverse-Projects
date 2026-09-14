@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ from app.repositories.review_repository import InMemoryReviewRepository
 from app.services.chat_service import ChatService
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
+from app.services.rag_service import combine_document_contexts
 
 
 OWNER_ID = uuid4()
@@ -400,3 +402,42 @@ def test_v1_client_buffers_stream_and_only_emits_public_answer() -> None:
         return [token async for token in client.stream_sse("/chat/stream", {})]
 
     assert asyncio.run(collect()) == ["최종 답변"]
+
+
+# llm-service/app/prompts.py의 CHUNK_LABEL_RE와 반드시 같은 형식이어야 한다.
+# 두 서비스는 분리되어 있어 import로 공유할 수 없으므로 이 정규식을 여기에
+# 하드코딩해 drift를 잡는다(llm-service/tests/test_prompts.py가 반대편을
+# 고정한다).
+_CHUNK_LABEL_RE = re.compile(r"^\[근거 (\d+)\] 파일: (.+?) / 구간 (\d+)\]?$", re.MULTILINE)
+
+
+def test_combine_document_contexts_full_text_matches_llm_service_chunk_label_contract() -> None:
+    documents = [
+        DocumentParseResponse(
+            document_id=uuid4(),
+            filename="slides.pdf",
+            document_type="pdf",
+            saved_path=Path("private/storage/a.pdf"),
+            sections=[
+                DocumentSection(index=1, text="첫 구간 내용"),
+                DocumentSection(index=2, text="둘째 구간 내용"),
+            ],
+            full_text="",
+        ),
+        DocumentParseResponse(
+            document_id=uuid4(),
+            filename="notes.pdf",
+            document_type="pdf",
+            saved_path=Path("private/storage/b.pdf"),
+            sections=[DocumentSection(index=1, text="다른 파일 구간")],
+            full_text="",
+        ),
+    ]
+
+    context = combine_document_contexts(documents, 4000)
+
+    assert context is not None
+    matches = list(_CHUNK_LABEL_RE.finditer(context.full_text))
+    assert len(matches) == 3
+    ordinals = [int(match.group(1)) for match in matches]
+    assert ordinals == [1, 2, 3]

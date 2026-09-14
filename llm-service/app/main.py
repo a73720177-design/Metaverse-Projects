@@ -44,6 +44,7 @@ from app.prompts import (
     build_question_prompt,
     build_review_prompt,
     build_expected_question_prompt,
+    trim_context_to_chunks,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
 from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
@@ -227,7 +228,7 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
         )
 
     empty_document = (
-        request.document.model_copy(update={"full_text": ""})
+        request.document.model_copy(update={"full_text": "", "sections": []})
         if request.document is not None else None
     )
     base_request = request.model_copy(update={"document": empty_document})
@@ -243,10 +244,13 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
         return request
 
     max_document_chars = max(1, math.floor(available_document_tokens * chars_per_token))
-    if len(request.document.full_text) <= max_document_chars:
+    trimmed_full_text = trim_context_to_chunks(request.document.full_text, max_document_chars)
+    if trimmed_full_text == request.document.full_text:
         return request
+    # sections는 이미 트리밍된 full_text와 어긋나므로 비운다. 전달되는
+    # 라벨은 항상 full_text(Backend가 붙였거나 위에서 자른 것) 기준이다.
     trimmed_document = request.document.model_copy(
-        update={"full_text": request.document.full_text[:max_document_chars]}
+        update={"full_text": trimmed_full_text, "sections": []}
     )
     return request.model_copy(update={"document": trimmed_document})
 

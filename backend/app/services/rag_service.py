@@ -38,6 +38,19 @@ def should_use_document(
     return _SMALL_TALK_RE.fullmatch(message.strip()) is None
 
 
+# llm-service/app/prompts.py의 CHUNK_LABEL_TEMPLATE과 반드시 같은 형식이어야
+# 한다. 두 서비스는 분리되어 있어 import로 공유할 수 없으므로 문자열을 양쪽에
+# 두고, 계약 테스트(backend/tests/test_llm_v1_contract.py,
+# llm-service/tests/test_prompts.py)로 drift를 막는다. ordinal(1..N)은
+# "구간 N"이 문서마다 중복돼 다중 문서 컨텍스트에서 인용 키로 못 쓰기 때문에
+# 붙이는 전역 일련번호다.
+_CHUNK_LABEL_TEMPLATE = "[근거 {ordinal}] 파일: {filename} / 구간 {index}"
+
+
+def _chunk_header(ordinal: int, filename: str, index: int) -> str:
+    return _CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=filename, index=index) + "\n"
+
+
 def combine_document_contexts(
     documents: list[DocumentParseResponse], max_context_chars: int
 ) -> DocumentParseResponse | None:
@@ -45,14 +58,20 @@ def combine_document_contexts(
     groups = []
     for document in documents:
         chunks = [
-            (section, f"[파일: {document.filename} / 구간 {section.index}]\n", section.text.strip())
+            (section, document.filename, section.text.strip())
             for section in document.sections if section.text.strip()
         ]
         if chunks:
             groups.append((document, chunks))
+    # ordinal은 최종 조립 순서에서만 정해지지만, 헤더 길이는 budgeting에 먼저
+    # 필요하다. ordinal=1을 자리표시자로 써서 근사한다 — 실제 헤더는 아래
+    # 조립 루프에서 진짜 ordinal로 다시 계산되므로 여기서는 근사치면 충분하다.
+    def _header_len(filename: str, index: int) -> int:
+        return len(_chunk_header(1, filename, index))
+
     # Even a tiny budget must contain a complete source label and some text.
     while groups and (
-        sum(len(chunks[0][1]) + 1 for _, chunks in groups)
+        sum(_header_len(chunks[0][1], chunks[0][0].index) + 1 for _, chunks in groups)
         + 2 * (len(groups) - 1) > max_context_chars
     ):
         groups.pop()
@@ -60,10 +79,11 @@ def combine_document_contexts(
         return None
 
     sizes = [
-        sum(len(header) + len(text) for _, header, text in chunks) + 2 * (len(chunks) - 1)
+        sum(_header_len(filename, section.index) + len(text) for section, filename, text in chunks)
+        + 2 * (len(chunks) - 1)
         for _, chunks in groups
     ]
-    budgets = [len(chunks[0][1]) + 1 for _, chunks in groups]
+    budgets = [_header_len(chunks[0][1], chunks[0][0].index) + 1 for _, chunks in groups]
     remaining = max_context_chars - sum(budgets) - 2 * (len(groups) - 1)
     while remaining > 0:
         active = [i for i, size in enumerate(sizes) if budgets[i] < size]
@@ -77,10 +97,12 @@ def combine_document_contexts(
 
     sections = []
     blocks = []
+    ordinal = 0
     for (document, chunks), budget in zip(groups, budgets):
         used = 0
-        for section, header, text in chunks:
+        for section, filename, text in chunks:
             separator = 2 if used else 0
+            header = _chunk_header(ordinal + 1, filename, section.index)
             available = budget - used - separator - len(header)
             if available <= 0:
                 break
@@ -93,6 +115,7 @@ def combine_document_contexts(
                 "source_document_type": document.document_type,
             }))
             used += separator + len(header) + len(content)
+            ordinal += 1
     first = groups[0][0]
     return first.model_copy(update={
         "filename": "통합 참고 자료" if len(groups) > 1 else first.filename,

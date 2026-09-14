@@ -271,7 +271,7 @@ def test_chat_routes_general_conversation_without_document_context(monkeypatch):
 
     assert response.status_code == 200
     assert "일반적인 대화" in captured["prompt"]
-    assert "[참고 문서]" not in captured["prompt"]
+    assert "[검색된 근거]" not in captured["prompt"]
 
 
 def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkeypatch):
@@ -290,7 +290,7 @@ def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkey
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
-    assert "[참고 문서]" in captured["prompt"]
+    assert "[검색된 근거]" in captured["prompt"]
     assert "본문" in captured["prompt"]
 
 
@@ -423,7 +423,7 @@ def test_chat_includes_history_block_in_prompt(monkeypatch):
     assert "이 발표의 매출 근거는?" in captured["prompt"]
     assert "3페이지 표를 근거로 듭니다." in captured["prompt"]
     # Ambiguous follow-up with an attached document must stay grounded.
-    assert "[참고 문서]" in captured["prompt"]
+    assert "[검색된 근거]" in captured["prompt"]
 
 
 def test_chat_follow_up_with_thanks_marker_stays_grounded_when_history_present(monkeypatch):
@@ -448,7 +448,7 @@ def test_chat_follow_up_with_thanks_marker_stays_grounded_when_history_present(m
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
-    assert "[참고 문서]" in captured["prompt"]
+    assert "[검색된 근거]" in captured["prompt"]
     assert "일반적인 대화" not in captured["prompt"]
 
 

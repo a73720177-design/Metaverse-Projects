@@ -143,32 +143,6 @@ class ChatService:
                     "sections": [],
                     "full_text": "",
                 }), history
-            sections = []
-            blocks = []
-            used = 0
-            limit = self.context_selector.max_context_chars
-            for item in selected_documents:
-                for section in item.sections:
-                    block = f"[파일: {item.filename} / 구간 {section.index}]\n{section.text}"
-                    remaining = limit - used - (2 if blocks else 0)
-                    if remaining <= 0:
-                        break
-                    block = block[:remaining]
-                    blocks.append(block)
-                    sections.append(section.model_copy(update={
-                        "text": block,
-                        "source_document_id": item.document_id,
-                        "source_filename": item.filename,
-                        "source_document_type": item.document_type,
-                    }))
-                    used += len(block) + (2 if len(blocks) > 1 else 0)
-                if used >= limit:
-                    break
-            document = ranked[0].model_copy(update={
-                "filename": "발표 프로젝트 통합 자료",
-                "sections": sections,
-                "full_text": "\n\n".join(blocks),
-            })
             document = combine_document_contexts(
                 selected_documents, self.context_selector.max_context_chars
             )

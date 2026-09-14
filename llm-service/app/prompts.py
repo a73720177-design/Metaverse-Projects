@@ -13,6 +13,7 @@
 
 import json
 import os
+import re
 
 from fastapi import HTTPException
 
@@ -30,7 +31,17 @@ from app.schemas_v1 import (
 )
 
 # 리뷰 품질 추적/회귀 비교용. 프롬프트 문구를 바꿀 때마다 갱신한다.
-PROMPT_VERSION = "2026-09-13"
+PROMPT_VERSION = "2026-09-14"
+
+# 채팅 경로에서 검색된 청크에 붙는 라벨의 단일 정의처. Backend
+# (app/services/rag_service.py:combine_document_contexts)가 만드는 라벨과
+# 반드시 같은 형식이어야 한다. 두 서비스는 분리되어 있어 이 문자열을 직접
+# import로 공유할 수 없으므로, 양쪽에 같은 문자열을 두고 계약 테스트
+# (llm-service/tests/test_prompts.py, backend/tests/test_llm_v1_contract.py)로
+# drift를 막는다. ordinal(1..N)은 "구간 N"이 문서마다 중복돼 다중 문서
+# 컨텍스트에서 인용 키로 못 쓰기 때문에 신설한 전역 일련번호다.
+CHUNK_LABEL_TEMPLATE = "[근거 {ordinal}] 파일: {filename} / 구간 {index}"
+CHUNK_LABEL_RE = re.compile(r"^\[근거 (\d+)\] 파일: (.+?) / 구간 (\d+)\]?$", re.MULTILINE)
 
 # --- 공통 정책 상수 (여러 템플릿이 재사용) ---------------------------------
 
@@ -49,6 +60,21 @@ UNTRUSTED_INPUT_RULE = (
     "마세요."
 )
 BREVITY_RULE = "같은 주장이나 표현을 반복하지 말고, 필요한 설명이 끝나면 즉시 답변을 종료하세요."
+
+# 채팅 전용 RAG 근거 사용 규칙. CHAT_PROMPT가 받는 입력은 검색된 청크
+# 일부이지 문서 전체가 아니므로, 일반적인 NO_HALLUCINATION_RULE보다 구체적인
+# 지침이 필요하다.
+GROUNDING_RULE = (
+    "답변은 위 [검색된 근거] 안의 내용만 사실 근거로 사용하세요. "
+    "근거에 없는 내용을 덧붙여야 한다면 '자료에서 확인되지 않음'이라고 먼저 밝히세요."
+)
+PARTIAL_CONTEXT_RULE = (
+    "검색된 근거가 질문에 부분적으로만 답한다면, 확인 가능한 부분만 답하고 "
+    "무엇이 자료에 없는지 한 문장으로 알려주세요."
+)
+CITATION_RULE = (
+    "근거를 사용한 문장 끝에 [근거 N] 표기를 붙이세요. 근거 목록이나 JSON은 만들지 마세요."
+)
 
 
 # --- 렌더러 -----------------------------------------------------------------
@@ -167,6 +193,74 @@ def render_document(document: DocumentIn, *, with_index: bool) -> str:
         body = document.full_text
     body = truncate(body, FULL_TEXT_MAX_CHARS)
     return f"{_DOCUMENT_START}\n파일명: {document.filename}\n{body}\n{_DOCUMENT_END}"
+
+
+# --- 검색 컨텍스트 렌더러 (채팅 전용) ---------------------------------------
+# render_document()는 리뷰/요약처럼 문서 전체를 프롬프트에 넣는 경로용으로
+# 남겨둔다. 채팅은 검색기가 고른 청크 일부만 받으므로, 그 사실을 프롬프트에
+# 명시하는 별도 렌더러를 둔다.
+
+_CONTEXT_START = "=== 검색된 근거 시작 ==="
+_CONTEXT_END = "=== 검색된 근거 끝 ==="
+_CONTEXT_HEADER_NOTE = (
+    "아래는 사용자 질문과 관련해 검색된 일부 구간이며, 문서 전체가 아닙니다."
+)
+_NO_RETRIEVED_CONTEXT = "(검색된 근거 없음)"
+
+# Backend RAG_MAX_CONTEXT_CHARS(기본 4000)와 일치시킨다. main.py의
+# _fit_chat_context()가 모델 컨텍스트 예산에 맞춰 이보다 더 타이트하게 자를
+# 수도 있으므로, 이 값은 안전망(상한)이다.
+RAG_CONTEXT_MAX_CHARS = 4_000
+
+
+def trim_context_to_chunks(full_text: str, max_chars: int) -> str:
+    """청크 라벨(CHUNK_LABEL_RE) 경계에서만 잘라 반쪽 라벨을 방지한다.
+
+    라벨을 하나도 찾지 못하면(호출자가 구조 없는 텍스트를 준 경우) 기존처럼
+    문자 단위로 자른다. 라벨은 있지만 첫 청크조차 예산에 못 들어가면, 반쪽
+    라벨을 만드느니 빈 문자열을 반환한다 — 호출자는 "근거 없음"으로 표시한다.
+    """
+    if len(full_text) <= max_chars:
+        return full_text
+    matches = list(CHUNK_LABEL_RE.finditer(full_text))
+    if not matches:
+        return full_text[:max_chars]
+    boundaries = [m.start() for m in matches[1:]] + [len(full_text)]
+    kept_end = 0
+    for boundary in boundaries:
+        if boundary > max_chars:
+            break
+        kept_end = boundary
+    if kept_end == 0:
+        return ""
+    return full_text[:kept_end].rstrip()
+
+
+def render_retrieved_context(document: DocumentIn | None) -> str:
+    """검색기가 고른 청크 묶음을, '문서 전체가 아님'을 명시해 감싼다.
+
+    document.sections가 있으면 이 함수가 직접 CHUNK_LABEL_TEMPLATE로 라벨을
+    붙인다(ordinal은 1부터 순서대로). sections가 없으면 full_text를 그대로
+    통과시킨다 — 실제 운영 경로에서는 Backend가 이미 같은 형식의 라벨을
+    붙여 보낸다.
+    """
+    if document is None:
+        return _NO_RETRIEVED_CONTEXT
+
+    if document.sections:
+        body = "\n\n".join(
+            f"{CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=document.filename, index=section.index)}\n{section.text}"
+            for ordinal, section in enumerate(document.sections, start=1)
+        )
+    else:
+        body = document.full_text
+
+    body = body.strip()
+    if not body:
+        return _NO_RETRIEVED_CONTEXT
+
+    body = trim_context_to_chunks(body, RAG_CONTEXT_MAX_CHARS)
+    return f"{_CONTEXT_START}\n{_CONTEXT_HEADER_NOTE}\n{body}\n{_CONTEXT_END}"
 
 
 def render_instructions(text: str | None) -> str:
@@ -464,18 +558,20 @@ CHAT_PROMPT = (
 [평가자 페르소나]
 {persona_block}
 
-[참고 문서]
-{document_block}
+[검색된 근거]
+{context_block}
 
 """
     + UNTRUSTED_INPUT_RULE
     + " "
-    + NO_HALLUCINATION_RULE
-    + """ 출처 목록이나 JSON을 직접 만들지 말고 사용자에게 보여줄 답변
-텍스트만 작성하세요. 내부 사고 과정, 지시사항 해설, 영어 메타 문장,
-자기소개는 출력하지 마세요. 발표자의 답변을 직접 평가하고 구체적인 장점
-1개, 수정 제안 1~3개를 작성하세요. {follow_up_guidance} 전체
-답변은 반드시 30줄 이하로 작성하세요.
+    + GROUNDING_RULE
+    + " "
+    + PARTIAL_CONTEXT_RULE
+    + " "
+    + CITATION_RULE
+    + """ 내부 사고 과정, 지시사항 해설, 영어 메타 문장, 자기소개는 출력하지
+마세요. 발표자의 답변을 직접 평가하고 구체적인 장점 1개, 수정 제안 1~3개를
+작성하세요. {follow_up_guidance} 전체 답변은 반드시 30줄 이하로 작성하세요.
 
 """
     + _CHAT_COMMON_TAIL
@@ -531,14 +627,9 @@ def build_expected_question_prompt(request: ReviewGenerationRequest) -> str:
 
 
 def build_chat_prompt(request: ChatGenerationRequest) -> str:
-    document_block = (
-        render_document(request.document, with_index=False)
-        if request.document is not None
-        else "(제공된 문서 없음)"
-    )
     return CHAT_PROMPT.format(
         persona_block=render_persona(request.persona),
-        document_block=document_block,
+        context_block=render_retrieved_context(request.document),
         history_block=_history_block(request.history),
         message=request.message,
         answer_guidance=_answer_guidance(request.max_output_tokens),

@@ -11,8 +11,13 @@ import re
 from uuid import UUID
 
 from app.prompts import (
+    CHAT_PROMPT,
+    CHUNK_LABEL_RE,
+    CHUNK_LABEL_TEMPLATE,
+    CITATION_RULE,
     CONCEPT_EXTRACTION_PROMPT,
     FREE_CHAT_PROMPT,
+    GROUNDING_RULE,
     PERSONA_GENERATION_PROMPT,
     QUESTION_GENERATION_PROMPT,
     REVIEW_GENERATION_PROMPT,
@@ -28,6 +33,8 @@ from app.prompts import (
     render_document,
     render_instructions,
     render_persona,
+    render_retrieved_context,
+    trim_context_to_chunks,
     truncate,
 )
 from app.schemas import Concept, QuestionGenerationRequest
@@ -337,7 +344,7 @@ def test_build_chat_prompt_fills_all_placeholders():
     assert "영어로 질문을 받더라도 한국어로 답하세요" in prompt
     assert "사용자에게 보여줄 최종 답변만 작성하세요" in prompt
     assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
-    assert "[참고 문서]" in prompt
+    assert "[검색된 근거]" in prompt
 
 
 def test_build_free_chat_prompt_fills_all_placeholders():
@@ -345,3 +352,65 @@ def test_build_free_chat_prompt_fills_all_placeholders():
     prompt = build_free_chat_prompt(request)
     assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None
     assert "일반적인 대화" in FREE_CHAT_PROMPT
+
+
+# --- render_retrieved_context / trim_context_to_chunks ---------------------
+# 채팅 프롬프트가 받는 입력은 검색기가 고른 청크 일부이지 문서 전체가
+# 아니라는 점, 그리고 컨텍스트 절삭이 청크 경계에서만 일어난다는 점을
+# 검증한다 (docs/llm-service-rag-prompts.md Phase 2/5/7).
+
+
+def test_render_retrieved_context_notes_partial_evidence():
+    rendered = render_retrieved_context(_document())
+    assert "문서 전체가 아닙니다" in rendered
+    assert "=== 검색된 근거 시작 ===" in rendered
+    assert "=== 검색된 근거 끝 ===" in rendered
+
+
+def test_render_retrieved_context_none_document_is_placeholder_without_grounding_rule():
+    assert render_retrieved_context(None) == "(검색된 근거 없음)"
+    request = ChatGenerationRequest(persona=_persona(), message="안녕하세요")
+    prompt = build_free_chat_prompt(request)
+    assert GROUNDING_RULE not in prompt
+
+
+def test_trim_context_to_chunks_does_not_split_a_label():
+    chunk_1 = CHUNK_LABEL_TEMPLATE.format(ordinal=1, filename="a.pdf", index=1) + "\n" + "가" * 50
+    chunk_2 = CHUNK_LABEL_TEMPLATE.format(ordinal=2, filename="a.pdf", index=2) + "\n" + "나" * 50
+    full_text = f"{chunk_1}\n\n{chunk_2}"
+
+    trimmed = trim_context_to_chunks(full_text, len(chunk_1) + 10)
+
+    assert trimmed == chunk_1
+    assert "[근거 2]" not in trimmed
+
+
+def test_trim_context_to_chunks_drops_everything_when_even_first_chunk_does_not_fit():
+    # 예산이 첫 청크의 라벨보다도 작으면, 반쪽 라벨을 만드느니 아예 비운다.
+    chunk = CHUNK_LABEL_TEMPLATE.format(ordinal=1, filename="a.pdf", index=1) + "\n" + "가" * 50
+    trimmed = trim_context_to_chunks(chunk, 5)
+    assert trimmed == ""
+
+
+def test_trim_context_to_chunks_is_noop_when_text_already_fits():
+    text = "짧은 근거"
+    assert trim_context_to_chunks(text, 100) == text
+
+
+def test_chat_prompt_includes_grounding_and_citation_rules_but_free_chat_does_not():
+    assert GROUNDING_RULE in CHAT_PROMPT
+    assert CITATION_RULE in CHAT_PROMPT
+    assert GROUNDING_RULE not in FREE_CHAT_PROMPT
+    assert CITATION_RULE not in FREE_CHAT_PROMPT
+
+
+def test_chunk_label_matches_backend_contract_format():
+    # backend/app/services/rag_service.py의 라벨 형식과 반드시 같아야 한다
+    # (계약 테스트: backend/tests/test_llm_v1_contract.py가 반대편을 고정).
+    backend_format = "[근거 {ordinal}] 파일: {filename} / 구간 {index}"
+    assert CHUNK_LABEL_TEMPLATE == backend_format
+
+    label = backend_format.format(ordinal=3, filename="slides.pdf", index=5)
+    match = CHUNK_LABEL_RE.match(label)
+    assert match is not None
+    assert match.groups() == ("3", "slides.pdf", "5")
