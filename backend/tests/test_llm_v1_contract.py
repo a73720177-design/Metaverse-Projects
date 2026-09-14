@@ -234,6 +234,50 @@ def test_v1_chat_contract_supports_optional_document(with_document: bool) -> Non
         assert result.sources == []
 
 
+def test_v1_chat_contract_filters_sources_to_cited_chunks_only() -> None:
+    # Phase 8: llm-service의 답변이 [근거 N] 마커로 인용한 청크만 sources에
+    # 남아야 한다 — 검색은 됐지만 인용되지 않은 청크는 제외한다.
+    persona = _persona()
+    document = _document().model_copy(update={
+        "sections": [
+            DocumentSection(index=1, text="첫 구간 내용"),
+            DocumentSection(index=2, text="둘째 구간 내용"),
+        ],
+    })
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"answer": "둘째 구간을 인용합니다 [근거 2].", "sources": []}
+        )
+
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+
+    async def run_contract():
+        await agent_repository.save(persona, OWNER_ID)
+        await document_repository.save(document, OWNER_ID)
+        service = ChatService(
+            HttpChatGenerator(HttpLlmClient(httpx.MockTransport(handler))),
+            agent_repository,
+            document_repository,
+            InMemoryChatRepository(),
+        )
+        return await service.reply(
+            persona.agent_id,
+            ChatRequest(
+                message="둘째 구간이 뭔가요?",
+                document_id=document.document_id,
+                response_detail="standard",
+            ),
+            OWNER_ID,
+        )
+
+    result = asyncio.run(run_contract())
+    assert len(result.sources) == 1
+    assert result.sources[0].excerpt == "둘째 구간 내용"
+    assert "[근거 2]" in result.answer
+
+
 def test_chat_returns_safe_answer_without_calling_llm_when_source_has_no_evidence() -> None:
     persona = _persona()
     document = _document()

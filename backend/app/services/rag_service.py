@@ -1,5 +1,6 @@
 
 import hashlib
+import logging
 import re
 import math
 from collections import Counter
@@ -8,7 +9,10 @@ from uuid import UUID
 
 from app.config import get_rag_max_context_chars
 from app.models.document import DocumentParseResponse, DocumentSection
+from app.models.review import ReviewSource
 
+
+logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _SENTENCE_BOUNDARY_RE = re.compile(
@@ -123,6 +127,84 @@ def combine_document_contexts(
         "sections": sections,
         "full_text": "\n\n".join(blocks),
     })
+
+
+# --- 인용 마커 기반 sources 필터 (Phase 8) ----------------------------------
+# CITATION_RULE(llm-service/app/prompts.py)이 모델에게 답변 문장 끝에
+# "[근거 N]"을 붙이도록 지시한다. combine_document_contexts()가 부여한
+# ordinal은 document.sections를 순회하며 매긴 것과 같은 순서이므로,
+# ordinal N은 항상 document.sections[N-1]을 가리킨다 — 이 정렬이 깨지면
+# 마커가 엉뚱한 sources를 가리키게 된다.
+_CITATION_MARKER_RE = re.compile(r"\[근거\s*(\d+)\]")
+
+
+def strip_citation_markers(answer: str) -> str:
+    """grounding 채점용 사본에서만 인라인 [근거 N] 마커를 제거한다.
+
+    마커의 "근거"/숫자 토큰은 청크 본문에 존재하지 않아 lexical containment
+    점수를 부당하게 낮춘다. 사용자에게 보여주고 저장하는 answer 자체는
+    건드리지 않는다.
+    """
+    return _CITATION_MARKER_RE.sub("", answer).strip()
+
+
+def _cited_indices(answer: str, section_count: int) -> list[int]:
+    """답변에 등장한 순서대로, 유효 범위 안의 0-based section 인덱스만 뽑는다."""
+    seen: list[int] = []
+    for match in _CITATION_MARKER_RE.finditer(answer):
+        index = int(match.group(1)) - 1
+        if 0 <= index < section_count and index not in seen:
+            seen.append(index)
+    return seen
+
+
+def clean_answer_citations(answer: str, section_count: int) -> str:
+    """모델이 지어낸, 범위를 벗어난 [근거 N] 마커만 답변 본문에서 지운다.
+
+    존재하지 않는 sources[N-1]을 가리키는 죽은 참조를 사용자에게 보여주지
+    않기 위함이다. 유효한 마커는 그대로 둔다.
+    """
+    def _replace(match: re.Match[str]) -> str:
+        index = int(match.group(1)) - 1
+        return match.group(0) if 0 <= index < section_count else ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer)
+
+
+def sources_from_citations(
+    answer: str, document: DocumentParseResponse | None
+) -> list[ReviewSource]:
+    """답변이 실제로 인용한 [근거 N] 청크만 sources로 좁힌다.
+
+    마커가 하나도 없거나(모델이 안 붙인 경우) 전부 범위 밖이면, sources가
+    통째로 비어버리는 것보다는 과다 노출이 낫다고 보고 검색된 섹션 전부로
+    폴백한다.
+    """
+    if document is None:
+        return []
+    sections = document.sections
+    cited = _cited_indices(answer, len(sections))
+    if not cited and sections:
+        logger.info(
+            "No valid [근거 N] citation markers in chat answer; "
+            "falling back to all %d retrieved sources",
+            len(sections),
+        )
+    indices = cited if cited else range(len(sections))
+    return [
+        ReviewSource(
+            document_id=sections[i].source_document_id or document.document_id,
+            filename=sections[i].source_filename or document.filename,
+            page=(
+                sections[i].index
+                if (sections[i].source_document_type or document.document_type)
+                in {"pdf", "pptx"}
+                else None
+            ),
+            excerpt=sections[i].text[:500],
+        )
+        for i in indices
+    ]
 
 
 class DocumentContextSelector:

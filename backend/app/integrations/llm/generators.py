@@ -11,8 +11,8 @@ from app.integrations.llm.contracts import (
 from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaCreateRequest, PersonaProfile
-from app.models.review import ReviewSource
 from app.models.summary import SummaryStyle
+from app.services.rag_service import sources_from_citations
 
 
 class HttpPersonaGenerator:
@@ -75,18 +75,12 @@ class HttpChatGenerator:
         }
         try:
             generated = await self.client.post_json("/chat", payload)
-            if document is not None:
-                generated["sources"] = [
-                    ReviewSource(
-                        document_id=section.source_document_id or document.document_id,
-                        filename=section.source_filename or document.filename,
-                        page=(section.index if (section.source_document_type or document.document_type) in {"pdf", "pptx"} else None),
-                        excerpt=section.text[:500],
-                    ).model_dump(mode="json")
-                    for section in document.sections
-                ]
-            else:
-                generated["sources"] = []
+            # 답변이 실제로 인용한 [근거 N] 청크만 sources로 좁힌다(Phase 8).
+            # 마커가 없으면 sources_from_citations가 검색된 전부로 폴백한다.
+            generated["sources"] = [
+                source.model_dump(mode="json")
+                for source in sources_from_citations(generated.get("answer", ""), document)
+            ]
             return generated
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ChatGeneratorError(str(exc)) from exc

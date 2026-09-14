@@ -18,7 +18,8 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.grounding_service import GroundingChecker
 from app.services.rag_service import (
-    DocumentContextSelector, combine_document_contexts, should_use_document,
+    DocumentContextSelector, clean_answer_citations, combine_document_contexts,
+    should_use_document, sources_from_citations, strip_citation_markers,
 )
 from app.services.vector_rag import VectorRag, vector_enabled
 
@@ -154,29 +155,17 @@ class ChatService:
         mode = get_grounding_mode()
         if mode == "off" or document is None:
             return answer, None
-        grounding = await self.grounding_checker.check(answer, document)
+        # 인라인 [근거 N] 마커는 청크 본문에 없는 토큰이라 lexical containment
+        # 점수를 부당하게 낮춘다. 채점용 사본에서만 지우고, 저장/표시용
+        # answer에는 마커를 그대로 남긴다.
+        grounding = await self.grounding_checker.check(strip_citation_markers(answer), document)
         if mode == "strict" and grounding.score < get_grounding_min_score():
             answer = f"{answer}\n\n※ 이 답변의 일부는 첨부 문서에서 확인되지 않았습니다."
         return answer, grounding
 
     @staticmethod
-    def _sources(document: DocumentParseResponse | None) -> list[ReviewSource]:
-        if document is None:
-            return []
-        return [
-            ReviewSource(
-                document_id=section.source_document_id or document.document_id,
-                filename=section.source_filename or document.filename,
-                page=(
-                    section.index
-                    if (section.source_document_type or document.document_type)
-                    in {"pdf", "pptx"}
-                    else None
-                ),
-                excerpt=section.text[:500],
-            )
-            for section in document.sections
-        ]
+    def _sources(answer: str, document: DocumentParseResponse | None) -> list[ReviewSource]:
+        return sources_from_citations(answer, document)
 
     async def reply(
         self, agent_id: UUID, request: ChatRequest, owner_id: UUID
@@ -203,9 +192,12 @@ class ChatService:
         try:
             generated = await self.generator.generate(persona, effective_request, document, history)
             generation_finished = perf_counter()
-            answer, grounding = await self._apply_grounding(
-                generated.get("answer", ""), document
-            )
+            # 모델이 지어낸, 범위 밖 [근거 N] 마커는 sources에 없는 죽은
+            # 참조이므로 저장/표시용 답변에서 지운다. generators.py가 이미
+            # 같은 원문으로 sources를 필터링했으므로 순서는 상관없다.
+            section_count = len(document.sections) if document is not None else 0
+            raw_answer = clean_answer_citations(generated.get("answer", ""), section_count)
+            answer, grounding = await self._apply_grounding(raw_answer, document)
             generated = {**generated, "answer": answer, "grounding": grounding}
             chat = ChatHistoryItem.model_validate(
                 {
@@ -281,6 +273,11 @@ class ChatService:
                 answer = "".join(parts).strip()
                 if not answer:
                     raise ChatServiceError("Chat generator returned an empty response")
+                # 모델이 지어낸, 범위 밖 [근거 N] 마커는 sources에 없는 죽은
+                # 참조이므로 저장/표시용 답변에서 지운다(이미 스트리밍된
+                # 토큰 자체는 되돌릴 수 없다).
+                section_count = len(document.sections) if document is not None else 0
+                answer = clean_answer_citations(answer, section_count)
                 # Grounding is checked once all tokens are in, right before the
                 # `done` event is built, so the live token stream itself is
                 # never delayed by the check.
@@ -293,7 +290,7 @@ class ChatService:
                     document_id=effective_request.document_id,
                     message=request.message,
                     answer=answer,
-                    sources=self._sources(document),
+                    sources=self._sources(answer, document),
                     grounding=grounding,
                     timing=ChatTiming(
                         context_ms=round((context_finished - started) * 1000),

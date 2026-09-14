@@ -5,7 +5,8 @@ import pytest
 
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.services.rag_service import (
-    DocumentContextSelector, combine_document_contexts, should_use_document,
+    DocumentContextSelector, clean_answer_citations, combine_document_contexts,
+    should_use_document, sources_from_citations, strip_citation_markers,
 )
 
 
@@ -168,3 +169,64 @@ def test_combined_context_reuses_short_document_budget() -> None:
 
 def test_combined_context_does_not_emit_header_without_evidence() -> None:
     assert combine_document_contexts([_document()], 10) is None
+
+
+# --- 인용 마커 기반 sources 필터 (Phase 8) ----------------------------------
+
+
+def test_sources_from_citations_keeps_only_cited_sections() -> None:
+    document = _document()
+    answer = "매출은 25퍼센트 증가했습니다 [근거 2]."
+
+    sources = sources_from_citations(answer, document)
+
+    assert len(sources) == 1
+    assert sources[0].excerpt.startswith("매출 성장률은")
+
+
+def test_sources_from_citations_falls_back_to_all_when_no_markers() -> None:
+    document = _document()
+
+    sources = sources_from_citations("마커가 없는 답변입니다.", document)
+
+    assert len(sources) == len(document.sections)
+
+
+def test_sources_from_citations_ignores_out_of_range_ordinal() -> None:
+    document = _document()
+    # 청크가 3개인데 모델이 [근거 7]을 지어낸 경우: sources에 반영하지 않는다.
+    answer = "이 내용은 [근거 7]에 근거합니다."
+
+    sources = sources_from_citations(answer, document)
+
+    assert len(sources) == len(document.sections)  # 유효 마커가 없으니 폴백
+
+
+def test_sources_from_citations_keeps_valid_and_drops_invalid_ordinal() -> None:
+    document = _document()
+    answer = "첫 근거는 [근거 1]이고 지어낸 근거는 [근거 99]입니다."
+
+    sources = sources_from_citations(answer, document)
+
+    assert len(sources) == 1
+    assert sources[0].excerpt.startswith("소개와")
+
+
+def test_sources_from_citations_none_document_returns_empty() -> None:
+    assert sources_from_citations("[근거 1]", None) == []
+
+
+def test_strip_citation_markers_removes_all_markers() -> None:
+    cleaned = strip_citation_markers("매출이 늘었습니다 [근거 1]. 고객도 늘었습니다 [근거 2].")
+    assert "[근거" not in cleaned
+    assert "매출이 늘었습니다" in cleaned
+    assert "고객도 늘었습니다" in cleaned
+
+
+def test_clean_answer_citations_drops_only_out_of_range_markers() -> None:
+    answer = "유효한 근거는 [근거 1]이고 지어낸 근거는 [근거 99]입니다."
+
+    cleaned = clean_answer_citations(answer, section_count=3)
+
+    assert "[근거 1]" in cleaned
+    assert "[근거 99]" not in cleaned

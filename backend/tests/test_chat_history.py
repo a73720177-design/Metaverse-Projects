@@ -193,6 +193,8 @@ def test_chat_combines_explicit_and_agent_files_without_starvation(monkeypatch, 
     assert {section.source_document_id for section in context.sections} == {
         document.document_id for document in documents
     }
-    sources = ChatService._sources(context)
+    # No citation markers in this synthetic answer, so it falls back to all
+    # retrieved sections (Phase 8's "no markers" fallback).
+    sources = ChatService._sources("", context)
     assert all(source.page == 2 for source in sources)
     assert {source.filename for source in sources} == {document.filename for document in documents}
