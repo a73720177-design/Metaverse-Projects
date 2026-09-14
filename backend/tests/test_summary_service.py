@@ -194,18 +194,6 @@ class RaisingSummaryGenerator:
         raise SummaryGeneratorError("LLM 서비스를 사용할 수 없습니다.")
 
 
-def test_legacy_contract_mode_returns_503_for_unsupported_summary_generator() -> None:
-    from app.integrations.llm.legacy_generators import UnsupportedLegacySummaryGenerator
-
-    service, _, _, _ = _build_service(generator=UnsupportedLegacySummaryGenerator())
-    app.dependency_overrides[get_summary_service] = lambda: service
-    try:
-        response = client.post(f"/documents/{DOCUMENT_ID}/summary", json={})
-        assert response.status_code == 503
-    finally:
-        app.dependency_overrides.clear()
-
-
 def test_generator_error_surfaces_as_503() -> None:
     service, _, _, _ = _build_service(generator=RaisingSummaryGenerator())
     app.dependency_overrides[get_summary_service] = lambda: service

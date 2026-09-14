@@ -8,9 +8,7 @@ LLM 서비스 API 서버.
     - Ollama가 로컬에서 실행 중이어야 함 (ollama serve)
     - qwen3:4b 모델이 pull 되어 있어야 함
 
-/extract-concepts, /generate-questions는 Backend의 legacy_questions 호환
-모드가 쓰는 임시 API다. /api/v1/personas, /reviews, /chat이 정식 계약이며,
-Backend가 legacy_questions에서 v1으로 전환하면 legacy 엔드포인트는 제거한다.
+/api/v1/personas, /reviews, /chat, /summaries, /embeddings가 정식 계약이다.
 """
 
 import json
@@ -35,10 +33,8 @@ from app.llm_client import (
 )
 from app.prompts import (
     SUMMARY_GENERATION_PROMPT,
-    build_concept_prompt,
     build_effective_chat_prompt,
     build_persona_prompt,
-    build_question_prompt,
     build_review_prompt,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
@@ -49,12 +45,6 @@ from app.summary_pipeline import (
     should_use_map_reduce as should_use_summary_map_reduce,
     style_guidance,
     style_max_tokens,
-)
-from app.schemas import (
-    ConceptExtractionRequest,
-    ConceptExtractionResponse,
-    QuestionGenerationRequest,
-    QuestionGenerationResponse,
 )
 from app.schemas_v1 import (
     ChatGenerationRequest,
@@ -135,16 +125,6 @@ def _call_llm_as_text(
     if not answer:
         raise HTTPException(status_code=502, detail="LLM이 빈 답변을 반환했습니다.")
     return answer
-
-
-@app.post("/extract-concepts", response_model=ConceptExtractionResponse)
-def extract_concepts(request: ConceptExtractionRequest) -> ConceptExtractionResponse:
-    return _generate(build_concept_prompt(request.paper_text), ConceptExtractionResponse)
-
-
-@app.post("/generate-questions", response_model=QuestionGenerationResponse)
-def generate_questions(request: QuestionGenerationRequest) -> QuestionGenerationResponse:
-    return _generate(build_question_prompt(request), QuestionGenerationResponse)
 
 
 v1_router = APIRouter(prefix="/api/v1")

@@ -22,12 +22,7 @@ from app.repositories.document_repository import InMemoryDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository
 from app.repositories.chat_repository import InMemoryChatRepository
 from app.integrations.llm.client import HttpLlmClient
-from app.integrations.llm.generators import HttpPersonaGenerator
-from app.integrations.llm.contracts import ReviewGeneratorError
-from app.integrations.llm.legacy_generators import (
-    LegacyQuestionReviewGenerator,
-    LocalPersonaGenerator,
-)
+from app.integrations.llm.generators import HttpPersonaGenerator, LocalPersonaGenerator
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
@@ -628,7 +623,7 @@ def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
         app.dependency_overrides.clear()
 
 
-def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
+def test_local_persona_generator_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
     result = asyncio.run(
@@ -666,68 +661,3 @@ def test_database_failure_uses_safe_common_error_response() -> None:
         app.dependency_overrides.clear()
 
 
-def test_legacy_review_adapts_current_llm_team_contract() -> None:
-    requested_paths: list[str] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        requested_paths.append(request.url.path)
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(
-                200,
-                json={"concepts": [{"name": "AI", "definition": "인공지능"}]},
-            )
-        if request.url.path == "/generate-questions":
-            return httpx.Response(
-                200,
-                json={"questions": [{"question": "근거는 무엇인가요?"}]},
-            )
-        return httpx.Response(404)
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    result = asyncio.run(
-        generator.generate(
-            PersonaProfile(name="Evaluator", description="근거 중심"),
-            DocumentParseResponse(
-                filename="slides.pptx",
-                document_type="pptx",
-                saved_path=Path("uploads/slides.pptx"),
-                sections=[],
-                full_text="발표 내용",
-            ),
-            None,
-        )
-    )
-
-    assert requested_paths == ["/extract-concepts", "/generate-questions"]
-    assert result["questions"] == ["근거는 무엇인가요?"]
-
-
-def test_legacy_review_rejects_invalid_concept_contract() -> None:
-    async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(200, json={"concepts": [{"name": "AI"}]})
-        raise AssertionError("질문 API는 호출되면 안 됩니다.")
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    with pytest.raises(ReviewGeneratorError, match="definition"):
-        asyncio.run(
-            generator.generate(
-                PersonaProfile(name="Evaluator", description="Evidence"),
-                DocumentParseResponse(
-                    filename="slides.pdf",
-                    document_type="pdf",
-                    saved_path=Path("uploads/slides.pdf"),
-                    sections=[],
-                    full_text="Presentation",
-                ),
-                None,
-            )
-        )

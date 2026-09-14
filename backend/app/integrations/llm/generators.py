@@ -15,6 +15,23 @@ from app.models.review import ReviewSource
 from app.models.summary import SummaryStyle
 
 
+class LocalPersonaGenerator:
+    """Backend가 받은 입력을 그대로 사용해, LLM 호출 없이 페르소나를 만든다.
+
+    PERSONA_FALLBACK_LOCAL=true일 때 개발용 대체 경로로 쓴다(로컬 모델이
+    잘못된 JSON을 반환해도 페르소나 생성 자체는 막히지 않도록).
+    """
+
+    async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]:
+        if not request.description.strip():
+            raise PersonaGeneratorError("평가자 설명이 필요합니다.")
+        return {
+            "role": "Evaluator",
+            "expertise": [],
+            "evaluation_style": [],
+        }
+
+
 class HttpPersonaGenerator:
     def __init__(self, client: HttpLlmClient) -> None:
         self.client = client

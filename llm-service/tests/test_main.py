@@ -41,20 +41,6 @@ def _document_payload() -> dict:
 # (경로, 요청 payload, 스키마를 만족하는 LLM 응답 문자열)
 ENDPOINTS = [
     (
-        "/extract-concepts",
-        {"paper_text": "논문 본문"},
-        '{"concepts": [{"name": "a", "definition": "b"}]}',
-    ),
-    (
-        "/generate-questions",
-        {
-            "concepts": [{"name": "a", "definition": "b"}],
-            "critical_points": "관점",
-            "script_text": "대본",
-        },
-        '{"questions": [{"question": "q"}]}',
-    ),
-    (
         "/api/v1/personas",
         {"name": "홍길동 교수", "description": "근거를 중요하게 평가한다."},
         '{"role": "평가자", "expertise": [], "evaluation_style": []}',
@@ -107,21 +93,6 @@ def test_schema_mismatch_returns_502(monkeypatch, path, payload, _llm_response):
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "{}")
     response = client.post(path, json=payload)
     assert response.status_code == 502
-
-
-def test_empty_paper_text_rejected_without_calling_llm(monkeypatch):
-    called = False
-
-    def fail_if_called(*args, **kwargs):
-        nonlocal called
-        called = True
-        return "{}"
-
-    monkeypatch.setattr("app.main.call_llm", fail_if_called)
-    response = client.post("/extract-concepts", json={"paper_text": ""})
-
-    assert response.status_code == 422
-    assert called is False
 
 
 def test_legacy_health_ok():
