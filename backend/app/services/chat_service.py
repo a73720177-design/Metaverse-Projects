@@ -89,13 +89,12 @@ class ChatService:
         ))
         candidates = []
         if requested_ids:
-            fetched = await asyncio.gather(*(
-                self.document_repository.get(document_id, owner_id)
-                for document_id in requested_ids
-            ))
-            if any(item is None for item in fetched):
+            retrieval_needed = should_use_document(request.message, requested_ids[0])
+            candidates = await self.document_repository.get_for_retrieval(
+                requested_ids, owner_id, retrieval_query if retrieval_needed else ""
+            )
+            if {item.document_id for item in candidates} != set(requested_ids):
                 raise ChatResourceNotFoundError("Document not found")
-            candidates = [item for item in fetched if item is not None]
         effective_request = request.model_copy(update={
             "document_id": candidates[0].document_id if candidates else None,
             "document_ids": [item.document_id for item in candidates],
@@ -109,15 +108,13 @@ class ChatService:
         ):
             if vector_enabled():
                 try:
-                    vector_rag = VectorRag()
-                    if await vector_rag.has_complete_index(candidates, owner_id):
-                        document = await vector_rag.select_context(
-                            candidates, retrieval_query, owner_id
-                        )
-                    else:
-                        logger.info(
-                            "Chat vector index is incomplete; using lexical retrieval"
-                        )
+                    vector_rag = VectorRag(selector=self.context_selector)
+                    # Search already excludes stale vectors and merges lexical
+                    # evidence from every file, including unindexed ones. A
+                    # single failed upload must not disable all semantic hits.
+                    document = await vector_rag.select_context(
+                        candidates, retrieval_query, owner_id
+                    )
                 except Exception:
                     logger.warning(
                         "Vector search failed; falling back to lexical RAG",

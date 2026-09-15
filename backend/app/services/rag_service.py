@@ -72,6 +72,22 @@ def _chunk_header(ordinal: int, filename: str, index: int) -> str:
     return _CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=filename, index=index) + "\n"
 
 
+def fuse_chunk_rankings(*rankings: list[DocumentSection]) -> list[DocumentSection]:
+    """Reciprocal rank fusion, with stable ties and one vote per list/chunk."""
+    scores: dict[tuple[int, str], float] = {}
+    sections: dict[tuple[int, str], DocumentSection] = {}
+    for ranking in rankings:
+        seen = set()
+        for section in ranking:
+            key = (section.index, section.text.strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            sections.setdefault(key, section)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + len(seen))
+    return [sections[key] for key in sorted(scores, key=scores.get, reverse=True)]
+
+
 def combine_document_contexts(
     documents: list[DocumentParseResponse], max_context_chars: int
 ) -> DocumentParseResponse | None:
@@ -254,6 +270,7 @@ class DocumentContextSelector:
         self.cache_size = cache_size
         self.max_context_chars = max_context_chars
         self._cache: OrderedDict[UUID, tuple[str, list[DocumentSection]]] = OrderedDict()
+        self._term_cache: dict[UUID, tuple[list[Counter], list[int], Counter, float]] = {}
 
     @staticmethod
     def _fingerprint(document: DocumentParseResponse) -> str:
@@ -313,14 +330,17 @@ class DocumentContextSelector:
         query_terms = set(self._features(query))
         if not query_terms or not chunks:
             return []
-        chunk_terms = [self._features(chunk.text) for chunk in chunks]
-        document_frequency = Counter(
-            term for terms in chunk_terms for term in set(terms) if term in query_terms
-        )
-        average_length = sum(len(terms) for terms in chunk_terms) / len(chunk_terms) or 1
+        if document.document_id not in self._term_cache:
+            terms = [self._features(chunk.text) for chunk in chunks]
+            lengths = [len(items) for items in terms]
+            self._term_cache[document.document_id] = (
+                [Counter(items) for items in terms], lengths,
+                Counter(term for items in terms for term in set(items)),
+                sum(lengths) / len(chunks) or 1,
+            )
+        counters, lengths, document_frequency, average_length = self._term_cache[document.document_id]
         ranked: list[tuple[float, int, DocumentSection]] = []
-        for position, (chunk, terms) in enumerate(zip(chunks, chunk_terms)):
-            frequencies = Counter(terms)
+        for position, (chunk, frequencies, length) in enumerate(zip(chunks, counters, lengths)):
             score = 0.0
             for term in query_terms:
                 frequency = frequencies[term]
@@ -329,7 +349,7 @@ class DocumentContextSelector:
                 idf = math.log(1 + (len(chunks) - document_frequency[term] + 0.5) /
                                (document_frequency[term] + 0.5))
                 denominator = frequency + 1.2 * (
-                    0.25 + 0.75 * len(terms) / average_length
+                    0.25 + 0.75 * length / average_length
                 )
                 score += idf * frequency * 2.2 / denominator
             if score > 0:
@@ -343,10 +363,12 @@ class DocumentContextSelector:
             self._cache.move_to_end(document.document_id)
             return cached[1]
         chunks = self._split(document)
+        self._term_cache.pop(document.document_id, None)
         self._cache[document.document_id] = (fingerprint, chunks)
         self._cache.move_to_end(document.document_id)
         while len(self._cache) > self.cache_size:
-            self._cache.popitem(last=False)
+            evicted_id, _ = self._cache.popitem(last=False)
+            self._term_cache.pop(evicted_id, None)
         return chunks
 
     def select(

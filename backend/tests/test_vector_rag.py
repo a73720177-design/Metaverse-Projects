@@ -276,3 +276,37 @@ async def test_vector_context_recovers_exact_term_in_already_matched_file() -> N
     selected = await service.select_context([document], "ZX729", uuid4())
     assert "ZX729" in selected.full_text
     assert "해약 비용" in selected.full_text
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_partial_index_and_lexical_evidence(monkeypatch):
+    from app.models.chat import ChatRequest
+    from app.models.persona import PersonaProfile
+    from app.repositories.agent_repository import InMemoryAgentRepository
+    from app.repositories.chat_repository import InMemoryChatRepository
+    from app.repositories.document_repository import InMemoryDocumentRepository
+    from app.services.chat_service import ChatService
+
+    monkeypatch.setenv("RAG_MODE", "vector")
+    owner = uuid4()
+    persona = PersonaProfile(agent_id=uuid4(), name="평가자")
+    indexed = _document("semantic.pdf", "계약 종료 시 비용은 300원.")
+    unindexed = _document("lexical.pdf", "해지 위약금은 500원.")
+    agents, documents = InMemoryAgentRepository(), InMemoryDocumentRepository()
+    await agents.save(persona, owner)
+    for document in (indexed, unindexed):
+        await documents.save(document, owner)
+    monkeypatch.setattr(VectorRag, "has_complete_index", AsyncMock(return_value=False))
+    monkeypatch.setattr(VectorRag, "search_hits", AsyncMock(return_value=[
+        VectorSearchHit(indexed.document_id, indexed.filename, 1, indexed.full_text, 0.1)
+    ]))
+    service = ChatService(AsyncMock(), agents, documents, InMemoryChatRepository())
+    _, _, context, _ = await service._resolve_context(persona.agent_id, ChatRequest(
+        message="자료의 해지 위약금은?",
+        document_ids=[indexed.document_id, unindexed.document_id],
+    ), owner)
+    assert "300원" in context.full_text
+    assert "500원" in context.full_text
+    assert {section.source_document_id for section in context.sections} == {
+        indexed.document_id, unindexed.document_id,
+    }
