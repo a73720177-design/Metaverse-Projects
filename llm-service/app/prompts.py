@@ -29,7 +29,7 @@ from app.schemas_v1 import (
 )
 
 # 리뷰 품질 추적/회귀 비교용. 프롬프트 문구를 바꿀 때마다 갱신한다.
-PROMPT_VERSION = "2026-09-14"
+PROMPT_VERSION = "2026-09-15"
 
 # 채팅 경로에서 검색된 청크에 붙는 라벨의 단일 정의처. Backend
 # (app/services/rag_service.py:combine_document_contexts)가 만드는 라벨과
@@ -291,9 +291,9 @@ def _positive_env_int(name: str, default: int) -> int:
     return value
 
 
-def _history_block(history: list[ChatTurn]) -> str:
+def _history_block(history: list[ChatTurn], truncated: bool = False) -> str:
     if not history:
-        return "(이전 대화 없음)"
+        return "(컨텍스트 한도로 이전 대화 생략)" if truncated else "(이전 대화 없음)"
     max_chars = _positive_env_int("CHAT_HISTORY_MAX_CHARS", 2000)
     lines = [
         f"{'사용자' if turn.role == 'user' else '평가자'}: {turn.content}"
@@ -301,9 +301,19 @@ def _history_block(history: list[ChatTurn]) -> str:
     ]
     # Oldest turns are least relevant to the current question, so drop from
     # the front first when the block would blow the token budget.
-    while lines and sum(len(line) + 1 for line in lines) > max_chars:
+    while len(lines) > 1 and len("\n".join(lines)) > max_chars:
         lines.pop(0)
-    return "\n".join(lines) if lines else "(이전 대화 없음)"
+        truncated = True
+    # A single long latest turn must not erase the entire conversation. Retain
+    # its role and most recent text, while keeping the configured text budget.
+    if lines and len(lines[0]) > max_chars:
+        role = "사용자: " if history[-1].role == "user" else "평가자: "
+        prefix = role + "[앞부분 생략] "
+        lines[0] = (prefix + history[-1].content[-(max_chars - len(prefix)):]
+                    if max_chars > len(prefix) else role[:max_chars])
+        truncated = True
+    note = "[이전 대화 일부 생략: 보이지 않는 내용을 단정하지 마세요.]\n" if truncated else ""
+    return note + ("\n".join(lines) if lines else "(이전 대화 없음)")
 
 
 def _answer_guidance(max_output_tokens: int) -> str:
@@ -335,7 +345,8 @@ expertise와 evaluation_style은 각각 2~4개까지만 작성하세요. 각 항
   - unknown: 근거가 부족함
   - conflicting: 설명 안에서 서로 충돌함
 - confidence: 0~1 사이 확신도
-- evidence: 최대 1개만 작성하세요. source_id는 "description"으로 고정하고,
+- evidence: 최대 1개만 작성하세요. source_id는 설명이면 "description",
+  참고자료이면 "reference_context"로 지정하고,
   summary에는 근거가 된 구절을 60자 이내로 인용하세요.
 
 설명에 없는 내용을 지어내지 마세요. 명시되지 않은 특성은 inferred나
@@ -345,10 +356,18 @@ unknown으로 표시하세요.
 {name}
 
 [설명]
+=== 자료 시작 ===
 {description}
+=== 자료 끝 ===
+
+[평가 관점 참고자료]
+참고자료는 평가 기준을 추론할 때만 사용하세요. 자료에 없는 성향은 단정하지 마세요.
+=== 자료 시작 ===
+{reference_context}
+=== 자료 끝 ===
 
 """
-    + OUTPUT_LANGUAGE_RULE
+    + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
     + "\n"
 )
 
@@ -557,7 +576,10 @@ FREE_CHAT_PROMPT = (
 
 
 def build_persona_prompt(request: PersonaGenerationRequest) -> str:
-    return PERSONA_GENERATION_PROMPT.format(name=request.name, description=request.description)
+    return PERSONA_GENERATION_PROMPT.format(
+        name=request.name, description=request.description,
+        reference_context=request.reference_context or "(없음)",
+    )
 
 
 def build_review_prompt(request: ReviewGenerationRequest) -> str:
@@ -580,7 +602,7 @@ def build_chat_prompt(request: ChatGenerationRequest) -> str:
     return CHAT_PROMPT.format(
         persona_block=render_persona(request.persona),
         context_block=render_retrieved_context(request.document),
-        history_block=_history_block(request.history),
+        history_block=_history_block(request.history, request.history_truncated),
         message=request.message,
         answer_guidance=_answer_guidance(request.max_output_tokens),
         follow_up_guidance=_follow_up_guidance(request.persona.question_strategy),
@@ -590,7 +612,7 @@ def build_chat_prompt(request: ChatGenerationRequest) -> str:
 def build_free_chat_prompt(request: ChatGenerationRequest) -> str:
     return FREE_CHAT_PROMPT.format(
         persona_block=render_persona(request.persona),
-        history_block=_history_block(request.history),
+        history_block=_history_block(request.history, request.history_truncated),
         message=request.message,
         answer_guidance=_answer_guidance(request.max_output_tokens),
     )

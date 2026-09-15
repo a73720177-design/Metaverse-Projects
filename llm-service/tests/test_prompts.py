@@ -95,6 +95,55 @@ def test_truncate_keeps_short_text_unchanged():
     assert truncate("짧은 텍스트", 100) == "짧은 텍스트"
 
 
+def test_persona_reference_context_is_separate_and_present():
+    request = PersonaGenerationRequest(
+        name="평가자", description="설" * 5000,
+        reference_context="첨부 근거 " * 500,
+    )
+    prompt = build_persona_prompt(request)
+    assert request.description in prompt
+    assert request.reference_context in prompt
+    assert '"reference_context"' in prompt
+    assert "[평가 관점 참고자료]" in prompt
+
+
+def test_latest_maximum_length_history_is_not_entirely_discarded(monkeypatch):
+    from app.schemas_v1 import ChatTurn
+
+    monkeypatch.setenv("CHAT_HISTORY_MAX_CHARS", "2000")
+    request = ChatGenerationRequest(
+        persona=_persona(), message="후속 질문",
+        history=[ChatTurn(role="assistant", content="가" * 1994 + "최근 결론.")],
+        history_truncated=True,
+    )
+    for builder in (build_chat_prompt, build_free_chat_prompt):
+        prompt = builder(request)
+        assert "최근 결론." in prompt
+        assert "이전 대화 일부 생략" in prompt
+        assert "(이전 대화 없음)" not in prompt
+
+
+def test_context_fit_drops_history_before_rejecting_current_question(monkeypatch):
+    from app.main import _fit_chat_context
+    from app.prompts import build_effective_chat_prompt
+    from app.schemas_v1 import ChatTurn
+
+    request = ChatGenerationRequest(
+        persona=_persona(), message="현재 질문은 반드시 유지하세요.", max_output_tokens=128,
+        history=[ChatTurn(role="assistant", content="이력" * 1000)],
+    )
+    base = request.model_copy(update={"history": []})
+    budget = len(build_effective_chat_prompt(base)) + 200
+    monkeypatch.setenv("LLM_MAX_MODEL_LEN", str(budget + 128 + 1))
+    monkeypatch.setenv("LLM_CONTEXT_SAFETY_TOKENS", "1")
+    monkeypatch.setenv("LLM_APPROX_CHARS_PER_TOKEN", "1")
+    fitted = _fit_chat_context(request)
+    assert fitted.message == request.message
+    assert fitted.history == []
+    assert fitted.history_truncated is True
+    assert len(request.history) == 1
+
+
 def test_truncate_cuts_long_text_and_appends_suffix():
     text = "가" * 50
     result = truncate(text, 10)

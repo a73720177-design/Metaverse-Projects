@@ -32,6 +32,8 @@ Ollama :11434
 - Persona 기반 Review와 자료 첨부 Chat
 - Chat 이력, 휴지통 이동·복원·완전 삭제
 - Chat JSON 응답 및 SSE 스트리밍
+- 긴 대화 원문은 보존하고 LLM 전송 이력만 항목당 2,000자·최대 20개·합계 12,000자로 제한합니다. LLM Service는 프롬프트 이력 예산에 맞춰 추가로 축약하며 LLM 프롬프트에 생략 사실을 표시합니다.
+- 페르소나 생성·수정 시 사용자 설명(최대 5,000자)과 첨부 근거(`reference_context`, 파일명 포함 최대 3,000자)를 분리합니다. 첨부 근거는 사용자 설명에 저장하지 않습니다. 변경된 Backend보다 LLM Service를 먼저 배포해야 첨부 근거가 반영됩니다.
 - `memory|postgres` Repository, `local|minio` Object Storage
 - LLM `/api/v1` 단일 계약 (personas·reviews·practice·summaries·embeddings·chat)
 - 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트

@@ -1,9 +1,11 @@
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+from pydantic import BaseModel, Field
+
 from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
-from app.models.persona import PersonaCreateRequest, PersonaProfile
+from app.models.persona import PersonaProfile
 from app.models.summary import SummaryStyle
 
 
@@ -23,8 +25,16 @@ class SummaryGeneratorError(RuntimeError):
     pass
 
 
+class PersonaGenerationRequest(BaseModel):
+    """Internal wire contract; reference text is never part of the saved description."""
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=5000)
+    reference_context: str = Field(default="", max_length=3000)
+
+
 class PersonaGenerator(Protocol):
-    async def generate(self, request: PersonaCreateRequest) -> dict[str, Any]: ...
+    async def generate(self, request: PersonaGenerationRequest) -> dict[str, Any]: ...
 
 
 class ReviewGenerator(Protocol):

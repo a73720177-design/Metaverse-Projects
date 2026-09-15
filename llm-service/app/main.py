@@ -188,7 +188,7 @@ def _positive_env_int(name: str, default: int) -> int:
 
 
 def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
-    """Reserve output/KV budget and trim only retrieved document context."""
+    """Reserve output budget; discard old history before rejecting current input."""
     max_model_len = _positive_env_int("LLM_MAX_MODEL_LEN", 8192)
     safety_tokens = _positive_env_int("LLM_CONTEXT_SAFETY_TOKENS", 512)
     try:
@@ -215,6 +215,12 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
     )
     base_request = request.model_copy(update={"document": empty_document})
     base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
+    while base_tokens >= input_budget and request.history:
+        request = request.model_copy(update={
+            "history": request.history[1:], "history_truncated": True,
+        })
+        base_request = request.model_copy(update={"document": empty_document})
+        base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
     available_document_tokens = input_budget - base_tokens
     if available_document_tokens < 1:
         raise HTTPException(

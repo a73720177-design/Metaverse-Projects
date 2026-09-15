@@ -426,7 +426,8 @@ def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> N
         ),
         TEST_USER.user_id,
     ))
-    assert "근거와 비용을 검증한다." in generator.requests[0].description
+    assert "근거와 비용을 검증한다." in generator.requests[0].reference_context
+    assert generator.requests[0].description == "사업성을 평가한다."
     assert created.description == "사업성을 평가한다."
     assert created.role == "generated-1"
 
@@ -439,7 +440,8 @@ def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> N
         ),
         TEST_USER.user_id,
     ))
-    assert "근거와 비용을 검증한다." in generator.requests[1].description
+    assert "근거와 비용을 검증한다." in generator.requests[1].reference_context
+    assert generator.requests[1].description == "시장성을 우선 평가한다."
     assert updated.description == "시장성을 우선 평가한다."
     assert updated.role == "generated-2"
 

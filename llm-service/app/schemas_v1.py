@@ -38,6 +38,7 @@ class PersonaTrait(BaseModel):
 class PersonaGenerationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=5000)
+    reference_context: str = Field(default="", max_length=3000)
 
 
 class PersonaGenerationResponse(BaseModel):
@@ -146,6 +147,7 @@ class ChatGenerationRequest(BaseModel):
     max_output_tokens: int = Field(default=1024, ge=128, le=2048)
     # default_factory=list이므로 history를 안 보내는 기존 클라이언트와도 호환된다.
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
+    history_truncated: bool = False
 
 
 class ChatGenerationResponse(BaseModel):
