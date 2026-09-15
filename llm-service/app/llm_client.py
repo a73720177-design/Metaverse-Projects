@@ -63,7 +63,8 @@ def _vllm_headers() -> dict[str, str]:
 
 def _vllm_model(model: str | None) -> str:
     configured = os.getenv("VLLM_MODEL", VLLM_MODEL).strip()
-    resolved = model or configured
+    # Task callers pass Ollama model names; the vLLM server exposes its own alias.
+    resolved = configured or model
     if not resolved:
         raise LLMError("VLLM_MODEL is required when LLM_PROVIDER=vllm")
     return resolved
@@ -326,13 +327,14 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
         url = f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions"
         payload = {"model": _vllm_model(model), "messages": [{"role": "user", "content": guarded}],
                    "stream": True, "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
-                   "temperature": 0.35, "chat_template_kwargs": {"enable_thinking": False}}
+                   "temperature": 0.35, "repetition_penalty": 1.18,
+                   "chat_template_kwargs": {"enable_thinking": False}}
     else:
         url = f"{OLLAMA_HOST}/api/generate"
         payload = {"model": model or OLLAMA_MODEL, "prompt": guarded, "stream": True,
                    "think": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                    "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
-                               "temperature": 0.35, "repeat_penalty": 1.18}}
+                               "temperature": 0.35, "repeat_penalty": 1.18, "repeat_last_n": 256}}
     acquired = False
     completed = False
     try:
@@ -371,7 +373,7 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
                             break
         if not completed:
             raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
-    except (httpx.HTTPError, TimeoutError, KeyError, IndexError, ValueError, TypeError) as exc:
+    except (httpx.HTTPError, TimeoutError, KeyError, IndexError, ValueError, TypeError, AttributeError) as exc:
         raise LLMError("모델 스트리밍 연결 또는 응답 오류") from exc
     finally:
         if acquired:

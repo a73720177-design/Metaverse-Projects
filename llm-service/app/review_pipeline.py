@@ -20,7 +20,7 @@ from typing import Protocol
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.prompts import REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT
+from app.prompts import REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT, render_persona, render_instructions, FULL_TEXT_MAX_CHARS
 from app.schemas_v1 import (
     ClaimAssessment,
     DocumentIn,
@@ -61,7 +61,7 @@ def _positive_env_int(name: str, default: int) -> int:
 
 def should_use_map_reduce(full_text: str) -> bool:
     threshold = _positive_env_int("REVIEW_SINGLE_PASS_CHARS", 12000)
-    return len(full_text) > threshold
+    return len(full_text) > min(threshold, FULL_TEXT_MAX_CHARS)
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -151,7 +151,7 @@ def _render_group(group: list[ReviewChunk]) -> str:
 
 
 def _persona_json(persona: PersonaProfileIn) -> str:
-    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
+    return render_persona(persona)
 
 
 def generate_review_map_reduce(
@@ -166,7 +166,7 @@ def generate_review_map_reduce(
     groups, truncated = _pack_chunks(chunks)
 
     persona_json = _persona_json(persona)
-    instructions_text = instructions or "(없음)"
+    instructions_text = render_instructions(instructions)
 
     all_claims: list[dict] = []
     for group in groups:
@@ -185,7 +185,9 @@ def generate_review_map_reduce(
         instructions=instructions_text,
         claims_json=json.dumps(all_claims, ensure_ascii=False),
     )
-    response = generate(reduce_prompt, ReviewGenerationResponse, max_tokens=1024, model=model)
+    if truncated:
+        reduce_prompt += "\n일부 구간만 표본 검토했습니다. 피드백에 이 한계를 밝히고 문서 전체를 검토했다고 표현하지 마세요.\n"
+    response = generate(reduce_prompt, ReviewGenerationResponse, max_tokens=2048, model=model)
 
     coverage = ReviewCoverage(
         total_chunks=len(chunks),

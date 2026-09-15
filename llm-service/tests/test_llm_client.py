@@ -137,3 +137,15 @@ def test_embeddings_reject_invalid_vectors_before_database_insert(monkeypatch, v
     )
     with pytest.raises(LLMError):
         embed_texts(["문서"])
+
+
+def test_vllm_uses_served_alias_for_ollama_task_model(monkeypatch):
+    captured = {}
+    def post(url, **kwargs):
+        captured.update(kwargs["json"])
+        return FakeResponse({"choices": [{"message": {"content": "{}"}}]})
+    monkeypatch.setenv("LLM_PROVIDER", "vllm")
+    monkeypatch.setenv("VLLM_MODEL", "served-model")
+    monkeypatch.setattr("app.llm_client.requests.post", post)
+    call_llm("review", model="qwen3:8b")
+    assert captured["model"] == "served-model"

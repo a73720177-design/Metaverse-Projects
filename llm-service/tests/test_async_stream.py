@@ -56,3 +56,27 @@ def test_endpoint_filters_reasoning_incrementally_before_done(monkeypatch):
         await iterator.aclose()
         assert closed.is_set()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('provider', ['ollama', 'vllm'])
+def test_async_sampling_matches_sync_configuration(monkeypatch, provider):
+    import json
+    monkeypatch.setenv('LLM_PROVIDER', provider)
+    monkeypatch.setenv('VLLM_MODEL', 'served-model')
+    captured = {}
+    async def run():
+        async def handler(request):
+            captured.update(json.loads(request.content))
+            body = (b'{"response":"ok","done":true}\n' if provider == 'ollama' else
+                    b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n')
+            return httpx.Response(200, content=body)
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: real_client(**kw, transport=httpx.MockTransport(handler)))
+        assert [part async for part in llm_client.stream_llm_async('test', model='qwen3:8b')] == ['ok']
+    asyncio.run(run())
+    if provider == 'vllm':
+        assert captured['model'] == 'served-model'
+        assert captured['repetition_penalty'] == 1.18
+    else:
+        assert captured['options']['repeat_penalty'] == 1.18
+        assert captured['options']['repeat_last_n'] == 256

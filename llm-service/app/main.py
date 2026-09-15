@@ -43,6 +43,9 @@ from app.prompts import (
     build_review_prompt,
     build_expected_question_prompt,
     trim_context_to_chunks,
+    retrieved_context_text,
+    document_text,
+    RAG_CONTEXT_MAX_CHARS,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
 from app.response_sanitizer import clean_chat_text, extract_json_object, ReasoningFilter, sanitize_payload
@@ -171,10 +174,9 @@ def health_check_v1():
 
 @v1_router.post("/personas", response_model=PersonaGenerationResponse)
 def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
-    # PERSONA_GENERATION_PROMPT의 개수/길이 상한(전문 분야·평가 스타일 각
-    # 2~4개, evidence 1개·60자 이내)이면 512 토큰 안에 충분히 들어온다.
+    # Trait metadata and quoted evidence also consume the JSON output budget.
     return _generate(
-        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
+        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=1024
     )
 
 
@@ -210,43 +212,52 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
             detail="출력 길이가 모델 컨텍스트에 비해 너무 큽니다.",
         )
 
-    empty_document = (
-        request.document.model_copy(update={"full_text": "", "sections": []})
-        if request.document is not None else None
-    )
-    base_request = request.model_copy(update={"document": empty_document})
-    base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
-    while base_tokens >= input_budget and request.history:
+    # Budget exactly the rendered prompt, including section labels and wrappers.
+    # Normalize sections first so the renderer cannot restore text already trimmed.
+    if request.document is not None:
+        document = request.document.model_copy(update={
+            "full_text": retrieved_context_text(request.document), "sections": [],
+        })
+        request = request.model_copy(update={"document": document})
+
+    def fits(candidate: ChatGenerationRequest) -> bool:
+        return math.ceil(len(build_effective_chat_prompt(candidate)) / chars_per_token) <= input_budget
+
+    if fits(request):
+        return request
+    empty_document = (request.document.model_copy(update={"full_text": ""})
+                      if request.document is not None else None)
+    while not fits(request.model_copy(update={"document": empty_document})) and request.history:
         request = request.model_copy(update={
             "history": request.history[1:], "history_truncated": True,
         })
-        base_request = request.model_copy(update={"document": empty_document})
-        base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
-    available_document_tokens = input_budget - base_tokens
-    if available_document_tokens < 1:
-        raise HTTPException(
-            status_code=422,
-            detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.",
-        )
-
+    base = request.model_copy(update={"document": empty_document})
+    if not fits(base):
+        raise HTTPException(status_code=422, detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.")
     if request.document is None:
         return request
 
-    max_document_chars = max(1, math.floor(available_document_tokens * chars_per_token))
-    trimmed_full_text = trim_context_to_chunks(request.document.full_text, max_document_chars)
-    if trimmed_full_text == request.document.full_text:
-        return request
-    # sections는 이미 트리밍된 full_text와 어긋나므로 비운다. 전달되는
-    # 라벨은 항상 full_text(Backend가 붙였거나 위에서 자른 것) 기준이다.
-    trimmed_document = request.document.model_copy(
-        update={"full_text": trimmed_full_text, "sections": []}
-    )
-    return request.model_copy(update={"document": trimmed_document})
+    # Binary search whole-chunk prefixes, checking actual prompt overhead each time.
+    text = request.document.full_text
+    low, high = 0, min(len(text), RAG_CONTEXT_MAX_CHARS)
+    best = base
+    while low <= high:
+        middle = (low + high) // 2
+        document = request.document.model_copy(update={
+            "full_text": trim_context_to_chunks(text, middle),
+        })
+        candidate = request.model_copy(update={"document": document})
+        if fits(candidate):
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
-    if should_use_map_reduce(request.document.full_text):
+    if should_use_map_reduce(document_text(request.document)):
         return generate_review_map_reduce(
             persona=request.persona,
             document=request.document,
@@ -283,14 +294,14 @@ def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
     return SUMMARY_GENERATION_PROMPT.format(
         persona_block=persona_block(request.persona),
         filename=request.document.filename,
-        full_text=request.document.full_text,
+        full_text=document_text(request.document),
         style_guidance=style_guidance(request.style),
     )
 
 
 @v1_router.post("/summaries", response_model=SummaryGenerationResponse)
 def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResponse:
-    if should_use_summary_map_reduce(request.document.full_text):
+    if should_use_summary_map_reduce(document_text(request.document)):
         return generate_summary_map_reduce(
             document=request.document,
             style=request.style,

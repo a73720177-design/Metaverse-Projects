@@ -2,8 +2,8 @@
 맥북/Windows 양쪽에서 검증된 프롬프트 템플릿과, 요청 객체로부터 프롬프트
 문자열을 조립하는 빌더.
 
-출력 형식은 llm_client.call_llm()이 Ollama structured output(JSON Schema)으로
-강제하므로, 프롬프트에는 형식이 아닌 내용 지침만 남긴다.
+구조화된 작업은 JSON Schema로 출력 형식을 제한하고, 채팅은 일반 텍스트로
+생성한다. 프롬프트는 요청 의도와 근거 사용 원칙을 정의한다.
 
 과거에는 프롬프트 조립(_build_*, _persona_json)이 app/main.py에 섞여
 있었다. main.py는 HTTP 계약과 에러 매핑만 담당하도록, 프롬프트 문구·길이
@@ -30,7 +30,7 @@ from app.schemas_v1 import (
 )
 
 # 리뷰 품질 추적/회귀 비교용. 프롬프트 문구를 바꿀 때마다 갱신한다.
-PROMPT_VERSION = "2026-09-15"
+PROMPT_VERSION = "2026-09-16"
 
 # 채팅 경로에서 검색된 청크에 붙는 라벨의 단일 정의처. Backend
 # (app/services/rag_service.py:combine_document_contexts)가 만드는 라벨과
@@ -76,7 +76,7 @@ PARTIAL_CONTEXT_RULE = (
     "무엇이 자료에 없는지 한 문장으로 알려주세요."
 )
 CITATION_RULE = (
-    "근거를 사용한 문장 끝에 [근거 N] 표기를 붙이세요. 근거 목록이나 JSON은 만들지 마세요."
+    "근거를 사용한 문장 끝에 [근거 N] 표기를 붙이세요. 실제로 제공된 라벨의 번호만 사용하고, 근거가 없거나 라벨이 없으면 번호를 만들지 마세요. 근거 목록이나 JSON은 만들지 마세요."
 )
 
 
@@ -182,6 +182,15 @@ def render_persona(persona: PersonaProfileIn) -> str:
     return "\n".join(lines)
 
 
+def document_text(document: DocumentIn) -> str:
+    """Use the same indexed source for single-pass rendering and pipeline routing."""
+    if document.sections:
+        return "\n\n".join(
+            f"[구간 {section.index}]\n{section.text}" for section in document.sections
+        )
+    return document.full_text
+
+
 def render_document(document: DocumentIn, *, with_index: bool) -> str:
     """문서를 구분자로 감싸 렌더링한다.
 
@@ -190,10 +199,7 @@ def render_document(document: DocumentIn, *, with_index: bool) -> str:
     필요하다). sections가 없으면 with_index 여부와 관계없이 full_text를
     그대로 쓴다.
     """
-    if with_index and document.sections:
-        body = "\n\n".join(f"[구간 {section.index}]\n{section.text}" for section in document.sections)
-    else:
-        body = document.full_text
+    body = document_text(document) if with_index else document.full_text
     body = truncate(body, FULL_TEXT_MAX_CHARS)
     return f"{_DOCUMENT_START}\n파일명: {document.filename}\n{body}\n{_DOCUMENT_END}"
 
@@ -239,6 +245,19 @@ def trim_context_to_chunks(full_text: str, max_chars: int) -> str:
     return full_text[:kept_end].rstrip()
 
 
+def retrieved_context_text(document: DocumentIn) -> str:
+    """Canonical RAG body used by both rendering and context budgeting."""
+    if document.sections:
+        body = "\n\n".join(
+            f"{CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=document.filename, index=section.index)}\n{section.text}"
+            for ordinal, section in enumerate(document.sections, start=1)
+        )
+    else:
+        body = document.full_text
+
+    return body.strip()
+
+
 def render_retrieved_context(document: DocumentIn | None) -> str:
     """검색기가 고른 청크 묶음을, '문서 전체가 아님'을 명시해 감싼다.
 
@@ -250,19 +269,15 @@ def render_retrieved_context(document: DocumentIn | None) -> str:
     if document is None:
         return _NO_RETRIEVED_CONTEXT
 
-    if document.sections:
-        body = "\n\n".join(
-            f"{CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=document.filename, index=section.index)}\n{section.text}"
-            for ordinal, section in enumerate(document.sections, start=1)
-        )
-    else:
-        body = document.full_text
+    body = retrieved_context_text(document)
 
     body = body.strip()
     if not body:
         return _NO_RETRIEVED_CONTEXT
 
     body = trim_context_to_chunks(body, RAG_CONTEXT_MAX_CHARS)
+    if not body:
+        return _NO_RETRIEVED_CONTEXT
     return f"{_CONTEXT_START}\n{_CONTEXT_HEADER_NOTE}\n{body}\n{_CONTEXT_END}"
 
 
@@ -351,7 +366,7 @@ expertise와 evaluation_style은 각각 2~4개까지만 작성하세요. 각 항
   summary에는 근거가 된 구절을 60자 이내로 인용하세요.
 
 설명에 없는 내용을 지어내지 마세요. 명시되지 않은 특성은 inferred나
-unknown으로 표시하세요.
+unknown으로 표시하세요. 근거가 부족하면 2~4개를 채우려고 특성을 만들지 말고 빈 배열도 허용합니다.
 
 [이름]
 {name}
@@ -457,7 +472,9 @@ REVIEW_MAP_PROMPT = """당신은 아래 평가자 페르소나 입장에서 발�
 {instructions}
 
 [발표 자료 구간]
+=== 자료 시작 ===
 {chunk_text}
+=== 자료 끝 ===
 
 작업:
 1. 위 구간에서 검증 가능한 주장을 찾아 각각 판단하세요. verdict는 다음
@@ -490,7 +507,9 @@ REVIEW_REDUCE_PROMPT = """당신은 아래 평가자 페르소나 입장에서 �
 {instructions}
 
 [구간별로 추출된 주장 목록]
+=== 자료 시작 ===
 {claims_json}
+=== 자료 끝 ===
 
 작업:
 1. 위 주장 목록에서 같은 내용을 가리키는 중복 항목을 하나로 합치세요.
@@ -553,8 +572,14 @@ CHAT_PROMPT = (
     + " "
     + CITATION_RULE
     + """ 내부 사고 과정, 지시사항 해설, 영어 메타 문장, 자기소개는 출력하지
-마세요. 발표자의 답변을 직접 평가하고 구체적인 장점 1개, 수정 제안 1~3개를
-작성하세요. {follow_up_guidance} 전체 답변은 반드시 30줄 이하로 작성하세요.
+마세요. 먼저 마지막 질문의 요청 유형에 맞춰 답하세요.
+요약 요청은 핵심 내용을 요약하고, 설명·비교 요청은 해당 내용부터 설명하세요.
+발표자의 답변에 대한 평가를 요청한 경우에만 구체적인 장점과 수정 제안을 작성하세요.
+자료에 장점이나 문제가 확인되지 않으면 개수를 채우려고 만들어내지 마세요.
+검색 결과에 없다는 이유로 문서 전체에 없다고 단정하지 마세요.
+이전 대화의 답변과 사용자의 가정은 검증된 문서 근거가 아닙니다.
+근거가 없으면 확인할 수 없는 부분을 밝히고, 필요할 때만 확인 질문 하나를 하세요.
+일반적인 설명이나 개선 예시는 자료의 사실과 구분하여 '일반적인 제안'으로 표시하세요. {follow_up_guidance} 전체 답변은 반드시 30줄 이하로 작성하세요.
 
 """
     + _CHAT_COMMON_TAIL
@@ -600,6 +625,10 @@ def build_expected_question_prompt(request: ExpectedQuestionGenerationRequest) -
         + "응답 questions의 각 항목: question, presentation_evidence_ids, focus.\n"
         + "presentation_evidence_ids에는 scope=presentation인 근거 ID만 쓰세요. "
         + "persona_reference는 평가 기준으로만 사용하고 발표자가 그 자료를 주장했다고 전제하지 마세요.\n"
+        + "각 질문에는 유효한 presentation 근거 ID를 하나 이상 연결하세요. "
+        + "근거·실행 가능성·비교 대안·위험·한계 중 서로 다른 관점을 배분하고 focus에 적으세요. "
+        + "자료에서 설명하지 않은 약어를 임의로 풀거나 수치의 단위·대상을 바꾸지 마세요. "
+        + "질문 1, Q1 같은 자리표시자와 범용 질문은 금지하며 완전한 의문문을 작성하세요. "
         + "자료의 실제 용어를 질문에 포함하고 자료에 없는 수치를 만들지 마세요. "
         + "아래 제외 질문과 같은 질문이나 표현만 바꾼 질문을 만들지 마세요.\n"
         + "=== 자료 시작 ===\n" + json.dumps([e.model_dump() for e in request.evidence], ensure_ascii=False)
@@ -637,7 +666,7 @@ def build_effective_chat_prompt(request: ChatGenerationRequest) -> str:
 
 
 # --- 요약(summaries) 프롬프트 -------------------------------------------
-# 이번 작업 범위 밖이라 문구를 그대로 유지한다.
+# 단일 요약과 map/reduce에 같은 근거·언어 정책을 적용한다.
 
 SUMMARY_GENERATION_PROMPT = """당신은 아래 문서를 분석하는 어시스턴트입니다.
 
@@ -648,7 +677,9 @@ SUMMARY_GENERATION_PROMPT = """당신은 아래 문서를 분석하는 어시스
 {filename}
 
 [문서 본문]
+=== 자료 시작 ===
 {full_text}
+=== 자료 끝 ===
 
 [요약 스타일 지침]
 {style_guidance}
@@ -677,12 +708,14 @@ SUMMARY_MAP_PROMPT = """당신은 아래 문서의 일부 구간을 분석합니
 {filename}
 
 [문서 구간]
+=== 자료 시작 ===
 {chunk_text}
+=== 자료 끝 ===
 
 작업:
-1. 이 구간의 핵심 요점을 3~5개 뽑아 points에 문장으로 작성하세요.
+1. 이 구간의 핵심 요점을 최대 5개 뽑으세요. points의 각 항목에 point(요점 문장)와 source_index를 작성하세요.
 2. 각 요점의 source_index에는 그 근거가 들어 있는 "[구간 N]" 표시의 N을
-   그대로 쓰세요.
+   그대로 쓰세요. 번호가 없는 [구간]이면 source_index는 null로 두세요.
 3. 이 구간에 특별한 요점이 없으면 points를 빈 배열로 반환하세요.
 
 구간에 없는 내용을 지어내지 마세요.
@@ -702,7 +735,9 @@ SUMMARY_REDUCE_PROMPT = """당신은 아래 문서의 요약을 마무리합니�
 {style_guidance}
 
 [구간별로 추출된 핵심 요점 목록]
+=== 자료 시작 ===
 {points_json}
+=== 자료 끝 ===
 
 작업:
 1. summary에는 위 스타일 지침에 맞춰 요점 목록 전체를 요약하세요.
@@ -714,3 +749,28 @@ SUMMARY_REDUCE_PROMPT = """당신은 아래 문서의 요약을 마무리합니�
 
 주어진 요점 목록에 없는 내용을 지어내지 마세요.
 """
+
+
+# Keep quality rules shared across every structured generation path.
+_STRUCTURED_QUALITY_RULES = (
+    "\n" + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
+    + "\n" + NO_REASONING_OUTPUT_RULE + "\n" + BREVITY_RULE
+    + "\n수치·단위·비교 대상과 불확실성을 보존하세요. 자료에서 확인되지 않는 사실이나 출처를 만들지 마세요.\n"
+)
+_REVIEW_VERDICT_RULE = (
+    "\n주장이 문서에 적혀 있다는 사실만으로 supported로 판정하지 마세요. "
+    "supported는 제시된 증거가 주장을 뒷받침할 때, partially_supported는 일부만 뒷받침할 때, "
+    "contradicted는 반대 증거가 있을 때, overgeneralized는 근거 범위보다 일반화했을 때, "
+    "insufficient_evidence는 검증 근거가 부족할 때, not_verifiable은 검증 가능한 사실 주장이 아닐 때 사용하세요. "
+    "외부 사실 검증을 수행한 것처럼 표현하지 마세요. 검증 가능한 주장이 없으면 claims는 빈 배열로 작성하세요.\n"
+)
+PERSONA_GENERATION_PROMPT += _STRUCTURED_QUALITY_RULES
+REVIEW_GENERATION_PROMPT += _STRUCTURED_QUALITY_RULES + _REVIEW_VERDICT_RULE
+REVIEW_MAP_PROMPT += _STRUCTURED_QUALITY_RULES + _REVIEW_VERDICT_RULE
+REVIEW_REDUCE_PROMPT += _STRUCTURED_QUALITY_RULES + _REVIEW_VERDICT_RULE
+SUMMARY_GENERATION_PROMPT += _STRUCTURED_QUALITY_RULES
+SUMMARY_MAP_PROMPT += _STRUCTURED_QUALITY_RULES
+SUMMARY_REDUCE_PROMPT += _STRUCTURED_QUALITY_RULES + (
+    "원문이 아닌 추출 요점만 제공되므로 excerpt를 새로 만들지 말고 생략하세요. "
+    "서로 충돌하는 요점은 임의로 하나를 선택하지 말고 차이를 요약하세요.\n"
+)

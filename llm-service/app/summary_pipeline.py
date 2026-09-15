@@ -23,7 +23,7 @@ from typing import Protocol
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.prompts import SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT
+from app.prompts import SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT, render_persona
 from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle, ReviewCoverage
 
 _CHUNK_OVERLAP = 200
@@ -35,9 +35,9 @@ _STYLE_GUIDANCE: dict[SummaryStyle, str] = {
 }
 
 _STYLE_MAX_TOKENS: dict[SummaryStyle, int] = {
-    SummaryStyle.BRIEF: 512,
-    SummaryStyle.DETAILED: 1024,
-    SummaryStyle.OUTLINE: 768,
+    SummaryStyle.BRIEF: 1024,
+    SummaryStyle.DETAILED: 2048,
+    SummaryStyle.OUTLINE: 1536,
 }
 
 
@@ -171,7 +171,7 @@ def _render_group(group: list[SummaryChunk]) -> str:
 def persona_block(persona: PersonaProfileIn | None) -> str:
     if persona is None:
         return "(특정 평가자 관점 없이 일반적인 독자 관점으로 요약합니다.)"
-    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
+    return render_persona(persona)
 
 
 def generate_summary_map_reduce(
@@ -202,11 +202,13 @@ def generate_summary_map_reduce(
         style_guidance=_STYLE_GUIDANCE[style],
         points_json=json.dumps(all_points, ensure_ascii=False),
     )
+    analyzed = sum(len(group) for group in groups)
+    if analyzed < len(chunks):
+        reduce_prompt += "\n일부 구간만 표본 분석했습니다. summary에 이 한계를 밝히고 문서 전체를 확인했다고 표현하지 마세요.\n"
     response = generate(
         reduce_prompt, SummaryGenerationResponse,
         max_tokens=style_max_tokens(style), model=model,
     )
-    analyzed = sum(len(group) for group in groups)
     return response.model_copy(update={"coverage": ReviewCoverage(
         total_chunks=len(chunks), analyzed_chunks=analyzed,
         truncated=analyzed < len(chunks),
