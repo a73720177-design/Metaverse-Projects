@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.models.review import ReviewSource
 from app.models.coverage import Coverage
+from app.models.content_assessment import ContentAssessment
 
 
 class SummaryStyle(StrEnum):
@@ -32,6 +33,8 @@ class SummaryCreateRequest(BaseModel):
 
 
 class SummaryResult(BaseModel):
+    assessment: ContentAssessment | None = None
+    warnings: list[str] = Field(default_factory=list)
     coverage: Coverage | None = None
     summary_id: UUID = Field(default_factory=uuid4)
     document_id: UUID

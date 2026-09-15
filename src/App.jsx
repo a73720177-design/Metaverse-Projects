@@ -277,7 +277,7 @@ function ChatPanel({ result, token, documentIds, chat, update }) {
   }
   return <article className="chat-panel">
     <header className="chat-persona-header"><img src={result.avatar_data_url} alt={`${result.persona_name} AI 생성 아바타`} /><div><h3>{result.persona_name}</h3><p>{result.persona_role} · AI 생성 아바타</p></div>{conversation?.sending && <Spinner label={`답변 중 · ${sec(elapsed)}`} />}</header>
-    <CoverageNotice coverage={result.coverage} />{result.warnings?.map((w) => <p key={w} className="grounding-note">{w}</p>)}<p>{result.generated_count ?? result.questions.length}/{result.requested_count ?? 5}개 질문</p>
+    <CoverageNotice coverage={result.coverage} />{result.warnings?.map((w) => <p key={w} className="grounding-note">{w}</p>)}{result.assessment && <p className="grounding-note">{result.assessment.basis}</p>}<p>요청 상한 {result.requested_count ?? 5}개 · 생성 {result.generated_count ?? result.questions.length}개</p>
     <div className="question-strip" aria-label={`${result.persona_name}의 예상 질문`}>{result.questions.map((q, i) => <button type="button" aria-pressed={activeId === q.question_id} className={activeId === q.question_id ? 'active' : ''} key={q.question_id} onClick={() => choose(q)}><b>Q{i + 1}</b>{q.origin === 'template' && <small>보충 질문 · </small>}{q.question}{chat?.conversations?.[q.question_id]?.sending && <span className="loading-spinner" aria-label="답변 생성 중" />}</button>)}</div>
     <div className="messages" aria-label={`${result.persona_name} 질문별 대화 기록`} tabIndex={0} ref={box} onScroll={(e) => { const n = e.currentTarget; nearBottom.current = n.scrollHeight - n.scrollTop - n.clientHeight < 80; setShowJump(!nearBottom.current) }}>
       {!conversation && <p className="empty-state">예상 질문을 선택하세요.</p>}
@@ -326,8 +326,8 @@ function DocumentSummaryPanel({ doc, token }) {
       {busy && <Spinner label="요약 생성 중" />}
       {error && <p className="form-error">{error}</p>}
       {data && !busy && <>
-        <CoverageNotice coverage={data.coverage} /><p className="summary-text">{data.summary}</p>
-        {data.key_topics?.length > 0 && <ul className="summary-topics">{data.key_topics.map((topic, i) => <li key={i}><strong>{topic.topic}</strong> — {topic.description}</li>)}</ul>}
+        <CoverageNotice coverage={data.coverage} />{data.warnings?.map((warning) => <p className="grounding-note" key={warning}>{warning}</p>)}<p className="summary-text">{data.summary}</p>
+        {data.key_topics?.length > 0 && <ul className="summary-topics">{data.key_topics.map((topic, i) => <li key={i}><strong>{topic.topic}</strong> — {topic.description}<SourceEvidence sources={topic.sources} /></li>)}</ul>}
         {data.outline?.length > 0 && <ol className="summary-outline">{data.outline.map((item, i) => <li key={i}>{item}</li>)}</ol>}
       </>}
     </div>}

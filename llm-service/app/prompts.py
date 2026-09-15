@@ -621,7 +621,7 @@ def build_expected_question_prompt(request: ExpectedQuestionGenerationRequest) -
     return (
         "평가자 관점으로 발표 자료의 예상 질문을 만드세요.\n"
         + render_persona(request.persona)
-        + f"\n정확히 {request.question_count}개를 생성하세요. 질문마다 구체적인 발표 주장과 관점을 적으세요.\n"
+        + f"\n최대 {request.question_count}개를 생성하세요. 근거가 부족하거나 질문이 겹치면 적게 반환하고, 유효한 질문이 없으면 빈 배열을 반환하세요. 질문마다 구체적인 발표 주장과 관점을 적으세요.\n"
         + "응답 questions의 각 항목: question, presentation_evidence_ids, focus.\n"
         + "presentation_evidence_ids에는 scope=presentation인 근거 ID만 쓰세요. "
         + "persona_reference는 평가 기준으로만 사용하고 발표자가 그 자료를 주장했다고 전제하지 마세요.\n"
@@ -686,8 +686,8 @@ SUMMARY_GENERATION_PROMPT = """당신은 아래 문서를 분석하는 어시스
 
 작업:
 1. summary에는 위 스타일 지침에 맞춰 문서 전체를 요약하세요.
-2. key_topics에는 문서의 핵심 주제를 최대 8개까지 뽑아 topic과 description을
-   작성하세요. sources의 filename은 "{filename}"으로, page에는 그 주제의
+2. key_topics에는 문서의 핵심 주제를 최대 {topic_limit}개까지 뽑아 topic과 description을
+   작성하세요. 개수를 채우려고 주제를 나누지 말고, 의미가 같은 주제는 합치세요. 근거가 없으면 빈 배열을 반환하세요. sources의 filename은 "{filename}"으로, page에는 그 주제의
    근거 문장이 들어 있는 "[구간 N]" 표시의 N을, excerpt에는 근거 문장을
    원문 그대로 인용하세요. 구간 표시가 없으면 sources는 비워두세요.
 3. outline에는 문서 흐름을 따라가는 핵심 항목을 최대 20개까지 순서대로
@@ -741,8 +741,8 @@ SUMMARY_REDUCE_PROMPT = """당신은 아래 문서의 요약을 마무리합니�
 
 작업:
 1. summary에는 위 스타일 지침에 맞춰 요점 목록 전체를 요약하세요.
-2. key_topics에는 요점 목록에서 핵심 주제를 최대 8개까지 뽑아 topic과
-   description을 작성하세요. sources의 filename은 "{filename}"으로,
+2. key_topics에는 요점 목록에서 핵심 주제를 최대 {topic_limit}개까지 뽑아 topic과
+   description을 작성하세요. 같은 의미의 주제는 합치고 근거가 없으면 빈 배열을 반환하세요. sources의 filename은 "{filename}"으로,
    page에는 그 요점의 source_index를 넣으세요(없으면 sources는 비워두세요).
 3. outline에는 요점 목록 흐름을 따라가는 핵심 항목을 최대 20개까지
    순서대로 나열하세요.

@@ -181,6 +181,7 @@ def generate_summary_map_reduce(
     persona: PersonaProfileIn | None,
     generate: GenerateFn,
     model: str | None,
+    topic_limit: int = 8,
 ) -> SummaryGenerationResponse:
     chunks = _build_chunks(document)
     groups = _pack_chunks(chunks)
@@ -196,11 +197,15 @@ def generate_summary_map_reduce(
         result = generate(prompt, _MapResult, max_tokens=512, model=model)
         all_points.extend(point.model_dump(mode="json") for point in result.points)
 
+    # Repeated mapped points must not expand the final topic budget.
+    all_points = list({p["point"].strip().casefold(): p for p in all_points if p["point"].strip()}.values())
+    topic_limit = min(topic_limit, len(all_points))
     reduce_prompt = SUMMARY_REDUCE_PROMPT.format(
         persona_block=block,
         filename=document.filename,
         style_guidance=_STYLE_GUIDANCE[style],
         points_json=json.dumps(all_points, ensure_ascii=False),
+        topic_limit=topic_limit,
     )
     analyzed = sum(len(group) for group in groups)
     if analyzed < len(chunks):
@@ -209,7 +214,7 @@ def generate_summary_map_reduce(
         reduce_prompt, SummaryGenerationResponse,
         max_tokens=style_max_tokens(style), model=model,
     )
-    return response.model_copy(update={"coverage": ReviewCoverage(
+    return response.model_copy(update={"key_topics": response.key_topics[:topic_limit], "coverage": ReviewCoverage(
         total_chunks=len(chunks), analyzed_chunks=analyzed,
         truncated=analyzed < len(chunks),
         selection_method="even_sample" if analyzed < len(chunks) else "full",

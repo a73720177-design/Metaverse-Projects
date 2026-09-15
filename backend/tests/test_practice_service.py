@@ -18,9 +18,9 @@ class FakeQuestionGenerator:
         assert "[발표 자료:" in document.full_text
         if persona.document_ids:
             assert "[질문자 참고자료:" in document.full_text
-        assert "5개" in instructions
+        assert "최대 5개" in instructions
         return {
-            "questions": [f"{persona.name} 질문 {index}" for index in range(1, 7)]
+            "questions": [{"question": "발표 자료에서 전환율 개선을 검증한 방법은 무엇입니까?", "presentation_evidence_ids": ["e1"], "focus": "검증"}]
         }
 
 
@@ -29,8 +29,8 @@ def _document(name: str) -> DocumentParseResponse:
         filename=name,
         document_type="pdf",
         saved_path=Path(name),
-        sections=[DocumentSection(index=1, text=f"{name} 본문")],
-        full_text=f"{name} 본문",
+        sections=[DocumentSection(index=1, text=f"{name} 본문은 전환율 개선을 검증하기 위해 사용자 실험을 수행했습니다.")],
+        full_text=f"{name} 본문은 전환율 개선을 검증하기 위해 사용자 실험을 수행했습니다.",
     )
 
 
@@ -64,7 +64,8 @@ def test_expected_questions_use_multiple_documents_and_personas() -> None:
 
     response = asyncio.run(run())
     assert len(response.results) == 2
-    assert all(0 < len(result.questions) <= 5 for result in response.results)
+    assert len(response.results[0].questions) == 1
+    assert response.results[1].questions == []
     assert response.session_id is not None
     assert all(result.avatar_data_url.startswith("data:image/svg+xml;base64,") for result in response.results)
     assert len(response.results[0].questions[0].sources) == 1
@@ -117,7 +118,7 @@ def test_expected_questions_reject_more_than_four_personas() -> None:
         )
 
 
-def test_expected_questions_replace_placeholder_model_output() -> None:
+def test_expected_questions_do_not_replace_placeholder_model_output() -> None:
     class PlaceholderGenerator:
         async def generate(self, persona, document, instructions, **kwargs):
             return {"questions": ["Question 1", "질문 2", "Q3: ...", "질문 4", "질문 5"]}
@@ -142,7 +143,7 @@ def test_expected_questions_replace_placeholder_model_output() -> None:
         )
 
     questions = asyncio.run(run()).results[0].questions
-    assert len(questions) == 5
+    assert questions == []
     assert all(len(item.question) >= 12 for item in questions)
     assert all("Question " not in item.question for item in questions)
 
@@ -163,8 +164,8 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
         filename="긴발표.pdf",
         document_type="pdf",
         saved_path=Path("긴발표.pdf"),
-        sections=[DocumentSection(index=1, text="핵심 검증 근거 " * 2000)],
-        full_text="핵심 검증 근거 " * 2000,
+        sections=[DocumentSection(index=1, text="핵심 검증 근거를 사용자 실험으로 구체적으로 확인했습니다. " * 2000)],
+        full_text="핵심 검증 근거를 사용자 실험으로 구체적으로 확인했습니다. " * 2000,
     )
     persona = PersonaProfile(name="검증자", description="핵심 근거를 검증한다")
 
@@ -202,8 +203,8 @@ def test_large_presentation_does_not_push_out_persona_reference(monkeypatch) -> 
         filename="긴발표.pdf",
         document_type="pdf",
         saved_path=Path("긴발표.pdf"),
-        sections=[DocumentSection(index=1, text="발표 본문 " * 5000)],
-        full_text="발표 본문 " * 5000,
+        sections=[DocumentSection(index=1, text="발표 본문에서는 사용자 실험으로 효과를 확인했습니다. " * 5000)],
+        full_text="발표 본문에서는 사용자 실험으로 효과를 확인했습니다. " * 5000,
     )
     reference = _document("교수의 보안평가기준.pdf")
     persona = PersonaProfile(name="교수", document_ids=[reference.document_id])
@@ -312,3 +313,30 @@ def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypa
         assert coverage.truncated and coverage.total_chunks == 101 and coverage.analyzed_chunks == 3
     asyncio.run(run())
     assert all(marker in seen[0] for marker in ['페이지0 ', '페이지50 ', '페이지100 '])
+
+
+def test_heading_only_material_returns_zero_without_model_call(monkeypatch):
+    monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
+    class Generator:
+        async def generate(self, *args, **kwargs):
+            raise AssertionError('No useful evidence: do not call model')
+    async def run():
+        owner = uuid4()
+        agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        doc = _document('표지.pdf').model_copy(update={
+            'sections': [DocumentSection(index=1, text='목차\n소개\n감사합니다')],
+            'full_text': '목차\n소개\n감사합니다'})
+        persona = PersonaProfile(name='평가자')
+        await agents.save(persona, owner)
+        await docs.save(doc, owner)
+        service = PracticeService(Generator(), agents, docs)
+        response = await service.generate_expected_questions(ExpectedQuestionRequest(
+            persona_ids=[persona.agent_id], presentation_document_ids=[doc.document_id]), owner)
+        result = response.results[0]
+        assert result.questions == []
+        assert result.requested_count == 5 and result.generated_count == 0
+        assert result.assessment.output_limit == 0
+        assert result.status == 'partial' and result.warnings
+        restored = await service.get_session(response.session_id, owner)
+        assert restored.response.results[0].assessment == result.assessment
+    asyncio.run(run())

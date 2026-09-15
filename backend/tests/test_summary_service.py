@@ -222,3 +222,34 @@ def test_generator_error_surfaces_as_503() -> None:
         assert response.status_code == 503
     finally:
         app.dependency_overrides.clear()
+
+
+def test_summary_enforces_adaptive_limit_and_exposes_reason():
+    from app.models.summary import SummaryCreateRequest
+    class ExcessGenerator:
+        async def generate(self, *args):
+            return {'summary': '자료 요약', 'key_topics': [
+                {'topic': str(i), 'description': '설명'} for i in range(8)]}
+    service, _, _, _ = _build_service(ExcessGenerator())
+    result = asyncio.run(service.create(DOCUMENT_ID, SummaryCreateRequest(), TEST_USER.user_id))
+    assert len(result.key_topics) == result.assessment.output_limit == 0
+    assert result.warnings
+
+
+def test_postgres_summary_metadata_roundtrip_without_coverage():
+    from types import SimpleNamespace
+    from app.models.content_assessment import ContentAssessment
+    from app.models.summary import SummaryResult
+    from app.repositories.summary_repository import PostgresSummaryRepository
+    assessment = ContentAssessment(output_limit=1, unique_units=1, effective_chars=30)
+    original = SummaryResult(document_id=DOCUMENT_ID, style='brief', summary='요약',
+                             assessment=assessment, warnings=['생성 분량 추정'])
+    row = SimpleNamespace(**{**original.model_dump(), 'coverage': {
+        'generation_assessment': assessment.model_dump(),
+        'generation_warnings': original.warnings}})
+    restored = PostgresSummaryRepository._to_result(row)
+    assert restored.assessment == assessment and restored.warnings == original.warnings
+    assert restored.coverage is None
+    row.coverage = None
+    legacy = PostgresSummaryRepository._to_result(row)
+    assert legacy.assessment is None and legacy.warnings == []

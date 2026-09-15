@@ -14,6 +14,7 @@ from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.summary import SummaryStyle
+from app.services.content_budget import document_assessment
 from app.services.rag_service import sources_from_citations
 
 
@@ -176,6 +177,7 @@ class HttpSummaryGenerator:
                 mode="json", exclude={"saved_path"}, exclude_none=True
             ),
             "style": style.value,
+            "topic_limit": document_assessment(document).output_limit,
             "persona": persona.model_dump(mode="json") if persona else None,
         }
         try:

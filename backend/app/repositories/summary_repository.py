@@ -71,7 +71,11 @@ class PostgresSummaryRepository:
             summary=summary.summary,
             key_topics=data["key_topics"],
             outline=data["outline"],
-            coverage=data["coverage"],
+            # Keep generation metadata in the existing JSON coverage column;
+            # legacy rows remain readable without a schema migration.
+            coverage={**(data["coverage"] or {}),
+                      "generation_assessment": data["assessment"],
+                      "generation_warnings": data["warnings"]},
             created_at=summary.created_at,
         )
         async with get_session_factory()() as session:
@@ -142,7 +146,9 @@ class PostgresSummaryRepository:
                 "summary": row.summary,
                 "key_topics": row.key_topics,
                 "outline": row.outline,
-                "coverage": row.coverage,
+                "coverage": row.coverage if row.coverage and "total_chunks" in row.coverage else None,
+                "assessment": (row.coverage or {}).get("generation_assessment"),
+                "warnings": (row.coverage or {}).get("generation_warnings", []),
                 "created_at": row.created_at,
             }
         )

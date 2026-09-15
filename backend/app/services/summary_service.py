@@ -1,4 +1,7 @@
+import re
 from uuid import UUID, uuid4
+
+from app.services.content_budget import document_assessment
 
 from pydantic import ValidationError
 
@@ -60,14 +63,16 @@ class SummaryService:
         existing = await self.repository.find_cached(
             document_id, request.style, request.agent_id, owner_id
         )
-        if existing is not None and not refresh:
+        if existing is not None and existing.assessment is not None and not refresh:
             return existing
 
         try:
             generated = await self.generator.generate(document, request.style, persona)
+            assessment = document_assessment(document)
             summary = SummaryResult.model_validate(
                 {
                     **generated,
+                    "assessment": assessment,
                     "summary_id": existing.summary_id if existing else uuid4(),
                     "document_id": document_id,
                     "agent_id": request.agent_id,
@@ -76,6 +81,15 @@ class SummaryService:
             )
         except (SummaryGeneratorError, ValidationError) as exc:
             raise SummaryServiceError("Summary generator returned an invalid response") from exc
+        unique_topics = []
+        seen_topics = set()
+        for topic in summary.key_topics:
+            key = re.sub(r"[\W_]+", "", topic.topic.casefold())
+            if key and key not in seen_topics:
+                unique_topics.append(topic)
+                seen_topics.add(key)
+        summary.key_topics = unique_topics[:assessment.output_limit]
+        summary.warnings.append(f"자료 내용량에 따른 핵심 주제 상한은 {assessment.output_limit}개입니다. {assessment.basis}")
         return await self.repository.save(summary, owner_id)
 
     async def get(self, document_id: UUID, owner_id: UUID) -> SummaryResult | None:

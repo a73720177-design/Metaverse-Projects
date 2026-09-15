@@ -296,6 +296,7 @@ def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
         filename=request.document.filename,
         full_text=document_text(request.document),
         style_guidance=style_guidance(request.style),
+        topic_limit=request.topic_limit,
     )
 
 
@@ -308,13 +309,14 @@ def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResp
             persona=request.persona,
             generate=_generate,
             model=OLLAMA_SUMMARY_MODEL,
+            topic_limit=request.topic_limit,
         )
     response = _generate(
         _build_summary_prompt(request), SummaryGenerationResponse,
         max_tokens=style_max_tokens(request.style), model=OLLAMA_SUMMARY_MODEL,
     )
     total = len([s for s in request.document.sections if s.text.strip()]) or 1
-    return response.model_copy(update={"coverage": ReviewCoverage(
+    return response.model_copy(update={"key_topics": response.key_topics[:request.topic_limit], "coverage": ReviewCoverage(
         total_chunks=total, analyzed_chunks=total, truncated=False, selection_method="full")})
 
 

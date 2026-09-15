@@ -198,6 +198,7 @@ class KeyTopic(BaseModel):
 
 
 class SummaryGenerationRequest(BaseModel):
+    topic_limit: int = Field(default=8, ge=0, le=8)
     document: DocumentIn
     style: SummaryStyle = SummaryStyle.BRIEF
     persona: PersonaProfileIn | None = None

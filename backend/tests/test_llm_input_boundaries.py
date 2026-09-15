@@ -171,8 +171,9 @@ def test_question_count_evidence_and_saved_session_round_trip(receiving_schema, 
         response = await service.generate_expected_questions(ExpectedQuestionRequest(persona_ids=[persona.agent_id],
             presentation_document_ids=[document.document_id], question_count_per_persona=count), owner)
         result = response.results[0]
-        assert result.generated_count == count
-        assert result.status == "complete"
+        assert result.requested_count == count
+        assert result.generated_count == 1
+        assert result.status == ("complete" if count == 1 else "partial")
         assert all(q.origin == "model" and q.sources[0].document_id == document.document_id for q in result.questions)
         saved = await service.get_session(response.session_id, owner)
         assert saved.response == response
@@ -186,4 +187,4 @@ def test_question_count_evidence_and_saved_session_round_trip(receiving_schema, 
         assert (await service.get_session(response.session_id, owner)).response == response
     asyncio.run(run())
     assert len(bodies) == 1
-    assert bodies[0]["question_count"] == count
+    assert bodies[0]["question_count"] == 1

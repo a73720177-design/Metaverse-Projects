@@ -5,6 +5,7 @@ import logging
 import re
 from uuid import UUID
 from app.models.coverage import Coverage
+from app.services.content_budget import assess_content
 from app.models.practice import PracticeSession
 from app.repositories.practice_repository import InMemoryPracticeRepository
 
@@ -151,7 +152,7 @@ class PracticeService:
             ))
             valid_references = [item for item in reference_documents if item is not None]
             instructions = (
-                f"예상 질문을 {request.question_count_per_persona}개 생성하세요. "
+                f"예상 질문을 최대 {request.question_count_per_persona}개 생성하세요. 근거가 부족하면 줄이세요. "
                 "발표 자료는 검토 대상이고 질문자 참고자료는 평가 관점의 근거입니다. "
                 "두 종류를 혼동하지 말고 질문자가 실제로 물을 법한 질문을 작성하세요."
             )
@@ -259,7 +260,13 @@ class PracticeService:
                 raise PracticeServiceError("선택한 발표 자료에 질문 생성에 사용할 텍스트가 없습니다.")
             questions: list[ExpectedQuestion] = []
             warnings = []
-            count = request.question_count_per_persona
+            assessment = assess_content(
+                section.text.split("\n", 1)[-1] for section in evidence.values()
+            )
+            requested_count = request.question_count_per_persona
+            count = min(requested_count, assessment.output_limit)
+            if count < requested_count:
+                warnings.append(f"중복을 제외한 발표 근거의 내용량에 따라 질문 상한을 {requested_count}개에서 {count}개로 조정했습니다.")
             def accept(text, ids, focus, origin):
                 question = _usable_question(text)
                 if not question or len(question) > 500 or not ids or any(key not in evidence for key in ids):
@@ -284,12 +291,12 @@ class PracticeService:
 
             # One bounded retry for malformed/duplicate candidates. Each persona
             # sees accepted questions from earlier personas as exclusions.
-            for attempt in range(2):
+            for attempt in range(2 if count else 0):
                 try:
                     generated = await self.generator.generate(persona, synthetic, instructions,
                         question_count=count - len(questions), excluded_questions=accepted_across_personas[-40:])
                 except ReviewGeneratorError:
-                    warnings.append("모델 응답을 받지 못해 근거 기반 보충 질문을 사용했습니다.")
+                    warnings.append("모델 응답을 받지 못했습니다. 잠시 후 다시 생성해 주세요.")
                     break
                 for candidate in generated.get("questions", []):
                     if isinstance(candidate, dict):
@@ -301,24 +308,8 @@ class PracticeService:
                         break
                 if len(questions) == count:
                     break
-            model_count = len(questions)
-            angles = ["측정 기준과 재현 절차는 무엇입니까?", "실제 도입의 비용과 책임은 어떻게 배분합니까?",
-                      "기존 대안과 비교한 장점은 무엇입니까?", "실패 조건과 대응 방안은 무엇입니까?",
-                      "적용 대상의 한계는 어디까지입니까?", "추가 검증에 필요한 자료는 무엇입니까?",
-                      "성과 평가 시점과 지표를 어떻게 정합니까?", "확장 단계의 병목을 어떻게 해결합니까?",
-                      "사용자에게 미치는 부작용은 어떻게 확인합니까?", "반대 근거가 나오면 결론을 어떻게 수정합니까?"]
-            for n, angle in enumerate(angles):
-                if len(questions) == count:
-                    break
-                key = list(evidence)[n % len(evidence)]
-                section = evidence[key]
-                excerpt = " ".join(section.text.split("\n", 1)[-1].split())[:40]
-                focus = (persona.description or persona.role)[:80]
-                accept(f"{focus} 관점에서 자료의 「{excerpt}」에 대한 {angle}", [key], focus, "template")
-            if len(questions) > model_count:
-                warnings.append("일부 질문은 모델 생성 대신 발표 근거로 구성한 보충 질문입니다.")
-            if len(questions) < count:
-                warnings.append("근거 또는 질문 다양성이 부족해 요청 개수보다 적게 제공했습니다.")
+            if len(questions) < requested_count:
+                warnings.append("근거가 확인되고 중복되지 않는 질문만 제공했습니다. 구체적인 주장·검증 결과·사례를 추가하면 질문 범위를 넓힐 수 있습니다.")
             total = sum(len([x for x in d.sections if x.text.strip()]) for d in all_documents)
             analyzed = len(synthetic.sections)
             original_chars = sum(len(s.text) for d in all_documents for s in d.sections)
@@ -326,8 +317,9 @@ class PracticeService:
             return PersonaQuestionResult(
                 persona_id=persona.agent_id, persona_name=persona.name, persona_role=persona.role,
                 avatar_data_url=_avatar_data_url(persona.name, persona.role, persona.gender, persona.age),
-                questions=questions, requested_count=count, generated_count=len(questions),
-                status="partial" if len(questions) < count else ("fallback" if model_count < count else "complete"),
+                questions=questions, requested_count=requested_count, generated_count=len(questions),
+                assessment=assessment,
+                status="partial" if len(questions) < requested_count else "complete",
                 warnings=warnings,
                 coverage=Coverage(total_chunks=total, analyzed_chunks=analyzed,
                     truncated=analyzed < total or selected_chars < original_chars,

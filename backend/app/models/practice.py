@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.models.review import ReviewSource
 from app.models.coverage import Coverage
+from app.models.content_assessment import ContentAssessment
 
 
 class ExpectedQuestionRequest(BaseModel):
@@ -24,6 +25,7 @@ class ExpectedQuestion(BaseModel):
 
 
 class PersonaQuestionResult(BaseModel):
+    assessment: ContentAssessment | None = None
     persona_id: UUID
     persona_name: str
     persona_role: str
