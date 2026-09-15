@@ -4,9 +4,14 @@ import os
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import (
+    get_chat_history_turns,
+    get_chunk_cache_size,
     get_jwt_access_token_expire_minutes,
     get_jwt_secret_key,
+    get_login_rate_limit_attempts,
+    get_login_rate_limit_window_seconds,
     get_object_storage_mode,
+    get_practice_max_concurrent_personas,
     get_repository_mode,
 )
 from app.integrations.llm.client import HttpLlmClient
@@ -14,25 +19,27 @@ from app.integrations.llm.generators import (
     HttpChatGenerator,
     HttpPersonaGenerator,
     HttpReviewGenerator,
-)
-from app.integrations.llm.legacy_generators import (
-    LegacyQuestionReviewGenerator,
+    HttpSummaryGenerator,
     LocalPersonaGenerator,
-    UnsupportedLegacyChatGenerator,
 )
 from app.repositories.agent_repository import AgentRepository, InMemoryAgentRepository, PostgresAgentRepository
 from app.repositories.document_repository import DocumentRepository, InMemoryDocumentRepository, PostgresDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository, PostgresReviewRepository, ReviewRepository
 from app.repositories.chat_repository import ChatRepository, InMemoryChatRepository, PostgresChatRepository
+from app.repositories.summary_repository import InMemorySummaryRepository, PostgresSummaryRepository, SummaryRepository
 from app.repositories.user_repository import (
     InMemoryUserRepository,
     PostgresUserRepository,
     UserRepository,
 )
 from app.services.auth_service import AuthService
+from app.services.login_rate_limiter import LoginRateLimiter
 from app.services.chat_service import ChatService
+from app.services.rag_service import DocumentContextSelector
 from app.services.persona_service import PersonaService
 from app.services.review_service import ReviewService
+from app.services.practice_service import PracticeService
+from app.services.summary_service import SummaryService
 from app.models.user import UserResponse
 from app.services.auth_service import InvalidCredentialsError
 from app.storage.minio_storage import MinioStorage
@@ -45,16 +52,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 @lru_cache
 def get_llm_client() -> HttpLlmClient:
-    if get_llm_contract_mode() == "legacy_questions":
-        return HttpLlmClient(api_prefix="")
     return HttpLlmClient()
-
-
-def get_llm_contract_mode() -> str:
-    mode = os.getenv("LLM_CONTRACT_MODE", "legacy_questions").strip().lower()
-    if mode not in {"legacy_questions", "v1"}:
-        raise RuntimeError("LLM_CONTRACT_MODE는 legacy_questions 또는 v1이어야 합니다.")
-    return mode
 
 
 @lru_cache
@@ -78,6 +76,11 @@ def get_chat_repository() -> ChatRepository:
 
 
 @lru_cache
+def get_summary_repository() -> SummaryRepository:
+    return PostgresSummaryRepository() if get_repository_mode() == "postgres" else InMemorySummaryRepository()
+
+
+@lru_cache
 def get_user_repository() -> UserRepository:
     return (
         PostgresUserRepository()
@@ -92,6 +95,14 @@ def get_auth_service() -> AuthService:
         repository=get_user_repository(),
         secret_key=get_jwt_secret_key(),
         access_token_expire_minutes=get_jwt_access_token_expire_minutes(),
+    )
+
+
+@lru_cache
+def get_login_rate_limiter() -> LoginRateLimiter:
+    return LoginRateLimiter(
+        max_attempts=get_login_rate_limit_attempts(),
+        window_seconds=get_login_rate_limit_window_seconds(),
     )
 
 
@@ -128,15 +139,12 @@ def get_object_storage() -> ObjectStorage:
 
 @lru_cache
 def get_persona_service() -> PersonaService:
-    if get_llm_contract_mode() == "legacy_questions":
-        generator = LocalPersonaGenerator()
-    else:
-        generator = (
-            LocalPersonaGenerator()
-            if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
-            in {"1", "true", "yes"}
-            else HttpPersonaGenerator(get_llm_client())
-        )
+    generator = (
+        LocalPersonaGenerator()
+        if os.getenv("PERSONA_FALLBACK_LOCAL", "false").strip().lower()
+        in {"1", "true", "yes"}
+        else HttpPersonaGenerator(get_llm_client())
+    )
     return PersonaService(
         generator=generator,
         repository=get_agent_repository(),
@@ -146,11 +154,7 @@ def get_persona_service() -> PersonaService:
 
 @lru_cache
 def get_review_service() -> ReviewService:
-    generator = (
-        LegacyQuestionReviewGenerator(get_llm_client())
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpReviewGenerator(get_llm_client())
-    )
+    generator = HttpReviewGenerator(get_llm_client())
     return ReviewService(
         generator=generator,
         repository=get_review_repository(),
@@ -161,14 +165,34 @@ def get_review_service() -> ReviewService:
 
 @lru_cache
 def get_chat_service() -> ChatService:
-    generator = (
-        UnsupportedLegacyChatGenerator()
-        if get_llm_contract_mode() == "legacy_questions"
-        else HttpChatGenerator(get_llm_client())
-    )
+    generator = HttpChatGenerator(get_llm_client())
     return ChatService(
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         chat_repository=get_chat_repository(),
+        context_selector=DocumentContextSelector(cache_size=get_chunk_cache_size()),
+        history_turns=get_chat_history_turns(),
+    )
+
+
+@lru_cache
+def get_summary_service() -> SummaryService:
+    generator = HttpSummaryGenerator(get_llm_client())
+    return SummaryService(
+        generator=generator,
+        repository=get_summary_repository(),
+        agent_repository=get_agent_repository(),
+        document_repository=get_document_repository(),
+    )
+
+
+@lru_cache
+def get_practice_service() -> PracticeService:
+    generator = HttpReviewGenerator(get_llm_client(), endpoint="/practice/questions")
+    return PracticeService(
+        generator=generator,
+        agent_repository=get_agent_repository(),
+        document_repository=get_document_repository(),
+        max_concurrent_personas=get_practice_max_concurrent_personas(),
     )

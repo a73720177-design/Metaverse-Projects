@@ -16,18 +16,14 @@ from app.dependencies import (
 )
 from app.main import app
 from app.models.chat import ChatRequest
-from app.models.persona import PersonaCreateRequest
+from app.models.persona import PersonaCreateRequest, PersonaUpdateRequest
 from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
 from app.repositories.review_repository import InMemoryReviewRepository
 from app.repositories.chat_repository import InMemoryChatRepository
 from app.integrations.llm.client import HttpLlmClient
-from app.integrations.llm.generators import HttpPersonaGenerator
+from app.integrations.llm.generators import HttpPersonaGenerator, LocalPersonaGenerator
 from app.integrations.llm.contracts import ReviewGeneratorError
-from app.integrations.llm.legacy_generators import (
-    LegacyQuestionReviewGenerator,
-    LocalPersonaGenerator,
-)
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.review import ReviewCreateRequest
@@ -127,13 +123,15 @@ def test_rejects_unsupported_document() -> None:
     assert response.json()["error"]["code"] == "http_415"
 
 
-def test_rejects_empty_supported_document() -> None:
+def test_accepts_empty_pdf_for_later_processing() -> None:
     response = client.post(
         "/documents/parse",
         files={"file": ("sample.pdf", b"", "application/pdf")},
     )
-    assert response.status_code == 422
-    assert response.json()["error"]["message"] == "빈 파일은 업로드할 수 없습니다."
+    assert response.status_code == 201
+    assert response.json()["document_type"] == "pdf"
+    assert response.json()["sections"] == []
+    assert response.json()["full_text"] == ""
 
 
 def test_rejects_document_over_configured_limit(
@@ -231,12 +229,12 @@ class FakeReviewGenerator:
 
 
 class FakeChatGenerator:
-    async def generate(self, persona, request: ChatRequest, document) -> dict:
+    async def generate(self, persona, request: ChatRequest, document, history) -> dict:
         return {"answer": f"Evaluator response: {request.message}", "sources": []}
 
 
 class FakeStreamingChatGenerator(FakeChatGenerator):
-    async def stream(self, persona, request: ChatRequest, document):
+    async def stream(self, persona, request: ChatRequest, document, history):
         yield "Evaluator "
         yield f"response: {request.message}"
 
@@ -362,8 +360,88 @@ def test_agent_persists_owned_document_contract() -> None:
         assert client.get("/agents").json()[0]["document_ids"] == [
             str(document.document_id)
         ]
+        detached = client.put(
+            f"/agents/{created.json()['agent_id']}/documents",
+            json={"document_ids": []},
+        )
+        assert detached.status_code == 200
+        assert detached.json()["document_ids"] == []
+        reattached = client.put(
+            f"/agents/{created.json()['agent_id']}/documents",
+            json={"document_ids": [str(document.document_id)]},
+        )
+        assert reattached.status_code == 200
+        assert reattached.json()["document_ids"] == [str(document.document_id)]
+        updated = client.put(
+            f"/agents/{created.json()['agent_id']}",
+            json={
+                "name": "Updated evaluator",
+                "description": "Updated style",
+                "gender": "female",
+                "age": 51,
+                "document_ids": [str(document.document_id)],
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "Updated evaluator"
+        assert updated.json()["age"] == 51
+        assert updated.json()["document_ids"] == [str(document.document_id)]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> None:
+    class RecordingGenerator:
+        def __init__(self) -> None:
+            self.requests: list[PersonaCreateRequest] = []
+
+        async def generate(self, request: PersonaCreateRequest) -> dict:
+            self.requests.append(request)
+            return {
+                "role": f"generated-{len(self.requests)}",
+                "expertise": [],
+                "evaluation_style": [],
+            }
+
+    import asyncio
+
+    generator = RecordingGenerator()
+    agent_repository = InMemoryAgentRepository()
+    document_repository = InMemoryDocumentRepository()
+    document = DocumentParseResponse(
+        filename="criteria.pdf",
+        document_type="pdf",
+        saved_path=Path("criteria.pdf"),
+        sections=[{"index": 1, "text": "근거와 비용을 검증한다."}],
+        full_text="근거와 비용을 검증한다.",
+    )
+    asyncio.run(document_repository.save(document, TEST_USER.user_id))
+    service = PersonaService(generator, agent_repository, document_repository)
+
+    created = asyncio.run(service.create(
+        PersonaCreateRequest(
+            name="투자자",
+            description="사업성을 평가한다.",
+            document_ids=[document.document_id],
+        ),
+        TEST_USER.user_id,
+    ))
+    assert "근거와 비용을 검증한다." in generator.requests[0].description
+    assert created.description == "사업성을 평가한다."
+    assert created.role == "generated-1"
+
+    updated = asyncio.run(service.update(
+        created.agent_id,
+        PersonaUpdateRequest(
+            name="투자자",
+            description="시장성을 우선 평가한다.",
+            document_ids=[document.document_id],
+        ),
+        TEST_USER.user_id,
+    ))
+    assert "근거와 비용을 검증한다." in generator.requests[1].description
+    assert updated.description == "시장성을 우선 평가한다."
+    assert updated.role == "generated-2"
 
 
 def test_agent_rejects_document_owned_by_another_user() -> None:
@@ -428,6 +506,8 @@ def test_chat_stream_contract_persists_completed_answer() -> None:
         stored = asyncio.run(chat_repository.list(TEST_USER.user_id, deleted=False))
         assert len(stored) == 1
         assert stored[0].answer == "Evaluator response: Hello"
+        assert stored[0].timing.total_ms >= 0
+        assert stored[0].timing.output_characters == len(stored[0].answer)
     finally:
         app.dependency_overrides.clear()
 
@@ -510,7 +590,7 @@ def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
         app.dependency_overrides.clear()
 
 
-def test_legacy_persona_uses_backend_input_without_llm_call() -> None:
+def test_local_persona_fallback_uses_backend_input_without_llm_call() -> None:
     import asyncio
 
     result = asyncio.run(
@@ -541,75 +621,9 @@ def test_database_failure_uses_safe_common_error_response() -> None:
             "error": {
                 "code": "database_unavailable",
                 "message": "데이터베이스를 일시적으로 사용할 수 없습니다.",
+                "request_id": response.headers["x-request-id"],
             }
         }
         assert "sensitive" not in response.text
     finally:
         app.dependency_overrides.clear()
-
-
-def test_legacy_review_adapts_current_llm_team_contract() -> None:
-    requested_paths: list[str] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        requested_paths.append(request.url.path)
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(
-                200,
-                json={"concepts": [{"name": "AI", "definition": "인공지능"}]},
-            )
-        if request.url.path == "/generate-questions":
-            return httpx.Response(
-                200,
-                json={"questions": [{"question": "근거는 무엇인가요?"}]},
-            )
-        return httpx.Response(404)
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    result = asyncio.run(
-        generator.generate(
-            PersonaProfile(name="Evaluator", description="근거 중심"),
-            DocumentParseResponse(
-                filename="slides.pptx",
-                document_type="pptx",
-                saved_path=Path("uploads/slides.pptx"),
-                sections=[],
-                full_text="발표 내용",
-            ),
-            None,
-        )
-    )
-
-    assert requested_paths == ["/extract-concepts", "/generate-questions"]
-    assert result["questions"] == ["근거는 무엇인가요?"]
-
-
-def test_legacy_review_rejects_invalid_concept_contract() -> None:
-    async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/extract-concepts":
-            return httpx.Response(200, json={"concepts": [{"name": "AI"}]})
-        raise AssertionError("질문 API는 호출되면 안 됩니다.")
-
-    import asyncio
-
-    generator = LegacyQuestionReviewGenerator(
-        HttpLlmClient(httpx.MockTransport(handler), api_prefix="")
-    )
-    with pytest.raises(ReviewGeneratorError, match="definition"):
-        asyncio.run(
-            generator.generate(
-                PersonaProfile(name="Evaluator", description="Evidence"),
-                DocumentParseResponse(
-                    filename="slides.pdf",
-                    document_type="pdf",
-                    saved_path=Path("uploads/slides.pdf"),
-                    sections=[],
-                    full_text="Presentation",
-                ),
-                None,
-            )
-        )

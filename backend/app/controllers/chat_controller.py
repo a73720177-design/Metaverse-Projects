@@ -1,16 +1,57 @@
 from uuid import UUID
 import json
+import asyncio
+import logging
+from contextlib import suppress
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.dependencies import get_chat_service, get_current_user
 from app.models.chat import ChatHistoryItem, ChatRequest
 from app.models.error import ErrorResponse
 from app.models.user import UserResponse
 from app.services.chat_service import ChatResourceNotFoundError, ChatService, ChatServiceError
+from app.error_handlers import database_error_code
 
 router = APIRouter(tags=["대화"])
+
+
+async def _encode_sse(stream, heartbeat_seconds: float = 10, request_id: str = ""):
+    """Keep idle generation connections alive; cancel upstream on disconnect."""
+    pending = None
+    try:
+        yield ": connected\n\n"
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(stream))
+            ready, _ = await asyncio.wait({pending}, timeout=heartbeat_seconds)
+            if not ready:
+                yield ": keep-alive\n\n"
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                break
+            pending = None
+            data = json.dumps(item["data"], ensure_ascii=False)
+            yield f"event: {item['event']}\ndata: {data}\n\n"
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Chat stream failed request_id=%s", request_id)
+        data = json.dumps(
+            {"code": database_error_code(exc) if isinstance(exc, SQLAlchemyError) else "stream_error",
+             "message": "답변 생성 또는 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+             "request_id": request_id},
+            ensure_ascii=False,
+        )
+        yield f"event: error\ndata: {data}\n\n"
+    finally:
+        if pending is not None:
+            pending.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await pending
+        await stream.aclose()
 
 
 @router.post("/agents/{agent_id}/chat", response_model=ChatHistoryItem,
@@ -38,6 +79,7 @@ async def chat(
 async def stream_chat(
     agent_id: UUID,
     request: ChatRequest,
+    http_request: Request,
     service: ChatService = Depends(get_chat_service),
     current_user: UserResponse = Depends(get_current_user),
 ) -> StreamingResponse:
@@ -48,20 +90,8 @@ async def stream_chat(
     except ChatServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    async def sse():
-        try:
-            async for item in stream:
-                data = json.dumps(item["data"], ensure_ascii=False)
-                yield f"event: {item['event']}\ndata: {data}\n\n"
-        except ChatServiceError:
-            data = json.dumps(
-                {"message": "채팅 스트리밍 중 오류가 발생했습니다."},
-                ensure_ascii=False,
-            )
-            yield f"event: error\ndata: {data}\n\n"
-
     return StreamingResponse(
-        sse(),
+        _encode_sse(stream, request_id=getattr(http_request.state, "request_id", "")),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

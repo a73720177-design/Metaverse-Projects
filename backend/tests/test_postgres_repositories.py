@@ -59,3 +59,29 @@ async def test_postgres_repositories_save_and_get() -> None:
     assert await agent_repository.get(agent.agent_id, user.user_id) == agent
     assert await document_repository.get(document.document_id, user.user_id) == document
     assert await review_repository.get(review.review_id, user.user_id) == review
+
+    deleted_agent = await agent_repository.set_deleted(
+        agent.agent_id,
+        user.user_id,
+        deleted=True,
+    )
+    assert deleted_agent is not None
+    assert deleted_agent.deleted_at is not None
+    assert await agent_repository.get(agent.agent_id, user.user_id) is None
+    assert all(
+        item.agent_id != agent.agent_id
+        for item in await agent_repository.list(user.user_id, deleted=False)
+    )
+    assert any(
+        item.agent_id == agent.agent_id
+        for item in await agent_repository.list(user.user_id, deleted=True)
+    )
+    assert await review_repository.get(review.review_id, user.user_id) == review
+
+    assert await agent_repository.permanently_delete(agent.agent_id, user.user_id) is True
+    assert await agent_repository.get(agent.agent_id, user.user_id) is None
+    assert all(
+        item.agent_id != agent.agent_id
+        for item in await agent_repository.list(user.user_id, deleted=True)
+    )
+    assert await review_repository.get(review.review_id, user.user_id) is None

@@ -6,7 +6,9 @@ from app.config import (
     get_jwt_secret_key,
     get_max_upload_size_bytes,
     get_object_storage_mode,
+    get_rag_max_context_chars,
     get_repository_mode,
+    validate_runtime_contract,
 )
 from app.controllers.document_controller import build_document_object_key
 from app.dependencies import get_user_repository
@@ -41,9 +43,41 @@ def test_invalid_repository_mode_fails_early(monkeypatch: pytest.MonkeyPatch) ->
         get_repository_mode()
 
 
+def test_vector_rag_requires_postgres_and_migration_dimension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_MODE", "vector")
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+    with pytest.raises(RuntimeError, match="REPOSITORY_MODE=postgres"):
+        validate_runtime_contract()
+
+    monkeypatch.setenv("REPOSITORY_MODE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://qwen:pw@localhost/qwendb")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "768")
+    with pytest.raises(RuntimeError, match="EMBEDDING_DIMENSION=1024"):
+        validate_runtime_contract()
+
+
+def test_postgres_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "postgres")
+    monkeypatch.setenv("RAG_MODE", "lexical")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        validate_runtime_contract()
+
+
 def test_upload_limit_is_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MAX_UPLOAD_SIZE_MB", "10")
     assert get_max_upload_size_bytes() == 10 * 1024 * 1024
+
+
+def test_rag_context_limit_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "2048")
+    assert get_rag_max_context_chars() == 2048
+
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "0")
+    with pytest.raises(RuntimeError, match="RAG_MAX_CONTEXT_CHARS"):
+        get_rag_max_context_chars()
 
 
 def test_document_storage_schema_is_split() -> None:

@@ -1,0 +1,195 @@
+"""
+Review 생성 map-reduce 파이프라인.
+
+문서가 짧으면(REVIEW_SINGLE_PASS_CHARS 이하) app.main이 기존처럼 단일
+패스로 처리한다. 문서가 길면 이 모듈이 청크로 나눠 그룹별로 claim만
+추출(map)한 뒤, 모은 claims를 한 번에 정리(reduce)해서 최종 리뷰를
+만든다. Ollama가 로컬 단일 인스턴스이므로 map 호출은 순차 실행한다
+(병렬화하면 CPU 추론이 오히려 느려지고 OOM 위험이 있다).
+
+LLM 호출 자체는 app.main._generate를 그대로 넘겨받아 쓴다(generate
+파라미터). 그래야 기존 테스트가 monkeypatch하는 app.main.call_llm 경로가
+이 모듈을 거칠 때도 그대로 유지된다.
+"""
+
+import json
+import os
+from dataclasses import dataclass
+from typing import Protocol
+
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
+
+from app.prompts import REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT
+from app.schemas_v1 import (
+    ClaimAssessment,
+    DocumentIn,
+    PersonaProfileIn,
+    ReviewCoverage,
+    ReviewGenerationResponse,
+)
+
+_CHUNK_OVERLAP = 200
+
+
+class GenerateFn(Protocol):
+    def __call__(
+        self, prompt: str, response_model: type[BaseModel],
+        max_tokens: int | None = None, model: str | None = None,
+    ) -> BaseModel: ...
+
+
+class _MapResult(BaseModel):
+    claims: list[ClaimAssessment] = Field(default_factory=list, max_length=20)
+
+
+@dataclass(frozen=True)
+class ReviewChunk:
+    section_index: int | None
+    text: str
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.") from exc
+    if value < 1:
+        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.")
+    return value
+
+
+def should_use_map_reduce(full_text: str) -> bool:
+    threshold = _positive_env_int("REVIEW_SINGLE_PASS_CHARS", 12000)
+    return len(full_text) > threshold
+
+
+def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [text]
+    # Small configured chunks must still advance without producing thousands
+    # of almost identical windows when overlap consumes the complete chunk.
+    overlap = min(max(0, overlap), chunk_size // 2)
+    step = max(1, chunk_size - overlap)
+    pieces: list[str] = []
+    start = 0
+    while start < len(text):
+        pieces.append(text[start : start + chunk_size])
+        if start + chunk_size >= len(text):
+            break
+        start += step
+    return pieces
+
+
+def _build_chunks(document: DocumentIn) -> list[ReviewChunk]:
+    chunk_size = _positive_env_int("REVIEW_CHUNK_CHARS", 3000)
+    chunks: list[ReviewChunk] = []
+    if document.sections:
+        for section in document.sections:
+            for piece in _split_text(section.text, chunk_size, _CHUNK_OVERLAP):
+                chunks.append(ReviewChunk(section_index=section.index, text=piece))
+    else:
+        for piece in _split_text(document.full_text, chunk_size, _CHUNK_OVERLAP):
+            chunks.append(ReviewChunk(section_index=None, text=piece))
+    return chunks
+
+
+def _greedy_pack(chunks: list[ReviewChunk], map_chars: int) -> list[list[ReviewChunk]]:
+    groups: list[list[ReviewChunk]] = []
+    current: list[ReviewChunk] = []
+    current_len = 0
+    for chunk in chunks:
+        piece_len = len(chunk.text)
+        if current and current_len + piece_len > map_chars:
+            groups.append(current)
+            current = []
+            current_len = 0
+        current.append(chunk)
+        current_len += piece_len
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _evenly_sample(items: list[list[ReviewChunk]], k: int) -> list[list[ReviewChunk]]:
+    """Pick k items spread across the list so start/middle/end all survive."""
+    n = len(items)
+    if k >= n:
+        return items
+    if k <= 1:
+        return [items[n // 2]]
+    used: set[int] = set()
+    sampled = []
+    for i in range(k):
+        idx = round(i * (n - 1) / (k - 1))
+        while idx in used and idx < n - 1:
+            idx += 1
+        used.add(idx)
+        sampled.append(items[idx])
+    return sampled
+
+
+def _pack_chunks(
+    chunks: list[ReviewChunk],
+) -> tuple[list[list[ReviewChunk]], bool]:
+    map_chars = _positive_env_int("REVIEW_MAP_CHARS", 12000)
+    max_calls = _positive_env_int("REVIEW_MAX_MAP_CALLS", 6)
+    groups = _greedy_pack(chunks, map_chars)
+    if len(groups) <= max_calls:
+        return groups, False
+    return _evenly_sample(groups, max_calls), True
+
+
+def _render_group(group: list[ReviewChunk]) -> str:
+    parts = []
+    for chunk in group:
+        label = f"[구간 {chunk.section_index}]" if chunk.section_index is not None else "[구간]"
+        parts.append(f"{label}\n{chunk.text}")
+    return "\n\n".join(parts)
+
+
+def _persona_json(persona: PersonaProfileIn) -> str:
+    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
+
+
+def generate_review_map_reduce(
+    *,
+    persona: PersonaProfileIn,
+    document: DocumentIn,
+    instructions: str | None,
+    generate: GenerateFn,
+    model: str | None,
+) -> ReviewGenerationResponse:
+    chunks = _build_chunks(document)
+    groups, truncated = _pack_chunks(chunks)
+
+    persona_json = _persona_json(persona)
+    instructions_text = instructions or "(없음)"
+
+    all_claims: list[dict] = []
+    for group in groups:
+        prompt = REVIEW_MAP_PROMPT.format(
+            persona_json=persona_json,
+            filename=document.filename,
+            instructions=instructions_text,
+            chunk_text=_render_group(group),
+        )
+        result = generate(prompt, _MapResult, max_tokens=768, model=model)
+        all_claims.extend(claim.model_dump(mode="json") for claim in result.claims)
+
+    reduce_prompt = REVIEW_REDUCE_PROMPT.format(
+        persona_json=persona_json,
+        filename=document.filename,
+        instructions=instructions_text,
+        claims_json=json.dumps(all_claims, ensure_ascii=False),
+    )
+    response = generate(reduce_prompt, ReviewGenerationResponse, max_tokens=1024, model=model)
+
+    coverage = ReviewCoverage(
+        total_chunks=len(chunks),
+        analyzed_chunks=sum(len(group) for group in groups),
+        truncated=truncated,
+    )
+    return response.model_copy(update={"coverage": coverage})
