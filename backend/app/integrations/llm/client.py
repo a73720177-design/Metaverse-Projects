@@ -1,9 +1,16 @@
 import os
 import json
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+
+from app.integrations.llm.response_sanitizer import (
+    clean_model_text,
+    extract_json_object,
+    sanitize_llm_payload,
+)
 
 
 class LlmServiceConnectionError(RuntimeError):
@@ -41,8 +48,11 @@ class HttpLlmClient:
     async def stream_sse(
         self, path: str, payload: dict[str, Any]
     ) -> AsyncIterator[str]:
+        buffered_tokens: list[str] = []
+        buffered_size = 0
+        completed = False
         try:
-            async with httpx.AsyncClient(
+            async with asyncio.timeout(self.timeout), httpx.AsyncClient(
                 timeout=self.timeout, transport=self.transport
             ) as client:
                 async with client.stream(
@@ -56,23 +66,45 @@ class HttpLlmClient:
                             f"LLM 서비스가 {path} 요청에 HTTP {response.status_code}를 반환했습니다."
                         )
                     event = "message"
+                    data_lines: list[str] = []
                     async for line in response.aiter_lines():
                         if line.startswith("event:"):
                             event = line.removeprefix("event:").strip()
                         elif line.startswith("data:"):
-                            data = json.loads(line.removeprefix("data:").strip())
-                            if event == "token" and isinstance(data.get("token"), str):
-                                yield data["token"]
-                            elif event == "error":
-                                raise LlmServiceResponseError(
-                                    "LLM 서비스 스트리밍 중 오류가 발생했습니다."
-                                )
+                            data_lines.append(line.removeprefix("data:").removeprefix(" "))
+                        elif not line:
+                            if data_lines:
+                                data = json.loads("\n".join(data_lines))
+                                if not isinstance(data, dict):
+                                    raise LlmServiceResponseError("LLM 스트림 형식이 올바르지 않습니다.")
+                                if event == "token":
+                                    token = data.get("token")
+                                    if not isinstance(token, str):
+                                        raise LlmServiceResponseError("LLM 스트림 토큰 형식이 올바르지 않습니다.")
+                                    buffered_size += len(token)
+                                    if buffered_size > 200_000:
+                                        raise LlmServiceResponseError("LLM 스트림 출력 한도를 초과했습니다.")
+                                    buffered_tokens.append(token)
+                                elif event == "error":
+                                    raise LlmServiceResponseError("LLM 서비스 스트리밍 중 오류가 발생했습니다.")
+                                elif event == "done":
+                                    completed = True
+                                    break
+                            data_lines.clear()
                             event = "message"
+            if not completed:
+                raise LlmServiceResponseError("LLM 스트림이 완료 전에 끊겼습니다. 다시 시도해 주세요.")
+            cleaned = clean_model_text("".join(buffered_tokens))
+            if not cleaned:
+                raise LlmServiceResponseError("LLM이 유효한 최종 답변을 반환하지 않았습니다.")
+            yield cleaned
         except LlmServiceResponseError:
             raise
-        except (httpx.RequestError, ValueError) as exc:
+        except ValueError as exc:
+            raise LlmServiceResponseError("LLM 스트림 형식이 올바르지 않습니다.") from exc
+        except (httpx.RequestError, TimeoutError) as exc:
             raise LlmServiceConnectionError(
-                f"LLM 서비스를 사용할 수 없습니다: {self.base_url}"
+                "LLM 서비스 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요."
             ) from exc
 
     async def _request(
@@ -80,7 +112,8 @@ class HttpLlmClient:
     ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
-                timeout=self.timeout, transport=self.transport
+                timeout=min(self.timeout, 5) if method == "GET" else self.timeout,
+                transport=self.transport
             ) as client:
                 response = await client.request(
                     method,
@@ -90,7 +123,7 @@ class HttpLlmClient:
                 )
         except httpx.RequestError as exc:
             raise LlmServiceConnectionError(
-                f"LLM 서비스를 사용할 수 없습니다: {self.base_url}"
+                "LLM 서비스 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요."
             ) from exc
 
         if response.status_code >= 400:
@@ -99,8 +132,18 @@ class HttpLlmClient:
             )
         try:
             body = response.json()
-        except ValueError as exc:
-            raise LlmServiceResponseError("LLM 서비스가 잘못된 JSON을 반환했습니다.") from exc
+        except ValueError:
+            try:
+                body = extract_json_object(response.text)
+            except json.JSONDecodeError as exc:
+                raise LlmServiceResponseError(
+                    "LLM 서비스가 잘못된 JSON을 반환했습니다."
+                ) from exc
         if not isinstance(body, dict):
             raise LlmServiceResponseError("LLM 응답은 JSON 객체여야 합니다.")
-        return body
+        cleaned = sanitize_llm_payload(body)
+        if "answer" in cleaned and (
+            not isinstance(cleaned["answer"], str) or not cleaned["answer"].strip()
+        ):
+            raise LlmServiceResponseError("LLM이 유효한 최종 답변을 반환하지 않았습니다.")
+        return cleaned

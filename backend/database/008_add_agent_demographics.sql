@@ -1,0 +1,9 @@
+ALTER TABLE agents
+    ADD COLUMN IF NOT EXISTS gender TEXT NOT NULL DEFAULT 'unspecified',
+    ADD COLUMN IF NOT EXISTS age INTEGER;
+
+ALTER TABLE agents
+    DROP CONSTRAINT IF EXISTS ck_agents_age;
+
+ALTER TABLE agents
+    ADD CONSTRAINT ck_agents_age CHECK (age IS NULL OR age BETWEEN 1 AND 120);

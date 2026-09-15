@@ -8,14 +8,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import get_max_upload_size_bytes
 from app.dependencies import (
     get_agent_repository, get_current_user, get_document_repository, get_object_storage,
+    get_summary_service,
 )
 from app.models.document import (
     DocumentDetailResponse, DocumentListItem, DocumentParseResponse,
 )
+from app.models.summary import SummaryCreateRequest, SummaryResult
 from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.agent_repository import AgentRepository
 from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
+from app.services.summary_service import (
+    SummaryResourceNotFoundError, SummaryService, SummaryServiceError,
+    SummarySourceUnavailableError,
+)
 from app.storage.object_storage import ObjectStorage, ObjectStorageError
 
 router = APIRouter(prefix="/documents", tags=["문서"])
@@ -88,9 +94,10 @@ async def upload_and_parse(
     storage: ObjectStorage = Depends(get_object_storage),
     current_user: UserResponse = Depends(get_current_user),
 ) -> DocumentDetailResponse:
-    filename = file.filename or ""
-    if not filename or Path(filename).name != filename:
-        raise HTTPException(status_code=422, detail="올바른 파일 이름이 필요합니다.")
+    raw_filename = (file.filename or "").replace("\\", "/")
+    filename = Path(raw_filename).name
+    if not filename:
+        raise HTTPException(status_code=400, detail="올바른 파일 이름이 필요합니다.")
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
@@ -105,8 +112,8 @@ async def upload_and_parse(
     try:
         max_size = get_max_upload_size_bytes()
         contents = await file.read(max_size + 1)
-        if not contents:
-            raise HTTPException(status_code=422, detail="빈 파일은 업로드할 수 없습니다.")
+        if not contents and suffix not in {".pdf", ".pptx"}:
+            raise HTTPException(status_code=400, detail="빈 파일은 업로드할 수 없습니다.")
         if len(contents) > max_size:
             raise HTTPException(
                 status_code=413,
@@ -116,7 +123,7 @@ async def upload_and_parse(
         document = await asyncio.to_thread(
             parse_document,
             saved_path,
-            file.filename or saved_path.name,
+            filename,
         )
         object_key = build_document_object_key(document.document_id, suffix)
         await storage.upload(saved_path, object_key, file.content_type)
@@ -133,7 +140,7 @@ async def upload_and_parse(
             except Exception:
                 pass
         saved_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (SQLAlchemyError, ObjectStorageError):
         if uploaded and object_key is not None:
             try:
@@ -152,3 +159,50 @@ async def upload_and_parse(
     finally:
         saved_path.unlink(missing_ok=True)
         await file.close()
+
+
+@router.post(
+    "/{document_id}/summary",
+    response_model=SummaryResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="문서 요약 생성",
+    description=(
+        "문서 전체 요약과 핵심 주제를 생성합니다. 같은 (문서, 페르소나, 스타일) "
+        "조합의 요약이 이미 있으면 refresh=true를 주지 않는 한 캐시된 결과를 반환합니다."
+    ),
+)
+async def create_summary(
+    document_id: UUID,
+    request: SummaryCreateRequest,
+    refresh: bool = False,
+    service: SummaryService = Depends(get_summary_service),
+    current_user: UserResponse = Depends(get_current_user),
+) -> SummaryResult:
+    try:
+        return await service.create(document_id, request, current_user.user_id, refresh=refresh)
+    except SummaryResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SummarySourceUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SummaryServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{document_id}/summary",
+    response_model=SummaryResult,
+    summary="문서 요약 조회",
+    description="기본 스타일(brief)로 생성된 요약을 조회합니다. 없으면 404입니다.",
+)
+async def get_summary(
+    document_id: UUID,
+    service: SummaryService = Depends(get_summary_service),
+    current_user: UserResponse = Depends(get_current_user),
+) -> SummaryResult:
+    try:
+        summary = await service.get(document_id, current_user.user_id)
+    except SummaryResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if summary is None:
+        raise HTTPException(status_code=404, detail="요약을 찾을 수 없습니다.")
+    return summary

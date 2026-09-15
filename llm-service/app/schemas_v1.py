@@ -8,6 +8,7 @@ Backend의 backend/app/models/{persona,document,review,chat}.py와 필드가
 """
 
 from enum import StrEnum
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -55,7 +56,17 @@ class DocumentIn(BaseModel):
     filename: str
     document_type: str
     sections: list[DocumentSection] = Field(default_factory=list, max_length=1000)
-    full_text: str = Field(max_length=300_000)
+    # Long PDFs are sampled by the review/summary map-reduce pipelines before
+    # generation. Keep an HTTP safety cap while accepting the project's actual
+    # parsed corpus (currently up to about 1.7M characters).
+    full_text: str = Field(max_length=2_000_000)
+
+
+class QuestionStrategy(BaseModel):
+    criticalness: int = Field(default=3, ge=1, le=5)
+    difficulty: int = Field(default=3, ge=1, le=5)
+    evidence_required: bool = True
+    follow_up_depth: int = Field(default=1, ge=1, le=3)
 
 
 class PersonaProfileIn(BaseModel):
@@ -65,6 +76,7 @@ class PersonaProfileIn(BaseModel):
     role: str = "Evaluator"
     expertise: list[PersonaTrait] = Field(default_factory=list, max_length=10)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list, max_length=10)
+    question_strategy: QuestionStrategy = Field(default_factory=QuestionStrategy)
 
 
 class ClaimVerdict(StrEnum):
@@ -101,18 +113,77 @@ class ReviewGenerationRequest(BaseModel):
     instructions: str | None = Field(default=None, max_length=2000)
 
 
+class ReviewCoverage(BaseModel):
+    total_chunks: int = Field(ge=0)
+    analyzed_chunks: int = Field(ge=0)
+    truncated: bool = False
+
+
 class ReviewGenerationResponse(BaseModel):
     claims: list[ClaimAssessment] = Field(default_factory=list, max_length=20)
     feedback: ReviewFeedback
     questions: list[str] = Field(default_factory=list, max_length=10)
+    # map-reduce 경로에서만 채워진다. 기본값 None이라 Backend의
+    # ReviewResult.model_validate()나 단일 패스 응답은 영향받지 않는다.
+    coverage: ReviewCoverage | None = None
+
+
+class ExpectedQuestionGenerationResponse(BaseModel):
+    questions: list[Annotated[str, Field(min_length=12, max_length=500)]] = Field(
+        min_length=5, max_length=5
+    )
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2000)
 
 
 class ChatGenerationRequest(BaseModel):
     persona: PersonaProfileIn
     message: str = Field(min_length=1, max_length=5000)
     document: DocumentIn | None = None
+    max_output_tokens: int = Field(default=1024, ge=128, le=2048)
+    # default_factory=list이므로 history를 안 보내는 기존 클라이언트와도 호환된다.
+    history: list[ChatTurn] = Field(default_factory=list, max_length=20)
 
 
 class ChatGenerationResponse(BaseModel):
     answer: str = Field(min_length=1)
     sources: list[ReviewSource] = Field(default_factory=list, max_length=10)
+
+
+class EmbeddingRequest(BaseModel):
+    texts: list[Annotated[str, Field(min_length=1, max_length=8000)]] = Field(
+        min_length=1, max_length=128
+    )
+
+
+class EmbeddingResponse(BaseModel):
+    model: str
+    dimension: int = Field(ge=1)
+    embeddings: list[list[float]]
+
+
+class SummaryStyle(StrEnum):
+    BRIEF = "brief"
+    DETAILED = "detailed"
+    OUTLINE = "outline"
+
+
+class KeyTopic(BaseModel):
+    topic: str
+    description: str
+    sources: list[ReviewSource] = Field(default_factory=list, max_length=5)
+
+
+class SummaryGenerationRequest(BaseModel):
+    document: DocumentIn
+    style: SummaryStyle = SummaryStyle.BRIEF
+    persona: PersonaProfileIn | None = None
+
+
+class SummaryGenerationResponse(BaseModel):
+    summary: str = Field(min_length=1)
+    key_topics: list[KeyTopic] = Field(default_factory=list, max_length=8)
+    outline: list[str] = Field(default_factory=list, max_length=20)

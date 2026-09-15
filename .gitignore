@@ -18,6 +18,7 @@ venv/
 !.env.test.example
 
 # Runtime data
+.runtime-logs/
 backend/uploads/*
 !backend/uploads/.gitkeep
 *.db
