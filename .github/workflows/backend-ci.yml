@@ -34,7 +34,6 @@ jobs:
         working-directory: backend
     env:
       REPOSITORY_MODE: memory
-      RAG_MODE: lexical
       OBJECT_STORAGE_MODE: local
       DB_AUTO_CREATE: "false"
       LLM_CONTRACT_MODE: legacy_questions
