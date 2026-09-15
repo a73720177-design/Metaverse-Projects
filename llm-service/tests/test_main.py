@@ -799,3 +799,10 @@ def test_short_summary_coverage_is_derived_not_trusted_from_model(monkeypatch):
     response = client.post('/api/v1/summaries', json={'document': _document_payload(), 'style': 'brief'})
     assert response.status_code == 200
     assert response.json()['coverage'] == {'total_chunks': 1, 'analyzed_chunks': 1, 'truncated': False, 'selection_method': 'full'}
+
+
+def test_summary_rejects_complete_nested_object_inside_truncated_response(monkeypatch):
+    monkeypatch.setattr('app.main.call_llm', lambda *a, **k:
+                        '{"key_topics":[{"summary":"이 요점만 전체 요약으로 반환하면 안 됩니다."}]')
+    response = client.post('/api/v1/summaries', json={'document': _document_payload()})
+    assert response.status_code == 502

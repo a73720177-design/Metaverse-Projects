@@ -118,7 +118,10 @@ def call_llm(
                     timeout=REQUEST_TIMEOUT,
                 )
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"] or ""
+                text = response.json()["choices"][0]["message"]["content"]
+                if text is not None and not isinstance(text, str):
+                    raise ValueError("invalid generation content")
+                return text if text is not None else ""
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError("vLLM 호출 실패") from exc
 
@@ -167,6 +170,7 @@ def stream_llm(
     max_tokens: int | None = None,
 ) -> Iterator[str]:
     """Ollama token chunks for latency-sensitive chat responses."""
+    completed = False
     guarded_prompt = _disable_thinking_prompt(prompt)
     if _provider() == "vllm":
         payload = {
@@ -196,6 +200,7 @@ def stream_llm(
                             continue
                         data = decoded.removeprefix("data:").strip()
                         if data == "[DONE]":
+                            completed = True
                             break
                         event = json.loads(data)
                         if event.get("error"):
@@ -208,6 +213,8 @@ def stream_llm(
                             raise ValueError("invalid stream content")
                         if chunk:
                             yield chunk
+            if not completed:
+                raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
             return
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             raise LLMError("vLLM 스트리밍 호출 실패") from exc
@@ -246,7 +253,10 @@ def stream_llm(
                     if chunk:
                         yield chunk
                     if event.get("done"):
+                        completed = True
                         break
+        if not completed:
+            raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
     except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         raise LLMError("Ollama 스트리밍 호출 실패") from exc
 
@@ -360,8 +370,12 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
                         if event.get("error"):
                             raise LLMError("모델 스트리밍 생성 실패")
                         if provider == "vllm":
-                            choices = event.get("choices", [])
-                            chunk = choices[0]["delta"].get("content") or "" if choices else ""
+                            choices = event["choices"]
+                            if not isinstance(choices, list):
+                                raise ValueError("invalid choices")
+                            chunk = choices[0]["delta"].get("content") if choices else ""
+                            if chunk is None:
+                                chunk = ""
                         else:
                             chunk = event.get("response", "")
                         if not isinstance(chunk, str):

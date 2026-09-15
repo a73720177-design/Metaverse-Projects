@@ -245,9 +245,12 @@ def test_v1_chat_contract_filters_sources_to_cited_chunks_only() -> None:
         ],
     })
 
-    async def handler(_: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        context = json.loads(request.content)["document"]["full_text"]
+        assert context.startswith("[근거 1]")
+        assert context.index("둘째 구간 내용") < context.index("첫 구간 내용")
         return httpx.Response(
-            200, json={"answer": "둘째 구간을 인용합니다 [근거 2].", "sources": []}
+            200, json={"answer": "둘째 구간을 인용합니다 [근거 1].", "sources": []}
         )
 
     agent_repository = InMemoryAgentRepository()
@@ -275,7 +278,7 @@ def test_v1_chat_contract_filters_sources_to_cited_chunks_only() -> None:
     result = asyncio.run(run_contract())
     assert len(result.sources) == 1
     assert result.sources[0].excerpt == "둘째 구간 내용"
-    assert "[근거 2]" in result.answer
+    assert "[근거 1]" in result.answer
 
 
 def test_chat_returns_safe_answer_without_calling_llm_when_source_has_no_evidence() -> None:

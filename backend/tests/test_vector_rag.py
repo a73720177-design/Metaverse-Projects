@@ -59,10 +59,13 @@ async def test_vector_context_keeps_hits_from_multiple_documents() -> None:
     selected = await service.select_context([first, second], "시장성과 투자성", uuid4())
 
     assert selected is not None
-    assert [section.source_document_id for section in selected.sections] == [
-        first.document_id,
-        second.document_id,
-    ]
+    assert {section.source_document_id for section in selected.sections} == {
+        first.document_id, second.document_id,
+    }
+    assert any(section.index == 2 and section.source_document_id == first.document_id
+               for section in selected.sections)
+    assert any(section.index == 4 and section.source_document_id == second.document_id
+               for section in selected.sections)
     assert "presentation.pdf" in selected.full_text
     assert "investor.pdf" in selected.full_text
     assert all(section.source_document_type == "pdf" for section in selected.sections)
@@ -91,6 +94,8 @@ async def test_vector_search_limits_query_to_owner_and_requested_documents(
     statement, params = session.execute.call_args.args
     assert "d.owner_id = :owner" in str(statement)
     assert "c.document_id = ANY" in str(statement)
+    assert "WHERE distance <= :max_distance" in str(statement)
+    assert params["max_distance"] > 0
     assert params["owner"] == owner
     assert params["ids"] == [document.document_id for document in documents]
 
@@ -115,7 +120,7 @@ async def test_vector_context_keeps_second_file_when_first_has_long_hits(monkeyp
         first.document_id, second.document_id,
     }
     assert next(section for section in selected.sections
-                if section.source_document_id == second.document_id).text.startswith("b" * 1000)
+                if section.source_document_id == second.document_id).text == "b" * 700
 
 
 @pytest.mark.asyncio
@@ -159,6 +164,7 @@ async def test_postgres_vector_search_diversifies_hits_and_excludes_other_source
     import app.services.vector_rag as module
 
     engine = create_async_engine(normalize_database_url(os.environ["TEST_DATABASE_URL"]))
+    monkeypatch.setenv("VECTOR_RAG_FINAL_K", "12")
     owner, other_owner = uuid4(), uuid4()
     first, second, private, unrequested = [
         _document(name, name) for name in ("first.pdf", "second.pdf", "private.pdf", "unrequested.pdf")
@@ -243,3 +249,30 @@ async def test_vector_search_filters_weak_hits_and_applies_final_k(
     hits = await VectorRag(client).search_hits([document], "근거", owner)
 
     assert [hit.chunk_index for hit in hits] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_vector_context_recovers_evidence_at_end_of_long_page(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "1000")
+    body = "일반적인 프로젝트 소개입니다.\n" * 500 + "해지수수료는 75000원입니다."
+    document = _document("contract.pdf", body)
+    service = VectorRag(AsyncMock())
+    service.search_hits = AsyncMock(return_value=[
+        VectorSearchHit(document.document_id, document.filename, 7, body, 0.1),
+    ])
+    selected = await service.select_context([document], "해지수수료는?", uuid4())
+    assert "75000원" in selected.full_text
+    assert len(selected.full_text) <= 1000
+    assert selected.sections[0].index == 7
+
+
+@pytest.mark.asyncio
+async def test_vector_context_recovers_exact_term_in_already_matched_file() -> None:
+    document = _document("contract.pdf", "계약 조건 안내.\n위약금코드 ZX729 금액은 75000원.")
+    service = VectorRag(AsyncMock())
+    service.search_hits = AsyncMock(return_value=[
+        VectorSearchHit(document.document_id, document.filename, 2, "해약 비용에 관한 일반 안내. " * 500, 0.1),
+    ])
+    selected = await service.select_context([document], "ZX729", uuid4())
+    assert "ZX729" in selected.full_text
+    assert "해약 비용" in selected.full_text

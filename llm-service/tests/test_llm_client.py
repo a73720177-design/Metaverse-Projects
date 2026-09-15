@@ -149,3 +149,26 @@ def test_vllm_uses_served_alias_for_ollama_task_model(monkeypatch):
     monkeypatch.setattr("app.llm_client.requests.post", post)
     call_llm("review", model="qwen3:8b")
     assert captured["model"] == "served-model"
+
+
+@pytest.mark.parametrize('provider', ['ollama', 'vllm'])
+def test_sync_stream_requires_completion_marker(monkeypatch, provider):
+    monkeypatch.setenv('LLM_PROVIDER', provider)
+    monkeypatch.setenv('VLLM_MODEL', 'test-model')
+    line = ('{"response":"미완성","done":false}' if provider == 'ollama' else
+            'data: {"choices":[{"delta":{"content":"미완성"}}]}')
+    monkeypatch.setattr('app.llm_client.requests.post', lambda *a, **k: FakeResponse(lines=[line]))
+    stream = stream_llm('질문')
+    assert next(stream) == '미완성'
+    with pytest.raises(LLMError):
+        next(stream)
+
+
+@pytest.mark.parametrize('content', [[], {}, 0, False])
+def test_vllm_non_text_content_is_rejected(monkeypatch, content):
+    monkeypatch.setenv('LLM_PROVIDER', 'vllm')
+    monkeypatch.setenv('VLLM_MODEL', 'test-model')
+    monkeypatch.setattr('app.llm_client.requests.post', lambda *a, **k:
+                        FakeResponse({'choices': [{'message': {'content': content}}]}))
+    with pytest.raises(LLMError):
+        call_llm('질문')

@@ -181,6 +181,7 @@ class VectorRag:
                         )
                         SELECT document_id, filename, chunk_index, content, distance
                         FROM ranked
+                        WHERE distance <= :max_distance
                         ORDER BY document_rank, distance, document_id, chunk_index
                         LIMIT :limit
                         """
@@ -190,6 +191,7 @@ class VectorRag:
                         "ids": [document.document_id for document in documents],
                         "model": self.client.model,
                         "vector": json.dumps(vector),
+                        "max_distance": max_distance,
                         "limit": max(candidate_limit, len({item.document_id for item in documents})),
                     },
                 )
@@ -262,14 +264,36 @@ class VectorRag:
             grouped.setdefault(hit.document_id, []).append(
                 DocumentSection(index=hit.chunk_index, text=hit.content)
             )
-        # An entirely unindexed file must not disappear just because another
-        # requested file has vector hits.
+        # Refine page-sized vector hits with lexical chunks. This also recovers
+        # exact names/numbers missed by embeddings within an otherwise matched file.
+        # Interleave both rankings so a lexical match cannot evict all semantic hits.
         selector = DocumentContextSelector()
         for document_id, document in by_id.items():
-            if document_id not in grouped:
-                lexical = selector.select(document, query)
-                if lexical is not None:
-                    grouped[document_id] = lexical.sections
+            lexical = selector.select(document, query)
+            semantic = grouped.get(document_id, [])
+            refined = []
+            for section in semantic:
+                hit_document = document.model_copy(update={
+                    "sections": [section], "full_text": section.text,
+                })
+                hit_context = selector.select(hit_document, query)
+                refined.extend(
+                    hit_context.sections if hit_context else selector._chunks(hit_document)[:1]
+                )
+            lexical_sections = lexical.sections if lexical is not None else []
+            merged = []
+            seen = set()
+            for position in range(max(len(refined), len(lexical_sections))):
+                for ranking in (refined, lexical_sections):
+                    if position >= len(ranking):
+                        continue
+                    section = ranking[position]
+                    key = (section.index, section.text.strip())
+                    if key not in seen:
+                        merged.append(section)
+                        seen.add(key)
+            if merged:
+                grouped[document_id] = merged
         selected = [
             by_id[document_id].model_copy(update={"sections": sections})
             for document_id, sections in grouped.items() if sections

@@ -62,7 +62,7 @@ def _get_choice(name: str, default: str, choices: set[str]) -> str:
 
 
 def get_repository_mode() -> str:
-    return _get_choice("REPOSITORY_MODE", "memory", {"memory", "postgres"})
+    return _get_choice("REPOSITORY_MODE", "postgres", {"memory", "postgres"})
 
 
 def get_object_storage_mode() -> str:
@@ -93,7 +93,7 @@ def get_practice_max_concurrent_personas() -> int:
 
 
 def get_rag_mode() -> str:
-    return _get_choice("RAG_MODE", "lexical", {"lexical", "vector"})
+    return _get_choice("RAG_MODE", "vector", {"lexical", "vector"})
 
 
 def get_embedding_model() -> str:

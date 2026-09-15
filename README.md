@@ -42,7 +42,7 @@ Ollama :11434
 - LLM `/api/v1` 단일 계약 (personas·reviews·practice·summaries·embeddings·chat)
 - 문서 근거 질문과 일반 대화를 지연 없는 경량 규칙으로 분기하는 LLM Chat 프롬프트
 - 질문 관련 문서 청크 선택, 캐시, 출력 제한과 Ollama keep-alive를 통한 Chat 지연 개선
-- `RAG_MODE=vector`(pgvector) 시 Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 시맨틱 검색. 기본값 `lexical`은 기존 키워드 검색만 사용
+- 기본값은 `RAG_MODE=vector`, `REPOSITORY_MODE=postgres`입니다. Backend가 Ollama 임베딩 모델을 직접 호출해 `document_chunks`를 pgvector로 시맨틱 검색합니다. 색인 미완료나 검색 실패 시 lexical 검색으로 전환합니다.
 - 문서 요약·핵심 주제 API(`brief`/`detailed`/`outline` 스타일, 선택적 페르소나 관점). 동일 (문서, 페르소나, 스타일) 조합은 캐시된 결과를 재사용하고 `refresh=true`일 때만 재생성. LLM Service는 긴 문서를 map-reduce로 나눠 처리
 - `GROUNDING_MODE`(`off`/`annotate`/`strict`)로 Chat 답변-근거 검증. LLM을 다시 부르지 않고 lexical 포함률 + 애매한 문장만 배치 임베딩 재확인으로 `grounding` 필드를 채움. 기본값 `off`
 
@@ -74,7 +74,7 @@ Windows PowerShell 기준입니다. Python 가상환경은 서비스별로 분�
 ```powershell
 ollama serve
 ollama pull qwen3:4b
-# RAG_MODE=vector를 쓰려면 임베딩 모델도 미리 pull합니다.
+# 기본 벡터 RAG에 필요한 임베딩 모델입니다.
 ollama pull bge-m3
 ```
 
@@ -97,13 +97,24 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
+# 아래 PostgreSQL 준비 및 .env 설정을 완료한 뒤 서버를 실행합니다.
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-PostgreSQL과 MinIO 없이 실행할 개발 기본값:
+기본 실행에는 PostgreSQL(pgvector)과 Ollama의 `bge-m3` 모델이 필요합니다. 프로젝트 루트에서 `docker compose up -d postgres`로 로컬 DB를 실행할 수 있습니다. `backend/.env`에 해당 DB의 `DATABASE_URL`과 32바이트 이상의 `JWT_SECRET_KEY`를 설정합니다. Backend 폴더에서 번호 migration(009 포함)을 적용한 후 서버를 시작합니다.
+
+```powershell
+python scripts/apply_migrations.py --dry-run
+python scripts/apply_migrations.py --apply --confirm-database qwendb
+```
+
+기존 문서에 임베딩이 없으면 `python scripts/reindex_embeddings.py --owner-id <사용자 UUID>`로 색인합니다. 신규 문서는 저장 시 자동으로 색인됩니다. 이미 `.env`에 `RAG_MODE=lexical` 또는 `REPOSITORY_MODE=memory`가 있으면 각각 `vector`, `postgres`로 변경해야 합니다.
+
+PostgreSQL과 MinIO 없이 실행하는 개발·단위 테스트 모드는 명시적으로 설정합니다:
 
 ```env
 REPOSITORY_MODE=memory
+RAG_MODE=lexical
 OBJECT_STORAGE_MODE=local
 DB_AUTO_CREATE=false
 LLM_SERVICE_URL=http://localhost:8001

@@ -19,7 +19,7 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.grounding_service import GroundingChecker
 from app.services.rag_service import (
-    DocumentContextSelector, clean_answer_citations, combine_document_contexts,
+    DocumentContextSelector, build_retrieval_query, clean_answer_citations, combine_document_contexts,
     should_use_document, sources_from_citations, strip_citation_markers,
 )
 from app.services.vector_rag import VectorRag, vector_enabled
@@ -78,10 +78,8 @@ class ChatService:
         # A bare follow-up ("그건 무슨 뜻이야?") carries no retrievable terms on
         # its own, so fold in the last user turn before scoring/searching chunks.
         # The LLM still only sees the untouched current message.
-        retrieval_query = (
-            f"{previous_chats[-1].message} {request.message}"
-            if previous_chats
-            else request.message
+        retrieval_query = build_retrieval_query(
+            request.message, previous_chats[-1].message if previous_chats else None
         )
         previous_used_document = bool(previous_chats) and previous_chats[-1].document_id is not None
         requested_ids = list(dict.fromkeys(

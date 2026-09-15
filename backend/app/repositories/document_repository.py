@@ -120,7 +120,7 @@ class PostgresDocumentRepository:
             )
             await session.commit()
 
-        # Vector RAG is opt-in. A missing model/schema never makes the upload fail.
+        # Index for the default vector RAG mode; indexing failures do not fail uploads.
         from app.services.vector_rag import index_after_save
 
         await index_after_save(document.document_id, owner_id)

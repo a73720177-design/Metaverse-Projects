@@ -230,3 +230,66 @@ def test_clean_answer_citations_drops_only_out_of_range_markers() -> None:
 
     assert "[근거 1]" in cleaned
     assert "[근거 99]" not in cleaned
+
+
+def _text_document(text: str) -> DocumentParseResponse:
+    return _document().model_copy(update={
+        "sections": [DocumentSection(index=7, text=text)], "full_text": text,
+    })
+
+
+def test_chunking_keeps_long_sentence_overlap_and_tail() -> None:
+    text = "abcdefghijklmnopqrstuvwxyz" * 8
+    chunks = DocumentContextSelector(chunk_size=40, overlap=9)._chunks(_text_document(text))
+    assert all(0 < len(chunk.text) <= 40 for chunk in chunks)
+    assert all(left.text[-9:] == right.text[:9] for left, right in zip(chunks, chunks[1:]))
+    assert chunks[-1].text.endswith(text[-20:])
+    assert all(chunk.index == 7 for chunk in chunks)
+
+
+def test_chunking_never_exceeds_cap_after_sentence_overlap() -> None:
+    text = "짧은 문장. " + "아" * 34 + ". " + "다음 문장."
+    chunks = DocumentContextSelector(chunk_size=40, overlap=12)._chunks(_text_document(text))
+    assert all(len(chunk.text) <= 40 for chunk in chunks)
+    assert any("다음 문장." in chunk.text for chunk in chunks)
+
+
+def test_chunking_preserves_table_lines_decimal_numbers_and_versions() -> None:
+    text = "항목\t수치\n매출\t3.14억원\n버전\tv1.2.3\n성장률\t12.5%"
+    chunks = DocumentContextSelector()._chunks(_text_document(text))
+    assert [chunk.text for chunk in chunks] == [text]
+
+
+def test_cache_invalidates_when_section_text_or_page_changes() -> None:
+    selector = DocumentContextSelector()
+    document = _text_document("기존 내용")
+    selector._chunks(document)
+    changed = document.model_copy(update={"sections": [DocumentSection(index=9, text="새 근거")]})
+    assert selector._chunks(changed)[0].text == "새 근거"
+    assert selector._chunks(changed)[0].index == 9
+
+
+def test_shared_budget_keeps_most_relevant_page_first() -> None:
+    document = _text_document("background")
+    document.sections = [
+        DocumentSection(index=1, text="매출과 일반 배경에 대한 설명입니다. " * 10),
+        DocumentSection(index=9, text="매출 영업이익 순이익 목표 수치는 25입니다."),
+    ]
+    selected = DocumentContextSelector().select(document, "매출 영업이익 순이익 목표")
+    combined = combine_document_contexts([selected], 85)
+    assert combined.sections[0].index == 9
+    assert "25" in combined.full_text
+
+
+@pytest.mark.parametrize("message,uses_history", [
+    ("그 수치는 왜 늘었나요?", True),
+    ("더 자세히 설명해줘", True),
+    ("왜?", True),
+    ("개발 일정과 출시일을 알려줘", False),
+    ("왜 개발 일정이 지연됐나요?", False),
+])
+def test_retrieval_query_only_carries_history_for_followups(message, uses_history) -> None:
+    from app.services.rag_service import build_retrieval_query
+    query = build_retrieval_query(message, "매출 성장률")
+    assert ("매출 성장률" in query) is uses_history
+    assert message in query

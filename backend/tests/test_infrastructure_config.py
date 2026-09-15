@@ -7,6 +7,7 @@ from app.config import (
     get_max_upload_size_bytes,
     get_object_storage_mode,
     get_rag_max_context_chars,
+    get_rag_mode,
     get_repository_mode,
     validate_runtime_contract,
 )
@@ -27,8 +28,27 @@ from app.repositories.user_repository import InMemoryUserRepository, PostgresUse
 def test_default_infrastructure_modes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("REPOSITORY_MODE", raising=False)
     monkeypatch.delenv("OBJECT_STORAGE_MODE", raising=False)
-    assert get_repository_mode() == "memory"
+    monkeypatch.delenv("RAG_MODE", raising=False)
+    assert get_repository_mode() == "postgres"
+    assert get_rag_mode() == "vector"
     assert get_object_storage_mode() == "local"
+
+
+def test_default_vector_runtime_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("REPOSITORY_MODE", raising=False)
+    monkeypatch.delenv("RAG_MODE", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://qwen:pw@localhost/qwendb")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    monkeypatch.setenv("DB_AUTO_CREATE", "false")
+    validate_runtime_contract()
+
+
+def test_memory_lexical_mode_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+    monkeypatch.setenv("RAG_MODE", "lexical")
+    assert get_repository_mode() == "memory"
+    assert get_rag_mode() == "lexical"
+    validate_runtime_contract()
 
 
 def test_postgres_url_is_normalized_for_asyncpg() -> None:

@@ -80,3 +80,22 @@ def test_async_sampling_matches_sync_configuration(monkeypatch, provider):
     else:
         assert captured['options']['repeat_penalty'] == 1.18
         assert captured['options']['repeat_last_n'] == 256
+
+
+@pytest.mark.parametrize('event', [
+    {}, {'choices': None}, {'choices': {}},
+    {'choices': [{'delta': {'content': False}}]},
+    {'choices': [{'delta': {'content': []}}]},
+])
+def test_async_vllm_malformed_event_cannot_finish_successfully(monkeypatch, event):
+    import json
+    monkeypatch.setenv('LLM_PROVIDER', 'vllm')
+    monkeypatch.setenv('VLLM_MODEL', 'served-model')
+    async def run():
+        async def handler(request):
+            return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\ndata: [DONE]\n\n')
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: real_client(**kw, transport=httpx.MockTransport(handler)))
+        with pytest.raises(llm_client.LLMError):
+            _ = [part async for part in llm_client.stream_llm_async('test')]
+    asyncio.run(run())
