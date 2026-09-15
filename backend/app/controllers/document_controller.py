@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_max_upload_size_bytes
+from app.integrations.vision import VisionUnavailableError
 from app.dependencies import (
     get_agent_repository, get_current_user, get_document_repository, get_object_storage,
     get_summary_service,
@@ -86,8 +87,8 @@ async def delete_document(
 
 @router.post("/parse", response_model=DocumentDetailResponse,
              status_code=status.HTTP_201_CREATED,
-             summary="문서 업로드 및 텍스트 추출",
-             description="PPTX, PDF, DOCX 파일을 저장하고 구간별·전체 텍스트를 반환합니다.")
+             summary="문서 업로드 및 내용 분석",
+             description="PPTX, PDF, DOCX를 저장합니다. VLM 활성화 시 PPTX/PDF의 시각 정보도 분석합니다.")
 async def upload_and_parse(
     file: UploadFile = File(...),
     repository: DocumentRepository = Depends(get_document_repository),
@@ -133,6 +134,8 @@ async def upload_and_parse(
         return DocumentDetailResponse.from_document(document)
     except HTTPException:
         raise
+    except VisionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         if uploaded and object_key is not None:
             try:

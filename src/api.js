@@ -80,7 +80,7 @@ export function uploadDocument(file, token, signal) {
   const formData = new FormData()
   formData.append('file', file)
   return apiFetch('/documents/parse', {
-    timeoutMs: 180000,
+    timeoutMs: 900000,
     method: 'POST',
     headers: authHeaders(token),
     body: formData,

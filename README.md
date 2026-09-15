@@ -174,3 +174,7 @@ python -m backend.scripts.setup_test_db
 - 다른 사용자의 리소스 UUID는 존재 여부를 노출하지 않도록 404로 처리합니다.
 - 로그와 오류 응답에 stack trace, 내부 주소, 문서 원문을 남기지 않습니다.
 - 배포 전 로그인 rate limit, JWT 폐기·교체, 업로드 검증과 프롬프트 인젝션 방어를 점검합니다.
+
+## PPTX/PDF 이미지 분석
+
+로컬 Qwen3-VL로 슬라이드의 그림·차트·도식을 읽어 기존 예상 질문과 피드백에 반영할 수 있습니다. LibreOffice와 VLM 설치 후 `backend/.env`에서 `DOCUMENT_VISION_MODE=ollama`로 활성화하세요. 기본값은 텍스트 파싱(`off`)입니다. [설치·모델 선정·제한 사항](docs/LOCAL_VISION.md)을 참고하세요.
