@@ -49,6 +49,8 @@ class SummaryService:
             raise SummarySourceUnavailableError(
                 "문서에서 요약할 텍스트를 추출하지 못했습니다. 텍스트가 포함된 자료를 사용해 주세요."
             )
+        if len(document.sections) > 1000 or len(document.full_text) > 2_000_000:
+            raise SummarySourceUnavailableError("문서 분석 한도(1,000개 구간·200만 자)를 초과했습니다.")
         persona = None
         if request.agent_id is not None:
             persona = await self.agent_repository.get(request.agent_id, owner_id)

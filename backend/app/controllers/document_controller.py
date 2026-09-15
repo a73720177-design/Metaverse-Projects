@@ -18,7 +18,9 @@ from app.models.summary import SummaryCreateRequest, SummaryResult
 from app.models.user import UserResponse
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.agent_repository import AgentRepository
-from app.services.document_service import SUPPORTED_EXTENSIONS, parse_document
+from app.services.document_service import SUPPORTED_EXTENSIONS
+from app.services.parser_process import parse_in_process
+from app.services.upload_validation import validate_container, UploadLimitError
 from app.services.summary_service import (
     SummaryResourceNotFoundError, SummaryService, SummaryServiceError,
     SummarySourceUnavailableError,
@@ -113,7 +115,7 @@ async def upload_and_parse(
     try:
         max_size = get_max_upload_size_bytes()
         contents = await file.read(max_size + 1)
-        if not contents and suffix not in {".pdf", ".pptx"}:
+        if not contents:
             raise HTTPException(status_code=400, detail="빈 파일은 업로드할 수 없습니다.")
         if len(contents) > max_size:
             raise HTTPException(
@@ -121,11 +123,8 @@ async def upload_and_parse(
                 detail=f"파일 크기는 {max_size // (1024 * 1024)}MB 이하여야 합니다.",
             )
         await asyncio.to_thread(saved_path.write_bytes, contents)
-        document = await asyncio.to_thread(
-            parse_document,
-            saved_path,
-            filename,
-        )
+        await asyncio.to_thread(validate_container, saved_path, file.content_type)
+        document = await parse_in_process(saved_path, filename)
         object_key = build_document_object_key(document.document_id, suffix)
         await storage.upload(saved_path, object_key, file.content_type)
         uploaded = True
@@ -136,6 +135,8 @@ async def upload_and_parse(
         raise
     except VisionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except UploadLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         if uploaded and object_key is not None:
             try:

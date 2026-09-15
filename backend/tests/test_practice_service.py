@@ -14,7 +14,7 @@ from app.services.practice_service import PracticeService
 
 
 class FakeQuestionGenerator:
-    async def generate(self, persona, document, instructions):
+    async def generate(self, persona, document, instructions, **kwargs):
         assert "[발표 자료:" in document.full_text
         if persona.document_ids:
             assert "[질문자 참고자료:" in document.full_text
@@ -64,9 +64,11 @@ def test_expected_questions_use_multiple_documents_and_personas() -> None:
 
     response = asyncio.run(run())
     assert len(response.results) == 2
-    assert all(len(result.questions) == 5 for result in response.results)
+    assert all(0 < len(result.questions) <= 5 for result in response.results)
+    assert response.session_id is not None
     assert all(result.avatar_data_url.startswith("data:image/svg+xml;base64,") for result in response.results)
-    assert len(response.results[0].questions[0].sources) == 3
+    assert len(response.results[0].questions[0].sources) == 1
+    assert all(s.document_id != reference.document_id for r in response.results for q in r.questions for s in q.sources)
 
 
 def test_expected_question_http_calls_respect_persona_concurrency_limit() -> None:
@@ -75,7 +77,7 @@ def test_expected_question_http_calls_respect_persona_concurrency_limit() -> Non
             self.active = 0
             self.peak = 0
 
-        async def generate(self, persona, document, instructions):
+        async def generate(self, persona, document, instructions, **kwargs):
             self.active += 1
             self.peak = max(self.peak, self.active)
             await asyncio.sleep(0.01)
@@ -117,7 +119,7 @@ def test_expected_questions_reject_more_than_four_personas() -> None:
 
 def test_expected_questions_replace_placeholder_model_output() -> None:
     class PlaceholderGenerator:
-        async def generate(self, persona, document, instructions):
+        async def generate(self, persona, document, instructions, **kwargs):
             return {"questions": ["Question 1", "질문 2", "Q3: ...", "질문 4", "질문 5"]}
 
     owner_id = uuid4()
@@ -149,7 +151,7 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
     captured = {}
 
     class CapturingGenerator:
-        async def generate(self, persona, document, instructions):
+        async def generate(self, persona, document, instructions, **kwargs):
             captured["document"] = document
             return {"questions": []}
 
@@ -188,7 +190,7 @@ def test_large_presentation_does_not_push_out_persona_reference(monkeypatch) -> 
     captured = {}
 
     class CapturingGenerator:
-        async def generate(self, persona, document, instructions):
+        async def generate(self, persona, document, instructions, **kwargs):
             captured["text"] = document.full_text
             return {"questions": []}
 
@@ -228,7 +230,7 @@ def test_expected_questions_keep_bounded_overview_when_persona_terms_do_not_matc
     captured = {}
 
     class CapturingGenerator:
-        async def generate(self, persona, document, instructions):
+        async def generate(self, persona, document, instructions, **kwargs):
             captured["document"] = document
             return {"questions": [{"question": "잘못된 객체"}, "какие 질문", "실제 발표 내용의 검증 방법을 구체적으로 설명해 주시겠습니까?"]}
 
@@ -256,3 +258,57 @@ def test_expected_questions_keep_bounded_overview_when_persona_terms_do_not_matc
     assert len(captured["document"].full_text) <= 4000
     assert not any(item.question.startswith("{'question'") for item in result.results[0].questions)
     assert not any("какие" in item.question for item in result.results[0].questions)
+
+
+def test_invalid_reference_ids_and_duplicate_persona_questions_are_not_accepted(monkeypatch):
+    monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
+    calls = []
+    class Generator:
+        async def generate(self, persona, document, instructions, **kwargs):
+            calls.append(kwargs)
+            return {'questions': [
+                {'question': '교수논문.pdf 본문에 대한 잘못된 질문입니다?', 'presentation_evidence_ids': ['e2'], 'focus': '참고자료'},
+                {'question': '사업계획.pdf 본문에서 근거를 검증한 방법은 무엇입니까?', 'presentation_evidence_ids': ['invalid'], 'focus': '없는 근거'},
+                {'question': '사업계획.pdf 본문에서 근거를 검증한 방법은 무엇입니까?', 'presentation_evidence_ids': ['e1'], 'focus': '근거 검증'},
+            ]}
+    async def run():
+        owner = uuid4()
+        agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        presentation, reference = _document('사업계획.pdf'), _document('교수논문.pdf')
+        await docs.save(presentation, owner)
+        await docs.save(reference, owner)
+        personas = [PersonaProfile(name=name, document_ids=[reference.document_id]) for name in ['교수', '투자자']]
+        for persona in personas:
+            await agents.save(persona, owner)
+        response = await PracticeService(Generator(), agents, docs).generate_expected_questions(
+            ExpectedQuestionRequest(persona_ids=[p.agent_id for p in personas], presentation_document_ids=[presentation.document_id], question_count_per_persona=1), owner)
+        questions = [q for r in response.results for q in r.questions]
+        assert len({q.question for q in questions}) == len(questions)
+        assert all(s.document_id == presentation.document_id for q in questions for s in q.sources)
+        assert sum(q.origin == 'model' for q in questions) == 1
+        assert calls[1]['excluded_questions']
+        assert response.results[1].status in {'partial', 'fallback'}
+    asyncio.run(run())
+
+
+def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypatch):
+    monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
+    seen = []
+    class Generator:
+        async def generate(self, persona, document, instructions, **kwargs):
+            seen.append(document.full_text)
+            return {'questions': []}
+    async def run():
+        owner = uuid4()
+        agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        sections = [DocumentSection(index=i + 1, text=f'페이지{i} 핵심 근거 ' * 100) for i in range(101)]
+        document = _document('긴발표.pdf').model_copy(update={'sections': sections, 'full_text': '\n'.join(s.text for s in sections)})
+        persona = PersonaProfile(name='평가자')
+        await agents.save(persona, owner)
+        await docs.save(document, owner)
+        response = await PracticeService(Generator(), agents, docs).generate_expected_questions(
+            ExpectedQuestionRequest(persona_ids=[persona.agent_id], presentation_document_ids=[document.document_id]), owner)
+        coverage = response.results[0].coverage
+        assert coverage.truncated and coverage.total_chunks == 101 and coverage.analyzed_chunks == 3
+    asyncio.run(run())
+    assert all(marker in seen[0] for marker in ['페이지0 ', '페이지50 ', '페이지100 '])

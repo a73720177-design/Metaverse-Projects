@@ -38,7 +38,7 @@ def get_engine() -> AsyncEngine:
                 "REPOSITORY_MODE=postgres requires the DATABASE_URL environment variable."
             )
         _engine = create_async_engine(
-            normalize_database_url(database_url), pool_pre_ping=True
+            normalize_database_url(database_url), pool_pre_ping=True, hide_parameters=True
         )
         _session_factory = async_sessionmaker(
             bind=_engine, class_=AsyncSession, expire_on_commit=False

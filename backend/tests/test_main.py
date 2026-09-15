@@ -123,15 +123,12 @@ def test_rejects_unsupported_document() -> None:
     assert response.json()["error"]["code"] == "http_415"
 
 
-def test_accepts_empty_pdf_for_later_processing() -> None:
+def test_rejects_empty_pdf() -> None:
     response = client.post(
         "/documents/parse",
         files={"file": ("sample.pdf", b"", "application/pdf")},
     )
-    assert response.status_code == 201
-    assert response.json()["document_type"] == "pdf"
-    assert response.json()["sections"] == []
-    assert response.json()["full_text"] == ""
+    assert response.status_code == 400
 
 
 def test_rejects_document_over_configured_limit(

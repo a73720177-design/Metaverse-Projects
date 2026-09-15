@@ -106,3 +106,28 @@ def test_real_db_health_accepts_nested_contract(monkeypatch):
     response = TestClient(main.app).get('/health/db')
     assert response.status_code == 200
     assert response.json()['contract'] == contract
+
+
+def test_failures_never_log_exception_contents_or_tracebacks(client, caplog):
+    client.get('/unexpected')
+    client.get('/database/08006')
+    assert 'DO_NOT_EXPOSE' not in caplog.text
+    assert 'SELECT secret' not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_post_start_failure_closes_without_reraising_sensitive_exception(caplog):
+    from app.error_handlers import RequestErrorMiddleware
+    async def run():
+        sent = []
+        async def inner(scope, receive, send):
+            await send({'type': 'http.response.start', 'status': 200, 'headers': []})
+            await send({'type': 'http.response.body', 'body': b'partial', 'more_body': True})
+            raise RuntimeError('DO_NOT_EXPOSE')
+        async def send(message):
+            sent.append(message)
+        await RequestErrorMiddleware(inner)({'type': 'http', 'state': {}}, None, send)
+        assert sent[-1]['more_body'] is False
+    asyncio.run(run())
+    assert 'DO_NOT_EXPOSE' not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

@@ -1,3 +1,4 @@
+from contextlib import aclosing
 from typing import Any
 
 from app.config import get_chat_output_token_budgets
@@ -65,6 +66,25 @@ class HttpReviewGenerator:
             return await self.client.post_json(self.endpoint, payload)
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ReviewGeneratorError(str(exc)) from exc
+
+
+class HttpQuestionGenerator:
+    def __init__(self, client: HttpLlmClient):
+        self.client = client
+
+    async def generate(self, persona, document, instructions, *, question_count=5, excluded_questions=None):
+        evidence = [{"id": f"e{i}",
+                     "scope": "presentation" if section.text.startswith("[발표 자료:") else "persona_reference",
+                     "text": section.text}
+                    for i, section in enumerate(document.sections, 1)]
+        try:
+            return await self.client.post_json("/practice/questions", {
+                "persona": persona.model_dump(mode="json"),
+                "question_count": question_count, "evidence": evidence,
+                "excluded_questions": (excluded_questions or [])[-40:],
+            })
+        except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
+            raise ReviewGeneratorError("예상 질문 생성 응답을 확인할 수 없습니다.") from exc
 
 
 class HttpChatGenerator:
@@ -138,8 +158,9 @@ class HttpChatGenerator:
             **self._history_payload(history),
         }
         try:
-            async for token in self.client.stream_sse("/chat/stream", payload):
-                yield token
+            async with aclosing(self.client.stream_sse("/chat/stream", payload)) as upstream:
+                async for token in upstream:
+                    yield token
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ChatGeneratorError(str(exc)) from exc
 

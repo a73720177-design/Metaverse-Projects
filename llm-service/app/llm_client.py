@@ -314,3 +314,65 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             raise LLMError("임베딩 모델 호출 실패") from exc
         embeddings.extend(batch_embeddings)
     return embeddings
+
+
+async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: int | None = None):
+    """Cancellation closes the provider HTTP response, including while awaiting tokens."""
+    import asyncio
+    import httpx
+    provider = _provider()
+    guarded = _disable_thinking_prompt(prompt)
+    if provider == "vllm":
+        url = f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions"
+        payload = {"model": _vllm_model(model), "messages": [{"role": "user", "content": guarded}],
+                   "stream": True, "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+                   "temperature": 0.35, "chat_template_kwargs": {"enable_thinking": False}}
+    else:
+        url = f"{OLLAMA_HOST}/api/generate"
+        payload = {"model": model or OLLAMA_MODEL, "prompt": guarded, "stream": True,
+                   "think": False, "keep_alive": OLLAMA_KEEP_ALIVE,
+                   "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+                               "temperature": 0.35, "repeat_penalty": 1.18}}
+    acquired = False
+    completed = False
+    try:
+        async with asyncio.timeout(REQUEST_TIMEOUT):
+            while not _GENERATION_SLOTS.acquire(blocking=False):
+                await asyncio.sleep(0.05)
+            acquired = True
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                async with client.stream("POST", url, json=payload,
+                                         headers=_vllm_headers() if provider == "vllm" else {}) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if provider == "vllm":
+                            if not line.startswith("data:"):
+                                continue
+                            line = line[5:].strip()
+                            if line == "[DONE]":
+                                completed = True
+                                break
+                        event = json.loads(line)
+                        if event.get("error"):
+                            raise LLMError("모델 스트리밍 생성 실패")
+                        if provider == "vllm":
+                            choices = event.get("choices", [])
+                            chunk = choices[0]["delta"].get("content") or "" if choices else ""
+                        else:
+                            chunk = event.get("response", "")
+                        if not isinstance(chunk, str):
+                            raise ValueError("invalid token")
+                        if chunk:
+                            yield chunk
+                        if provider == "ollama" and event.get("done"):
+                            completed = True
+                            break
+        if not completed:
+            raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
+    except (httpx.HTTPError, TimeoutError, KeyError, IndexError, ValueError, TypeError) as exc:
+        raise LLMError("모델 스트리밍 연결 또는 응답 오류") from exc
+    finally:
+        if acquired:
+            _GENERATION_SLOTS.release()

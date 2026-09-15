@@ -24,7 +24,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.prompts import SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT
-from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle
+from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle, ReviewCoverage
 
 _CHUNK_OVERLAP = 200
 
@@ -202,7 +202,13 @@ def generate_summary_map_reduce(
         style_guidance=_STYLE_GUIDANCE[style],
         points_json=json.dumps(all_points, ensure_ascii=False),
     )
-    return generate(
+    response = generate(
         reduce_prompt, SummaryGenerationResponse,
         max_tokens=style_max_tokens(style), model=model,
     )
+    analyzed = sum(len(group) for group in groups)
+    return response.model_copy(update={"coverage": ReviewCoverage(
+        total_chunks=len(chunks), analyzed_chunks=analyzed,
+        truncated=analyzed < len(chunks),
+        selection_method="even_sample" if analyzed < len(chunks) else "full",
+    )})

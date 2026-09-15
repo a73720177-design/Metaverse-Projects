@@ -256,3 +256,26 @@ export function getSummary(documentId, token, signal) {
     signal,
   })
 }
+
+export function listPracticeSessions(token, signal) {
+  return apiFetch('/practice/sessions', { headers: authHeaders(token), signal })
+}
+
+export function getPracticeSession(id, token, signal) {
+  return apiFetch(`/practice/sessions/${encodeURIComponent(id)}`, { headers: authHeaders(token), signal })
+}
+
+export function listReviews(token, signal) {
+  return apiFetch('/reviews', { headers: authHeaders(token), signal })
+}
+
+export function getReview(id, token, signal) {
+  return apiFetch(`/reviews/${encodeURIComponent(id)}`, { headers: authHeaders(token), signal })
+}
+
+export function createReview(agentId, documentId, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/reviews`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ document_id: documentId }), timeoutMs: 900000, signal,
+  })
+}

@@ -95,7 +95,6 @@ class GroundingChecker:
             except Exception:
                 logger.warning(
                     "Grounding embedding check failed; falling back to lexical-only scores",
-                    exc_info=True,
                 )
                 checked = False
 

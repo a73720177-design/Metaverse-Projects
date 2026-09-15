@@ -25,7 +25,9 @@ class DocumentRepository(Protocol):
 class InMemoryDocumentRepository:
     """실제 DB 연결 전까지 사용하는 개발용 임시 저장소입니다."""
 
-    def __init__(self) -> None:
+    def __init__(self, review_repository=None, related_repositories=()) -> None:
+        self.review_repository = review_repository
+        self.related_repositories = related_repositories
         self._documents: dict[
             UUID, tuple[UUID, DocumentParseResponse, datetime]
         ] = {}
@@ -57,13 +59,17 @@ class InMemoryDocumentRepository:
         return sorted(items, key=lambda item: item.created_at, reverse=True)
 
     async def is_referenced(self, document_id: UUID, owner_id: UUID) -> bool:
-        return False
+        return bool(self.review_repository and await self.review_repository.references_document(document_id, owner_id))
 
     async def delete(
         self, document_id: UUID, owner_id: UUID
     ) -> DocumentParseResponse | None:
         document = await self.get(document_id, owner_id)
+        if await self.is_referenced(document_id, owner_id):
+            raise ValueError("리뷰에서 사용 중인 문서는 삭제할 수 없습니다.")
         if document is not None:
+            for repository in self.related_repositories:
+                await repository.remove_document(document_id, owner_id)
             self._documents.pop(document_id, None)
         return document
 

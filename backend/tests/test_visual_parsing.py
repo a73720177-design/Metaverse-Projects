@@ -191,9 +191,9 @@ def test_failed_vision_upload_returns_503_without_persisting(tmp_path, monkeypat
     make_pdf(source)
     uploads = tmp_path / "uploads"
     monkeypatch.setattr(document_controller, "UPLOAD_DIR", uploads)
-    def fail(*args):
-        raise vision.VisionUnavailableError("VLM unavailable")
-    monkeypatch.setattr(vision.OllamaVisionClient, "describe", fail)
+    async def fail(*args):
+        raise vision.VisionUnavailableError("시각 분석 모델을 사용할 수 없습니다.")
+    monkeypatch.setattr(document_controller, "parse_in_process", fail)
     repository = InMemoryDocumentRepository()
     class NoUpload(FakeStorage):
         async def upload(self, *args):

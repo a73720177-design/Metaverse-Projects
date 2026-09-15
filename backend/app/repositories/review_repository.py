@@ -13,6 +13,7 @@ class ReviewRepository(Protocol):
 
     async def save(self, review: ReviewResult, owner_id: UUID) -> None: ...
     async def get(self, review_id: UUID, owner_id: UUID) -> ReviewResult | None: ...
+    async def list(self, owner_id: UUID) -> list[ReviewResult]: ...
 
 
 class InMemoryReviewRepository:
@@ -28,6 +29,16 @@ class InMemoryReviewRepository:
         stored = self._reviews.get(review_id)
         return stored[1] if stored is not None and stored[0] == owner_id else None
 
+    async def list(self, owner_id):
+        return [r for o, r in reversed(list(self._reviews.values())) if o == owner_id][:100]
+
+    async def references_document(self, document_id, owner_id):
+        return any(o == owner_id and r.document_id == document_id for o, r in self._reviews.values())
+
+    async def remove_agent(self, agent_id, owner_id):
+        self._reviews = {key: (o, r) for key, (o, r) in self._reviews.items()
+                         if not (o == owner_id and r.agent_id == agent_id)}
+
 
 class PostgresReviewRepository:
     async def save(self, review: ReviewResult, owner_id: UUID) -> None:
@@ -40,6 +51,7 @@ class PostgresReviewRepository:
             claims=data["claims"],
             feedback=data["feedback"],
             questions=data["questions"],
+            coverage=data["coverage"],
         )
         async with get_session_factory()() as session:
             await session.merge(row)
@@ -63,5 +75,13 @@ class PostgresReviewRepository:
                 "claims": row.claims,
                 "feedback": row.feedback,
                 "questions": row.questions,
+                "coverage": row.coverage,
             }
         )
+
+    async def list(self, owner_id):
+        async with get_session_factory()() as session:
+            ids = (await session.scalars(select(ReviewTable.review_id).where(
+                ReviewTable.owner_id == owner_id).order_by(ReviewTable.created_at.desc()).limit(100))).all()
+        results = [await self.get(key, owner_id) for key in ids]
+        return [r for r in results if r is not None]

@@ -288,5 +288,4 @@ async def index_after_save(document_id: UUID, owner_id: UUID) -> None:
         logger.warning(
             "Embedding indexing failed for document %s; lexical RAG remains available",
             document_id,
-            exc_info=True,
         )

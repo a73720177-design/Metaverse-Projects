@@ -20,3 +20,16 @@ test('questions own separate identities and message arrays', () => {
   assert.equal(b.messages.length, 1)
   assert.equal(b.messages[0].text, '다른 질문')
 })
+
+ test('saved practice restores conversation identity and excludes trashed or other conversations', async () => {
+  const { restorePracticeChats } = await import('./workspace-utils.mjs')
+  const question = { question_id: 'q', conversation_id: 'c', question: '근거는?', sources: [] }
+  const session = { response: { results: [{ persona_id: 'p', questions: [question] }] } }
+  const record = { message_id: 'm', agent_id: 'p', conversation_id: 'c', message: '예상 질문: 근거는?\n발표자의 답변: 실험했습니다.\n답변을 평가하고 후속 질문을 해주세요.', answer: '추가 검증이 필요합니다.', created_at: '2026-01-01', sources: [], grounding: { checked: true, score: 0.5 } }
+  const state = restorePracticeChats(session, [record, { ...record, message_id: 'other', conversation_id: 'other' }, { ...record, message_id: 'deleted', deleted_at: '2026-01-02' }]).p
+  assert.equal(state.activeQuestionId, 'q')
+  assert.equal(state.conversations.q.conversationId, 'c')
+  assert.equal(state.conversations.q.messages.length, 3)
+  assert.equal(state.conversations.q.messages[1].text, '실험했습니다.')
+  assert.equal(state.conversations.q.messages[2].grounding.score, 0.5)
+})

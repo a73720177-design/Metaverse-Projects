@@ -4,8 +4,11 @@ import html
 import logging
 import re
 from uuid import UUID
+from app.models.coverage import Coverage
+from app.models.practice import PracticeSession
+from app.repositories.practice_repository import InMemoryPracticeRepository
 
-from app.integrations.llm.contracts import ReviewGenerator, ReviewGeneratorError
+from app.integrations.llm.contracts import QuestionGenerator, ReviewGeneratorError
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.models.practice import (
     ExpectedQuestion,
@@ -40,6 +43,13 @@ _QUANTITY = re.compile(r"\d+(?:[.,]\d+)?\s*(?:%|퍼센트|명|개|분|시간|원
 _QUESTION_TERMS = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 
 
+def _evidence_terms(text: str) -> set[str]:
+    # Korean particles must not make “전환율의” unrelated to source “전환율”.
+    terms = set(_QUESTION_TERMS.findall(text.lower()))
+    return terms | {re.sub(r"(?:에서|으로|은|는|이|가|을|를|의|에)$", "", word)
+                    for word in terms if len(word) >= 3}
+
+
 def _usable_question(value: object) -> str | None:
     # Structured-output drift must not become a visible Python-dict question.
     if not isinstance(value, str):
@@ -71,33 +81,6 @@ def _too_similar(question: str, accepted: list[str]) -> bool:
     return False
 
 
-def _fallback_questions(persona, documents, count: int) -> list[str]:
-    filenames = ", ".join(document.filename for document in documents[:3])
-    topic = filenames or "제공된 발표 자료"
-    focus = persona.description.strip() or persona.role
-    evidence = []
-    for document in documents:
-        normalized = " ".join(document.full_text.split())
-        if normalized:
-            evidence.append((document.filename, normalized[:80]))
-    while len(evidence) < 3:
-        evidence.append((topic, "자료에서 제시한 핵심 주장"))
-    first, second, third = evidence[:3]
-    candidates = [
-        f"{persona.name}의 {focus} 관점에서 {first[0]}의 「{first[1]}」 내용을 뒷받침하는 측정 근거는 무엇입니까?",
-        f"{persona.name}의 평가 기준으로 {second[0]}의 「{second[1]}」 내용을 실제 환경에서 검증하는 방법은 무엇입니까?",
-        f"{third[0]}의 「{third[1]}」 제안이 기존 대안보다 낫다고 판단할 비교 기준은 무엇입니까?",
-        f"{topic}에서 제시한 방법의 실행 과정에서 {focus}와 관련된 가장 큰 위험과 대응 방안은 무엇입니까?",
-        f"{persona.name} 관점에서 현재 자료에 근거가 부족한 부분과 이를 보완할 추가 자료는 무엇입니까?",
-        f"{focus} 기준으로 예상 성과가 나오지 않을 때 원인을 구분할 핵심 지표는 무엇입니까?",
-        f"{persona.name}이 이 발표의 주장을 재현하기 위해 추가로 확인해야 할 조건은 무엇입니까?",
-        f"{focus} 관점에서 실제 사용자 적용 시 발생할 수 있는 부작용을 어떻게 검증할 계획입니까?",
-        f"{persona.name}의 판단을 바꿀 수 있는 반대 근거나 실패 조건은 무엇입니까?",
-        f"{focus} 기준으로 확장 단계의 비용과 품질 우선순위를 어떻게 결정할 계획입니까?",
-    ]
-    return candidates[:count]
-
-
 def _avatar_data_url(name: str, role: str, gender: str, age: int | None) -> str:
     label = html.escape((name.strip() or role.strip() or "AI")[:2])
     hue = sum(ord(char) for char in f"{name}:{role}:{gender}:{age}") % 360
@@ -127,10 +110,11 @@ def _avatar_data_url(name: str, role: str, gender: str, age: int | None) -> str:
 class PracticeService:
     def __init__(
         self,
-        generator: ReviewGenerator,
+        generator: QuestionGenerator,
         agent_repository: AgentRepository,
         document_repository: DocumentRepository,
         max_concurrent_personas: int = 1,
+        session_repository=None,
     ) -> None:
         if max_concurrent_personas < 1:
             raise ValueError("max_concurrent_personas must be at least 1")
@@ -138,6 +122,7 @@ class PracticeService:
         self.agent_repository = agent_repository
         self.document_repository = document_repository
         self.max_concurrent_personas = max_concurrent_personas
+        self.session_repository = session_repository or InMemoryPracticeRepository()
 
     async def generate_expected_questions(
         self, request: ExpectedQuestionRequest, owner_id: UUID
@@ -156,9 +141,8 @@ class PracticeService:
         if any(document is None for document in presentation_documents):
             raise PracticeResourceNotFoundError("선택한 발표 자료를 찾을 수 없습니다.")
 
-        # Match outgoing HTTP concurrency to the LLM's real generation slots.
-        # Otherwise queued requests consume their timeout before generation starts.
-        generation_slots = asyncio.Semaphore(self.max_concurrent_personas)
+        # Process personas in order so every request excludes prior accepted questions.
+        accepted_across_personas: list[str] = []
 
         async def generate_for_persona(persona) -> PersonaQuestionResult:
             reference_documents = await asyncio.gather(*(
@@ -166,45 +150,10 @@ class PracticeService:
                 for document_id in persona.document_ids
             ))
             valid_references = [item for item in reference_documents if item is not None]
-            blocks: list[str] = []
-            sections: list[DocumentSection] = []
-            sources: list[ReviewSource] = []
-            index = 1
-            for scope, documents in (
-                ("발표 자료", presentation_documents),
-                ("질문자 참고자료", valid_references),
-            ):
-                for document in documents:
-                    text = document.full_text.strip()
-                    if not text:
-                        continue
-                    block = f"[{scope}: {document.filename}]\n{text}"
-                    blocks.append(block)
-                    sections.append(DocumentSection(index=index, text=block))
-                    sources.append(
-                        ReviewSource(
-                            document_id=document.document_id,
-                            filename=document.filename,
-                            excerpt=text[:500],
-                        )
-                    )
-                    index += 1
             instructions = (
                 f"예상 질문을 {request.question_count_per_persona}개 생성하세요. "
                 "발표 자료는 검토 대상이고 질문자 참고자료는 평가 관점의 근거입니다. "
                 "두 종류를 혼동하지 말고 질문자가 실제로 물을 법한 질문을 작성하세요."
-            )
-            combined = "\n\n".join(blocks)
-            # The LLM service performs the final token-aware trim. This first
-            # guard prevents an unbounded HTTP payload when many files exist.
-            combined = combined[:80_000]
-            synthetic = DocumentParseResponse(
-                document_id=presentation_documents[0].document_id,
-                filename="발표 프로젝트 통합 자료",
-                document_type="collection",
-                saved_path=presentation_documents[0].saved_path,
-                sections=sections,
-                full_text=combined,
             )
             all_documents = [*presentation_documents, *valid_references]
             retrieval_query = " ".join(
@@ -241,7 +190,6 @@ class PracticeService:
                 except Exception:
                     logger.warning(
                         "Expected-question vector search failed; using lexical document context",
-                        exc_info=True,
                     )
             if retrieved is not None:
                 presentation_ids = {
@@ -265,9 +213,18 @@ class PracticeService:
                 # 질문자 참고자료를 밀어내지 않게 한다. 이전에는 모든 파일을
                 # 하나의 synthetic 문서로 먼저 합쳐 첫 대형 PDF만 남았다.
                 selector = DocumentContextSelector()
-                synthetic = combine_document_contexts(
-                    all_documents, selector.max_context_chars
-                )
+                sampled = []
+                for document in all_documents:
+                    nonempty = [section for section in document.sections if section.text.strip()]
+                    indices = sorted({0, len(nonempty) // 2, len(nonempty) - 1}) if nonempty else []
+                    chosen = [nonempty[i] for i in indices]
+                    # Bound each selected section so the first page cannot consume
+                    # the entire document budget before middle/end pages appear.
+                    per_section = max(1, (selector.max_context_chars // max(1, len(all_documents)) - 240) // max(1, len(chosen)))
+                    sampled.append(document.model_copy(update={"sections": [
+                        section.model_copy(update={"text": section.text[:per_section]}) for section in chosen
+                    ]}))
+                synthetic = combine_document_contexts(sampled, selector.max_context_chars)
                 if synthetic is not None:
                     presentation_ids = {
                         document.document_id for document in presentation_documents
@@ -294,41 +251,111 @@ class PracticeService:
                 raise PracticeServiceError(
                     "발표 자료에서 질문 생성에 사용할 텍스트를 찾을 수 없습니다."
                 )
-            try:
-                async with generation_slots:
-                    generated = await self.generator.generate(persona, synthetic, instructions)
-            except ReviewGeneratorError as exc:
-                raise PracticeServiceError("예상 질문 생성에 실패했습니다.") from exc
-            unique: list[str] = []
-            source_text = "\n".join(document.full_text for document in all_documents)
-            for question in generated.get("questions", []):
-                normalized = _usable_question(question)
-                if (
-                    normalized
-                    and normalized not in unique
-                    and _supported_quantities(normalized, source_text)
-                    and not _too_similar(normalized, unique)
-                ):
-                    unique.append(normalized)
-                if len(unique) == request.question_count_per_persona:
+
+            presentation_ids = {d.document_id for d in presentation_documents}
+            evidence = {f"e{i}": section for i, section in enumerate(synthetic.sections, 1)
+                        if section.source_document_id in presentation_ids}
+            if not evidence:
+                raise PracticeServiceError("선택한 발표 자료에 질문 생성에 사용할 텍스트가 없습니다.")
+            questions: list[ExpectedQuestion] = []
+            warnings = []
+            count = request.question_count_per_persona
+            def accept(text, ids, focus, origin):
+                question = _usable_question(text)
+                if not question or len(question) > 500 or not ids or any(key not in evidence for key in ids):
+                    return False
+                sections = [evidence[key] for key in dict.fromkeys(ids)]
+                body = "\n".join(section.text.split("\n", 1)[-1] for section in sections)
+                terms = _evidence_terms(question)
+                if not terms.intersection(_evidence_terms(body)):
+                    return False
+                normalized = question
+                for p in personas:
+                    normalized = normalized.replace(p.name, "")
+                if not _supported_quantities(question, body) or _too_similar(normalized, accepted_across_personas):
+                    return False
+                sources = [ReviewSource(document_id=section.source_document_id,
+                    filename=section.source_filename or synthetic.filename,
+                    page=section.index if section.source_document_type in {"pdf", "pptx"} else None,
+                    excerpt=section.text.split("\n", 1)[-1][:500]) for section in sections]
+                questions.append(ExpectedQuestion(question=question, sources=sources, focus=focus[:150], origin=origin))
+                accepted_across_personas.append(normalized)
+                return True
+
+            # One bounded retry for malformed/duplicate candidates. Each persona
+            # sees accepted questions from earlier personas as exclusions.
+            for attempt in range(2):
+                try:
+                    generated = await self.generator.generate(persona, synthetic, instructions,
+                        question_count=count - len(questions), excluded_questions=accepted_across_personas[-40:])
+                except ReviewGeneratorError:
+                    warnings.append("모델 응답을 받지 못해 근거 기반 보충 질문을 사용했습니다.")
                     break
-            for question in _fallback_questions(
-                persona, all_documents,
-                request.question_count_per_persona,
-            ):
-                if len(unique) == request.question_count_per_persona:
+                for candidate in generated.get("questions", []):
+                    if isinstance(candidate, dict):
+                        ids = candidate.get("presentation_evidence_ids", [])
+                        focus = candidate.get("focus", "")
+                        if isinstance(ids, list) and all(isinstance(key, str) for key in ids) and isinstance(focus, str):
+                            accept(candidate.get("question"), ids, focus, "model")
+                    if len(questions) == count:
+                        break
+                if len(questions) == count:
                     break
-                if question not in unique:
-                    unique.append(question)
+            model_count = len(questions)
+            angles = ["측정 기준과 재현 절차는 무엇입니까?", "실제 도입의 비용과 책임은 어떻게 배분합니까?",
+                      "기존 대안과 비교한 장점은 무엇입니까?", "실패 조건과 대응 방안은 무엇입니까?",
+                      "적용 대상의 한계는 어디까지입니까?", "추가 검증에 필요한 자료는 무엇입니까?",
+                      "성과 평가 시점과 지표를 어떻게 정합니까?", "확장 단계의 병목을 어떻게 해결합니까?",
+                      "사용자에게 미치는 부작용은 어떻게 확인합니까?", "반대 근거가 나오면 결론을 어떻게 수정합니까?"]
+            for n, angle in enumerate(angles):
+                if len(questions) == count:
+                    break
+                key = list(evidence)[n % len(evidence)]
+                section = evidence[key]
+                excerpt = " ".join(section.text.split("\n", 1)[-1].split())[:40]
+                focus = (persona.description or persona.role)[:80]
+                accept(f"{focus} 관점에서 자료의 「{excerpt}」에 대한 {angle}", [key], focus, "template")
+            if len(questions) > model_count:
+                warnings.append("일부 질문은 모델 생성 대신 발표 근거로 구성한 보충 질문입니다.")
+            if len(questions) < count:
+                warnings.append("근거 또는 질문 다양성이 부족해 요청 개수보다 적게 제공했습니다.")
+            total = sum(len([x for x in d.sections if x.text.strip()]) for d in all_documents)
+            analyzed = len(synthetic.sections)
+            original_chars = sum(len(s.text) for d in all_documents for s in d.sections)
+            selected_chars = sum(len(s.text.split("\n", 1)[-1]) for s in synthetic.sections)
             return PersonaQuestionResult(
-                persona_id=persona.agent_id,
-                persona_name=persona.name,
-                persona_role=persona.role,
-                avatar_data_url=_avatar_data_url(
-                    persona.name, persona.role, persona.gender, persona.age
-                ),
-                questions=[ExpectedQuestion(question=item, sources=sources) for item in unique],
+                persona_id=persona.agent_id, persona_name=persona.name, persona_role=persona.role,
+                avatar_data_url=_avatar_data_url(persona.name, persona.role, persona.gender, persona.age),
+                questions=questions, requested_count=count, generated_count=len(questions),
+                status="partial" if len(questions) < count else ("fallback" if model_count < count else "complete"),
+                warnings=warnings,
+                coverage=Coverage(total_chunks=total, analyzed_chunks=analyzed,
+                    truncated=analyzed < total or selected_chars < original_chars,
+                    selection_method="vector" if retrieved else "even_sample"),
             )
 
-        results = await asyncio.gather(*(generate_for_persona(persona) for persona in personas))
-        return ExpectedQuestionResponse(results=list(results))
+        results = []
+        for persona in personas:
+            results.append(await generate_for_persona(persona))
+        response = ExpectedQuestionResponse(results=results)
+        session = PracticeSession(request=request, response=response)
+        response.session_id = session.session_id
+        await self.session_repository.save(session, owner_id)
+        return response
+
+    async def list_sessions(self, owner_id):
+        return await self.session_repository.list(owner_id)
+
+    async def get_session(self, session_id, owner_id):
+        session = await self.session_repository.get(session_id, owner_id)
+        if session is None:
+            raise PracticeResourceNotFoundError("연습 기록을 찾을 수 없습니다.")
+        active = {p.agent_id for p in await self.agent_repository.list(owner_id, deleted=False)}
+        documents = {d.document_id for d in await self.document_repository.list(owner_id)}
+        if set(session.request.persona_ids) - active or set(session.request.presentation_document_ids) - documents:
+            session.warnings.append("삭제되었거나 휴지통에 있는 질문자·자료는 복구 대상에서 제외했습니다.")
+        session.response.results = [r for r in session.response.results if r.persona_id in active]
+        for result in session.response.results:
+            for question in result.questions:
+                question.sources = [source for source in question.sources if source.document_id in documents]
+        return session

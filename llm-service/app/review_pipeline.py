@@ -191,5 +191,6 @@ def generate_review_map_reduce(
         total_chunks=len(chunks),
         analyzed_chunks=sum(len(group) for group in groups),
         truncated=truncated,
+        selection_method="even_sample" if truncated else "full",
     )
     return response.model_copy(update={"coverage": coverage})

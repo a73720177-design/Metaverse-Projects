@@ -1,3 +1,4 @@
+from contextlib import aclosing
 import asyncio
 import logging
 from time import perf_counter
@@ -122,7 +123,6 @@ class ChatService:
                 except Exception:
                     logger.warning(
                         "Vector search failed; falling back to lexical RAG",
-                        exc_info=True,
                     )
                 if document is not None:
                     return persona, effective_request, document, history
@@ -264,11 +264,12 @@ class ChatService:
             llm_started = perf_counter()
             first_content_at: float | None = None
             try:
-                async for token in stream_method(persona, effective_request, document, history):
-                    if token and first_content_at is None:
-                        first_content_at = perf_counter()
-                    parts.append(token)
-                    yield {"event": "token", "data": {"token": token}}
+                async with aclosing(stream_method(persona, effective_request, document, history)) as upstream:
+                    async for token in upstream:
+                        if token and first_content_at is None:
+                            first_content_at = perf_counter()
+                        parts.append(token)
+                        yield {"event": "token", "data": {"token": token}}
                 generation_finished = perf_counter()
                 answer = "".join(parts).strip()
                 if not answer:

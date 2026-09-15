@@ -46,6 +46,14 @@ class ReviewGenerator(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class QuestionGenerator(Protocol):
+    async def generate(
+        self, persona: PersonaProfile, document: DocumentParseResponse,
+        instructions: str | None, *, question_count: int = 5,
+        excluded_questions: list[str] | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class ChatGenerator(Protocol):
     async def generate(
         self,

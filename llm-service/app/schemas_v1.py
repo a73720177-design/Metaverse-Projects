@@ -118,6 +118,7 @@ class ReviewCoverage(BaseModel):
     total_chunks: int = Field(ge=0)
     analyzed_chunks: int = Field(ge=0)
     truncated: bool = False
+    selection_method: str = "full"
 
 
 class ReviewGenerationResponse(BaseModel):
@@ -129,10 +130,27 @@ class ReviewGenerationResponse(BaseModel):
     coverage: ReviewCoverage | None = None
 
 
+class QuestionEvidence(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    scope: Literal["presentation", "persona_reference"]
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class ExpectedQuestionGenerationRequest(BaseModel):
+    persona: PersonaProfileIn
+    question_count: int = Field(default=5, ge=1, le=10)
+    evidence: list[QuestionEvidence] = Field(min_length=1, max_length=80)
+    excluded_questions: list[str] = Field(default_factory=list, max_length=40)
+
+
+class GeneratedQuestion(BaseModel):
+    question: str = Field(min_length=12, max_length=500)
+    presentation_evidence_ids: list[str] = Field(min_length=1, max_length=3)
+    focus: str = Field(min_length=1, max_length=150)
+
+
 class ExpectedQuestionGenerationResponse(BaseModel):
-    questions: list[Annotated[str, Field(min_length=12, max_length=500)]] = Field(
-        min_length=5, max_length=5
-    )
+    questions: list[GeneratedQuestion] = Field(max_length=10)
 
 
 class ChatTurn(BaseModel):
@@ -186,6 +204,7 @@ class SummaryGenerationRequest(BaseModel):
 
 
 class SummaryGenerationResponse(BaseModel):
+    coverage: ReviewCoverage | None = None
     summary: str = Field(min_length=1)
     key_topics: list[KeyTopic] = Field(default_factory=list, max_length=8)
     outline: list[str] = Field(default_factory=list, max_length=20)

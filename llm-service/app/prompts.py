@@ -26,6 +26,7 @@ from app.schemas_v1 import (
     PersonaTrait,
     QuestionStrategy,
     ReviewGenerationRequest,
+    ExpectedQuestionGenerationRequest,
 )
 
 # 리뷰 품질 추적/회귀 비교용. 프롬프트 문구를 바꿀 때마다 갱신한다.
@@ -590,11 +591,20 @@ def build_review_prompt(request: ReviewGenerationRequest) -> str:
     )
 
 
-def build_expected_question_prompt(request: ReviewGenerationRequest) -> str:
-    return EXPECTED_QUESTION_PROMPT.format(
-        persona_block=render_persona(request.persona),
-        document_block=render_document(request.document, with_index=True),
-        instructions_block=render_instructions(request.instructions),
+def build_expected_question_prompt(request: ExpectedQuestionGenerationRequest) -> str:
+    import json
+    return (
+        "평가자 관점으로 발표 자료의 예상 질문을 만드세요.\n"
+        + render_persona(request.persona)
+        + f"\n정확히 {request.question_count}개를 생성하세요. 질문마다 구체적인 발표 주장과 관점을 적으세요.\n"
+        + "응답 questions의 각 항목: question, presentation_evidence_ids, focus.\n"
+        + "presentation_evidence_ids에는 scope=presentation인 근거 ID만 쓰세요. "
+        + "persona_reference는 평가 기준으로만 사용하고 발표자가 그 자료를 주장했다고 전제하지 마세요.\n"
+        + "자료의 실제 용어를 질문에 포함하고 자료에 없는 수치를 만들지 마세요. "
+        + "아래 제외 질문과 같은 질문이나 표현만 바꾼 질문을 만들지 마세요.\n"
+        + "=== 자료 시작 ===\n" + json.dumps([e.model_dump() for e in request.evidence], ensure_ascii=False)
+        + "\n=== 자료 끝 ===\n제외 질문: " + json.dumps(request.excluded_questions, ensure_ascii=False)
+        + "\n" + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
     )
 
 

@@ -50,6 +50,14 @@ class InMemorySummaryRepository:
                 return summary
         return None
 
+    async def remove_agent(self, agent_id, owner_id):
+        self._summaries = {key: (o, s) for key, (o, s) in self._summaries.items()
+                           if not (o == owner_id and s.agent_id == agent_id)}
+
+    async def remove_document(self, document_id, owner_id):
+        self._summaries = {key: (o, s) for key, (o, s) in self._summaries.items()
+                           if not (o == owner_id and s.document_id == document_id)}
+
 
 class PostgresSummaryRepository:
     async def save(self, summary: SummaryResult, owner_id: UUID) -> SummaryResult:
@@ -63,6 +71,7 @@ class PostgresSummaryRepository:
             summary=summary.summary,
             key_topics=data["key_topics"],
             outline=data["outline"],
+            coverage=data["coverage"],
             created_at=summary.created_at,
         )
         async with get_session_factory()() as session:
@@ -133,6 +142,7 @@ class PostgresSummaryRepository:
                 "summary": row.summary,
                 "key_topics": row.key_topics,
                 "outline": row.outline,
+                "coverage": row.coverage,
                 "created_at": row.created_at,
             }
         )

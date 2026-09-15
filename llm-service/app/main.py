@@ -34,7 +34,7 @@ from app.llm_client import (
     embed_texts,
     call_llm,
     check_ollama_health,
-    stream_llm,
+    stream_llm_async as stream_llm,
 )
 from app.prompts import (
     SUMMARY_GENERATION_PROMPT,
@@ -45,7 +45,7 @@ from app.prompts import (
     trim_context_to_chunks,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
-from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
+from app.response_sanitizer import clean_chat_text, extract_json_object, ReasoningFilter, sanitize_payload
 from app.summary_pipeline import (
     generate_summary_map_reduce,
     persona_block,
@@ -60,7 +60,9 @@ from app.schemas_v1 import (
     PersonaGenerationResponse,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    ReviewCoverage,
     ExpectedQuestionGenerationResponse,
+    ExpectedQuestionGenerationRequest,
     EmbeddingRequest,
     EmbeddingResponse,
     SummaryGenerationRequest,
@@ -93,9 +95,8 @@ def _call_llm_as_json(
             max_tokens=max_tokens, think=think,
         )
     except LLMError:
-        # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
-        # 클라이언트에는 일반화된 메시지만 반환한다.
-        logger.exception("Ollama 호출 실패")
+        # 로그와 응답 모두 내부 주소·예외 원문을 제외한다.
+        logger.error("Ollama 호출 실패")
         raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
 
     try:
@@ -129,7 +130,7 @@ def _call_llm_as_text(
         try:
             raw = call_llm(current_prompt, model=model, max_tokens=max_tokens)
         except LLMError:
-            logger.exception("Ollama 채팅 호출 실패")
+            logger.error("Ollama 채팅 호출 실패")
             raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
         if not isinstance(raw, str):
             raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
@@ -256,22 +257,24 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
     # claims를 3~5개(스키마 상한 20보다 훨씬 보수적으로)로 제한해도, 근거
     # 인용(excerpt)·questions까지 더하면 기존 1024 토큰은 여유가 빠듯해
     # 502(JSON 파싱 실패)로 이어지기 쉬웠다. 1536으로 올려 여유를 둔다.
-    return _generate(
+    response = _generate(
         build_review_prompt(request), ReviewGenerationResponse,
         max_tokens=1536, model=OLLAMA_REVIEW_MODEL,
     )
+    total = len([s for s in request.document.sections if s.text.strip()]) or 1
+    return response.model_copy(update={"coverage": ReviewCoverage(
+        total_chunks=total, analyzed_chunks=total, truncated=False, selection_method="full")})
 
 
 @v1_router.post("/practice/questions", response_model=ExpectedQuestionGenerationResponse)
 def generate_expected_questions(
-    request: ReviewGenerationRequest,
+    request: ExpectedQuestionGenerationRequest,
 ) -> ExpectedQuestionGenerationResponse:
     return _generate(
         build_expected_question_prompt(request),
         ExpectedQuestionGenerationResponse,
-        # Five focused questions fit within this budget. Letting CPU-based
-        # structured generation run to 1024 caused repetition and timeouts.
-        max_tokens=640,
+        # Reserve output for the requested count, including evidence IDs and focus.
+        max_tokens=min(2048, 200 * request.question_count + 128),
         model=OLLAMA_QUESTION_MODEL,
     )
 
@@ -295,10 +298,13 @@ def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResp
             generate=_generate,
             model=OLLAMA_SUMMARY_MODEL,
         )
-    return _generate(
+    response = _generate(
         _build_summary_prompt(request), SummaryGenerationResponse,
         max_tokens=style_max_tokens(request.style), model=OLLAMA_SUMMARY_MODEL,
     )
+    total = len([s for s in request.document.sections if s.text.strip()]) or 1
+    return response.model_copy(update={"coverage": ReviewCoverage(
+        total_chunks=total, analyzed_chunks=total, truncated=False, selection_method="full")})
 
 
 @v1_router.post("/embeddings", response_model=EmbeddingResponse)
@@ -335,42 +341,50 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
 
 
 @v1_router.post("/chat/stream")
-def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
+async def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
     effective_request = _fit_chat_context(request)
 
-    def events():
+    async def events():
+        from contextlib import aclosing
+        reasoning = ReasoningFilter()
+        emitted = False
+        line_breaks = 0
+        output_chars = 0
         try:
-            tokens = list(safe_stream(stream_llm(
-                build_effective_chat_prompt(effective_request),
-                model=CHAT_MODEL,
-                max_tokens=request.max_output_tokens,
-            )))
-            if _contains_chinese_text("".join(tokens)):
-                tokens = [_call_llm_as_text(
-                    build_effective_chat_prompt(effective_request),
-                    model=CHAT_MODEL,
-                    max_tokens=request.max_output_tokens,
-                )]
-            emitted = False
-            for token in tokens:
-                emitted = emitted or bool(token.strip())
-                data = json.dumps({"token": token}, ensure_ascii=False)
-                yield f"event: token\ndata: {data}\n\n"
+            async with aclosing(stream_llm(build_effective_chat_prompt(effective_request),
+                                           model=CHAT_MODEL, max_tokens=request.max_output_tokens)) as tokens:
+                async for token in tokens:
+                    output_chars += len(token)
+                    if output_chars > 200_000:
+                        raise LLMError("출력 한도 초과")
+                    visible = reasoning.feed(token)
+                    if _contains_chinese_text(visible):
+                        raise LLMError("한국어 답변 생성 실패")
+                    remaining = 30 - line_breaks
+                    pieces = visible.split("\n")
+                    at_limit = len(pieces) > remaining
+                    visible = "\n".join(pieces[:remaining])
+                    if visible:
+                        emitted = emitted or bool(visible.strip())
+                        yield "event: token\ndata: " + json.dumps({"token": visible}, ensure_ascii=False) + "\n\n"
+                        line_breaks += visible.count("\n")
+                    if at_limit:
+                        break
+            tail = reasoning.feed("", final=True)
+            if _contains_chinese_text(tail):
+                raise LLMError("한국어 답변 생성 실패")
+            if tail and line_breaks < 30:
+                emitted = emitted or bool(tail.strip())
+                yield "event: token\ndata: " + json.dumps({"token": tail}, ensure_ascii=False) + "\n\n"
             if not emitted:
-                data = json.dumps({"message": "LLM이 빈 답변을 반환했습니다."}, ensure_ascii=False)
-                yield f"event: error\ndata: {data}\n\n"
-                return
+                raise LLMError("유효한 답변 없음")
             yield "event: done\ndata: {}\n\n"
-        except LLMError:
-            logger.exception("Ollama 채팅 스트리밍 실패")
-            data = json.dumps({"message": "LLM 서버에 연결할 수 없습니다."}, ensure_ascii=False)
-            yield f"event: error\ndata: {data}\n\n"
+        except (LLMError, ValueError):
+            logger.error("Chat stream failed")
+            yield 'event: error\ndata: {"message":"답변 생성에 실패했습니다. 다시 시도해 주세요."}\n\n'
 
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 app.include_router(v1_router)

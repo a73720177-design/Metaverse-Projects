@@ -351,10 +351,11 @@ def test_build_review_prompt_fills_all_placeholders():
 
 
 def test_expected_question_prompt_is_focused_and_persona_grounded():
-    request = ReviewGenerationRequest(
+    from app.schemas_v1 import ExpectedQuestionGenerationRequest
+    request = ExpectedQuestionGenerationRequest(
         persona=_persona(name="투자자", description="수익성을 검증한다"),
-        document=_document(sections=[], full_text="고객 전환율은 12%이다."),
-        instructions="예상 질문을 5개 생성하세요.",
+        question_count=5,
+        evidence=[{"id": "e1", "scope": "presentation", "text": "고객 전환율은 12%이다."}],
     )
     prompt = build_expected_question_prompt(request)
     assert _UNFILLED_PLACEHOLDER_RE.search(prompt) is None

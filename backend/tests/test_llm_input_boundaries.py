@@ -140,3 +140,50 @@ def test_max_description_with_references_create_and_update(receiving_schema):
         assert body["reference_context"].startswith("[평가기준.pdf]\n근거 자료")
         assert len(body["reference_context"]) <= 3000
         assert "document_ids" not in body
+
+
+@pytest.mark.parametrize("count", [1, 5, 10])
+def test_question_count_evidence_and_saved_session_round_trip(receiving_schema, monkeypatch, count):
+    from app.integrations.llm.generators import HttpQuestionGenerator
+    from app.models.practice import ExpectedQuestionRequest
+    from app.services.practice_service import PracticeService, PracticeResourceNotFoundError
+    monkeypatch.setenv("RAG_MODE", "lexical")
+    owner = uuid4()
+    document = DocumentParseResponse(filename="발표.pdf", document_type="pdf", saved_path=Path("unused"),
+        sections=[DocumentSection(index=1, text="측정 " + " ".join(f"검증항목{i}" for i in range(10)))],
+        full_text="측정 " + " ".join(f"검증항목{i}" for i in range(10)))
+    persona = PersonaProfile(name="연구자", description="재현성과 측정 신뢰성을 검증한다")
+    bodies = []
+    async def handler(request):
+        body = json.loads(request.content)
+        receiving_schema.ExpectedQuestionGenerationRequest.model_validate(body)
+        bodies.append(body)
+        questions = [{"question": f"검증항목{i}의 조건{i}와 절차{i}가 결과{i}에 미친 영향을 설명해 주세요?",
+                      "presentation_evidence_ids": ["e1"], "focus": f"검증항목{i}"} for i in range(count)]
+        response = {"questions": questions}
+        receiving_schema.ExpectedQuestionGenerationResponse.model_validate(response)
+        return httpx.Response(200, json=response)
+    async def run():
+        agents, documents = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        await agents.save(persona, owner)
+        await documents.save(document, owner)
+        service = PracticeService(HttpQuestionGenerator(HttpLlmClient(httpx.MockTransport(handler))), agents, documents)
+        response = await service.generate_expected_questions(ExpectedQuestionRequest(persona_ids=[persona.agent_id],
+            presentation_document_ids=[document.document_id], question_count_per_persona=count), owner)
+        result = response.results[0]
+        assert result.generated_count == count
+        assert result.status == "complete"
+        assert all(q.origin == "model" and q.sources[0].document_id == document.document_id for q in result.questions)
+        saved = await service.get_session(response.session_id, owner)
+        assert saved.response == response
+        assert [q.conversation_id for q in saved.response.results[0].questions] == [q.conversation_id for q in result.questions]
+        assert await service.list_sessions(uuid4()) == []
+        with pytest.raises(PracticeResourceNotFoundError):
+            await service.get_session(response.session_id, uuid4())
+        await agents.set_deleted(persona.agent_id, owner, deleted=True)
+        assert (await service.get_session(response.session_id, owner)).response.results == []
+        await agents.set_deleted(persona.agent_id, owner, deleted=False)
+        assert (await service.get_session(response.session_id, owner)).response == response
+    asyncio.run(run())
+    assert len(bodies) == 1
+    assert bodies[0]["question_count"] == count
