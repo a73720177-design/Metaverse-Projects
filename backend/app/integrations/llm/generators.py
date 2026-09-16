@@ -43,9 +43,14 @@ class LocalPersonaGenerator:
         if not request.description.strip():
             raise PersonaGeneratorError("평가자 설명이 필요합니다.")
         return {
-            "role": "Evaluator",
+            "role": "기본 평가자 (로컬 모드)",
             "expertise": [],
-            "evaluation_style": [],
+            "evaluation_style": [{
+                "value": request.description.strip()[:300],
+                "status": "user_stated", "confidence": 1.0,
+                "evidence": [{"source_id": "description",
+                              "summary": request.description.strip()[:60], "confidence": 1.0}],
+            }],
         }
 
 

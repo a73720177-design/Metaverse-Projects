@@ -6,6 +6,7 @@ import re
 from uuid import UUID
 from app.models.coverage import Coverage
 from app.services.content_budget import assess_content
+from app.services.source_evidence import select_excerpts
 from app.models.practice import PracticeSession
 from app.repositories.practice_repository import InMemoryPracticeRepository
 
@@ -216,15 +217,10 @@ class PracticeService:
                 selector = DocumentContextSelector()
                 sampled = []
                 for document in all_documents:
-                    nonempty = [section for section in document.sections if section.text.strip()]
-                    indices = sorted({0, len(nonempty) // 2, len(nonempty) - 1}) if nonempty else []
-                    chosen = [nonempty[i] for i in indices]
-                    # Bound each selected section so the first page cannot consume
-                    # the entire document budget before middle/end pages appear.
-                    per_section = max(1, (selector.max_context_chars // max(1, len(all_documents)) - 240) // max(1, len(chosen)))
-                    sampled.append(document.model_copy(update={"sections": [
-                        section.model_copy(update={"text": section.text[:per_section]}) for section in chosen
-                    ]}))
+                    share = selector.max_context_chars // max(1, len(all_documents))
+                    budget = max(1, share - min(600, share // 3))
+                    sampled.append(document.model_copy(update={"sections":
+                        select_excerpts(document, budget, retrieval_query)}))
                 synthetic = combine_document_contexts(sampled, selector.max_context_chars)
                 if synthetic is not None:
                     presentation_ids = {
@@ -259,7 +255,7 @@ class PracticeService:
             if not evidence:
                 raise PracticeServiceError("선택한 발표 자료에 질문 생성에 사용할 텍스트가 없습니다.")
             questions: list[ExpectedQuestion] = []
-            warnings = []
+            warnings = list(persona.warnings)
             assessment = assess_content(
                 section.text.split("\n", 1)[-1] for section in evidence.values()
             )
@@ -310,10 +306,12 @@ class PracticeService:
                     break
             if len(questions) < requested_count:
                 warnings.append("근거가 확인되고 중복되지 않는 질문만 제공했습니다. 구체적인 주장·검증 결과·사례를 추가하면 질문 범위를 넓힐 수 있습니다.")
-            total = sum(len([x for x in d.sections if x.text.strip()]) for d in all_documents)
-            analyzed = len(synthetic.sections)
-            original_chars = sum(len(s.text) for d in all_documents for s in d.sections)
+            total = sum(len([x for x in d.sections if x.text.strip()]) or bool(d.full_text.strip()) for d in all_documents)
+            analyzed = len({(s.source_document_id, s.index) for s in synthetic.sections})
+            original_chars = sum(sum(len(s.text) for s in d.sections) or len(d.full_text) for d in all_documents)
             selected_chars = sum(len(s.text.split("\n", 1)[-1]) for s in synthetic.sections)
+            if analyzed < total or selected_chars < original_chars:
+                warnings.append("전체 원문 중 선택한 발췌만 질문 생성에 사용했습니다. 선택되지 않은 내용은 평가하지 않았습니다.")
             return PersonaQuestionResult(
                 persona_id=persona.agent_id, persona_name=persona.name, persona_role=persona.role,
                 avatar_data_url=_avatar_data_url(persona.name, persona.role, persona.gender, persona.age),
@@ -323,7 +321,7 @@ class PracticeService:
                 warnings=warnings,
                 coverage=Coverage(total_chunks=total, analyzed_chunks=analyzed,
                     truncated=analyzed < total or selected_chars < original_chars,
-                    selection_method="vector" if retrieved else "even_sample"),
+                    selection_method="vector" if retrieved else "overview_and_relevance"),
             )
 
         results = []

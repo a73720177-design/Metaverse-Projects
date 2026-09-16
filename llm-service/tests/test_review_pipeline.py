@@ -196,7 +196,7 @@ def test_generate_review_map_reduce_keeps_section_index_as_page(monkeypatch):
                     verdict="supported",
                     confidence=0.9,
                     sources=[
-                        ReviewSource(filename="doc.pdf", page=section_index, excerpt="근거")
+                        ReviewSource(filename="doc.pdf", page=section_index, excerpt=document.sections[section_index - 1].text)
                     ],
                 )
             ]
@@ -213,3 +213,15 @@ def test_generate_review_map_reduce_keeps_section_index_as_page(monkeypatch):
     claims_json = reduce_prompt_holder["prompt"]
     assert '"page": 1' in claims_json
     assert '"page": 2' in claims_json
+
+
+def test_map_citations_are_checked_before_reduce():
+    from app.review_pipeline import _verify_map_claims, ReviewChunk
+    from app.schemas_v1 import ClaimAssessment
+    def claim(page, excerpt):
+        return ClaimAssessment(claim="실험 결과", verdict="supported", confidence=.9,
+                               sources=[{"filename": "발표.pdf", "page": page, "excerpt": excerpt}])
+    claims = [claim(1, "성능이 개선되었습니다."), claim(2, "성능이 개선되었습니다."), claim(1, "매출 증가")]
+    result = list(_verify_map_claims(claims, [ReviewChunk(1, "성능이 개선되었습니다.")], "발표.pdf"))
+    assert len(result) == 1
+    assert result[0].sources[0].page == 1

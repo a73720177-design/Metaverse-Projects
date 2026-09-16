@@ -126,7 +126,7 @@ def test_v1_review_contract_excludes_private_storage_path() -> None:
                                 "document_id": str(document.document_id),
                                 "filename": document.filename,
                                 "page": 1,
-                                "excerpt": "근거",
+                                "excerpt": "발표 내용",
                             }
                         ],
                     }

@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class EvidenceStatus(StrEnum):
@@ -69,6 +69,19 @@ class PersonaProfile(BaseModel):
     expertise: list[PersonaTrait] = Field(default_factory=list)
     evaluation_style: list[PersonaTrait] = Field(default_factory=list)
     document_ids: list[UUID] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def warnings(self) -> list[str]:
+        warnings = []
+        if self.role == "기본 평가자 (로컬 모드)":
+            warnings.append("로컬 모드: 입력한 설명을 평가 관점으로 사용하며, 모델의 전문성·참고자료 분석은 수행하지 않았습니다.")
+        traits = [*self.expertise, *self.evaluation_style]
+        if not any(t.status in {"user_stated", "supported", "inferred"} for t in traits):
+            warnings.append("근거가 확인된 전문 분야·평가 스타일이 없습니다. 설명이나 참고자료를 보강해 수정해주세요.")
+        if any(t.status == "unknown" for t in traits):
+            warnings.append("원문 근거가 확인되지 않은 특성은 평가 관점에서 제외했습니다.")
+        return warnings
 
 
 class PersonaDocumentsUpdate(BaseModel):

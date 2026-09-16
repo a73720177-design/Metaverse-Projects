@@ -3,9 +3,10 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from app.models.persona import (
-    PersonaCreateRequest, PersonaHistoryItem, PersonaProfile, PersonaUpdateRequest,
+    PersonaCreateRequest, PersonaHistoryItem, PersonaProfile, PersonaUpdateRequest, EvidenceStatus,
 )
 from app.models.document import DocumentParseResponse
+from app.services.source_evidence import normalized, select_excerpts
 from app.integrations.llm.contracts import (
     PersonaGenerationRequest, PersonaGenerator, PersonaGeneratorError,
 )
@@ -57,32 +58,42 @@ class PersonaService:
         request: PersonaCreateRequest, documents: list[DocumentParseResponse]
     ) -> PersonaGenerationRequest:
         """Give the generator bounded source evidence without persisting it as description."""
-        remaining = 3000
         excerpts: list[str] = []
-        for document in documents:
-            text = " ".join(document.full_text.split())
-            if not text:
-                continue
+        usable = [d for d in documents if d.full_text.strip() or any(s.text.strip() for s in d.sections)]
+        per_document = 3000 // max(1, len(usable))
+        for document in usable:
             header = f"[{document.filename}]\n"
-            separator = 2 if excerpts else 0
-            available = remaining - separator - len(header)
-            if available <= 0:
-                break
-            excerpt = header + text[:available]
-            excerpts.append(excerpt)
-            remaining -= separator + len(excerpt)
+            available = per_document - len(header) - 2
+            selected = select_excerpts(document, max(0, available - 32), request.description)
+            if selected:
+                excerpts.append(header + "\n…\n".join(s.text for s in selected))
         return PersonaGenerationRequest(
             name=request.name,
             description=request.description,
-            reference_context="\n\n".join(excerpts),
+            reference_context="\n\n".join(excerpts)[:3000],
         )
+
+    @staticmethod
+    def _verify_traits(persona: PersonaProfile, request: PersonaGenerationRequest) -> None:
+        sources = {"description": normalized(request.description),
+                   "reference_context": normalized(request.reference_context)}
+        for trait in [*persona.expertise, *persona.evaluation_style]:
+            trait.evidence = [e for e in trait.evidence
+                              if normalized(e.summary) and
+                              normalized(e.summary) in sources.get(e.source_id, "")]
+            if not trait.evidence:
+                trait.status = EvidenceStatus.UNKNOWN
+                trait.confidence = 0
+            elif trait.status == "user_stated" and not any(
+                e.source_id == "description" for e in trait.evidence
+            ):
+                trait.status = EvidenceStatus.INFERRED
 
     async def create(self, request: PersonaCreateRequest, owner_id: UUID) -> PersonaProfile:
         documents = await self._owned_documents(request.document_ids, owner_id)
         try:
-            generated = await self.generator.generate(
-                self._generation_request(request, documents)
-            )
+            generation_request = self._generation_request(request, documents)
+            generated = await self.generator.generate(generation_request)
             persona = PersonaProfile.model_validate(
                 {
                     **generated,
@@ -97,6 +108,7 @@ class PersonaService:
         except (PersonaGeneratorError, ValidationError) as exc:
             raise UpstreamServiceError("Persona generator returned an invalid response") from exc
 
+        self._verify_traits(persona, generation_request)
         await self.repository.save(persona, owner_id)
         return persona
 
@@ -111,9 +123,8 @@ class PersonaService:
             raise PersonaNotFoundError("질문자를 찾을 수 없습니다.")
         documents = await self._owned_documents(request.document_ids, owner_id)
         try:
-            generated = await self.generator.generate(
-                self._generation_request(request, documents)
-            )
+            generation_request = self._generation_request(request, documents)
+            generated = await self.generator.generate(generation_request)
             updated = PersonaProfile.model_validate({
                 **generated,
                 "agent_id": current.agent_id,
@@ -125,6 +136,7 @@ class PersonaService:
             })
         except (PersonaGeneratorError, ValidationError) as exc:
             raise UpstreamServiceError("Persona generator returned an invalid response") from exc
+        self._verify_traits(updated, generation_request)
         await self.repository.save(updated, owner_id)
         return updated
 

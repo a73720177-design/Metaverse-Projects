@@ -229,7 +229,7 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
     if (should_use_map_reduce(document_text(request.document))
-            or not prompt_fits(build_review_prompt(request), 1536)):
+            or not prompt_fits(build_review_prompt(request), 2048)):
         return generate_review_map_reduce(
             persona=request.persona,
             document=request.document,
@@ -237,12 +237,11 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
             generate=_generate,
             model=OLLAMA_REVIEW_MODEL,
         )
-    # claims를 3~5개(스키마 상한 20보다 훨씬 보수적으로)로 제한해도, 근거
-    # 인용(excerpt)·questions까지 더하면 기존 1024 토큰은 여유가 빠듯해
-    # 502(JSON 파싱 실패)로 이어지기 쉬웠다. 1536으로 올려 여유를 둔다.
+    # Reserve output space for claim citations and both feedback source lists.
+    # The routing check above uses the same budget to avoid context overflow.
     response = _generate(
         build_review_prompt(request), ReviewGenerationResponse,
-        max_tokens=1536, model=OLLAMA_REVIEW_MODEL,
+        max_tokens=2048, model=OLLAMA_REVIEW_MODEL,
     )
     total = len([s for s in request.document.sections if s.text.strip()]) or 1
     return response.model_copy(update={"coverage": ReviewCoverage(

@@ -31,6 +31,10 @@ class ClaimAssessment(BaseModel):
 class ReviewFeedback(BaseModel):
     positive: str
     negative: str
+    positive_sources: list[ReviewSource] = Field(default_factory=list)
+    negative_sources: list[ReviewSource] = Field(default_factory=list)
+    verification_warnings: list[str] = Field(default_factory=list)
+    source_check_performed: bool = False
 
 
 class ReviewCreateRequest(BaseModel):

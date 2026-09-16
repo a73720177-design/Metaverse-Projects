@@ -50,6 +50,24 @@ class ReviewChunk:
     text: str
 
 
+def _verify_map_claims(claims, group, filename):
+    """Do not let invented map citations become evidence in the reduce step."""
+    for claim in claims:
+        valid = []
+        for source in claim.sources:
+            quote = " ".join((source.excerpt or "").split())
+            if source.filename == filename and quote and any(
+                (source.page is None or source.page == chunk.section_index)
+                and quote in " ".join(chunk.text.split()) for chunk in group
+            ):
+                valid.append(source)
+        claim.sources = valid
+        if not valid:
+            # An ungrounded model claim must not feed final prose as source data.
+            continue
+        yield claim
+
+
 def _positive_env_int(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
@@ -180,7 +198,8 @@ def generate_review_map_reduce(
     all_claims: list[dict] = []
     for group in groups:
         result = generate(map_prompt(group), _MapResult, max_tokens=768, model=model)
-        all_claims.extend(claim.model_dump(mode="json") for claim in result.claims)
+        all_claims.extend(claim.model_dump(mode="json") for claim in
+                          _verify_map_claims(result.claims, group, document.filename))
 
     def final_prompt(claims):
         prompt = REVIEW_REDUCE_PROMPT.format(
