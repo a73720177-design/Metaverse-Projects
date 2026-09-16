@@ -4,7 +4,7 @@ PPTX·PDF·DOCX 발표 자료를 업로드하고 평가자 페르소나의 관�
 
 ## 아키텍처
 
-모델 문맥 예산, 비전 모델 유지, 긴 문서 전체 분석, 선택적 검색 재정렬 설정은 [모델 파이프라인 개선 안내](docs/model-pipeline-improvements.md)를 참고하세요.
+모델 문맥 예산, 비전 모델 유지, 긴 문서 전체 분석 설정은 [모델 파이프라인 개선 안내](docs/model-pipeline-improvements.md)를 참고하세요.
 
 ```text
 React + Vite :5173

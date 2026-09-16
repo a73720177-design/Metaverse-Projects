@@ -217,15 +217,13 @@ async def test_postgres_vector_search_diversifies_hits_and_excludes_other_source
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rerank_mode", ["off", "local"])
 async def test_vector_search_filters_weak_hits_and_applies_final_k(
-    monkeypatch: pytest.MonkeyPatch, rerank_mode,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import app.services.vector_rag as module
 
     monkeypatch.setenv("VECTOR_RAG_MAX_DISTANCE", "0.4")
     monkeypatch.setenv("VECTOR_RAG_FINAL_K", "2")
-    monkeypatch.setenv("RAG_RERANK_MODE", rerank_mode)
     owner = uuid4()
     document = _document("slides.pdf", "근거")
     rows = [
@@ -250,7 +248,7 @@ async def test_vector_search_filters_weak_hits_and_applies_final_k(
 
     hits = await VectorRag(client).search_hits([document], "근거", owner)
 
-    assert [hit.chunk_index for hit in hits] == ([1, 2, 3] if rerank_mode == "local" else [1, 2])
+    assert [hit.chunk_index for hit in hits] == [1, 2]
 
 
 @pytest.mark.asyncio
