@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { validateFiles, readWorkspace, newConversation } from './workspace-utils.mjs'
+import { documentDeletePrompt, validateFiles, readWorkspace, newConversation, shouldSubmitChatKey } from './workspace-utils.mjs'
 
 test('invalid storage and stale selections are safe', () => {
   assert.deepEqual(readWorkspace('{', [], []), { projectIds: [], selected: [] })
@@ -19,6 +19,18 @@ test('questions own separate identities and message arrays', () => {
   a.messages.push({ text: '답변' })
   assert.equal(b.messages.length, 1)
   assert.equal(b.messages[0].text, '다른 질문')
+})
+
+test('chat enter submits while shift-enter and Korean composition keep editing', () => {
+  assert.equal(shouldSubmitChatKey({ key: 'Enter' }), true)
+  assert.equal(shouldSubmitChatKey({ key: 'Enter', shiftKey: true }), false)
+  assert.equal(shouldSubmitChatKey({ key: 'Enter', isComposing: true }), false)
+  assert.equal(shouldSubmitChatKey({ key: 'Enter', keyCode: 229 }), false)
+  assert.equal(shouldSubmitChatKey({ key: 'a' }), false)
+})
+
+test('source deletion prompt names the file and clearly asks for confirmation', () => {
+  assert.equal(documentDeletePrompt('발표자료.pdf'), '정말 "발표자료.pdf" 을 삭제하시겠습니까?')
 })
 
  test('saved practice restores conversation identity and excludes trashed or other conversations', async () => {

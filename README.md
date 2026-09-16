@@ -52,7 +52,7 @@ Ollama :11434
 
 ## 기능 정합성 개선 배포
 
-1. 별도 테스트 DB에서 `001`~`013`을 순서대로 적용하고 재실행·Repository 테스트를 확인합니다. `013_add_result_metadata_and_practice_sessions.sql`은 Chat grounding, 리뷰·요약 coverage, 연습 세션을 저장합니다. Persona 완전 삭제 시 해당 요약도 삭제하여 일반 요약 캐시로 잘못 전환되지 않게 합니다. memory 모드에도 리뷰 참조 삭제 제한과 Persona 삭제 cascade를 적용했습니다.
+1. 별도 테스트 DB에서 `001`~`014`를 순서대로 적용하고 재실행·Repository 테스트를 확인합니다. `013_add_result_metadata_and_practice_sessions.sql`은 Chat grounding, 리뷰·요약 coverage, 연습 세션을 저장하고, `014_add_lexical_search_index.sql`은 PostgreSQL의 `pg_trgm` 기반 lexical 검색 인덱스를 추가합니다. Persona 완전 삭제 시 해당 요약도 삭제하여 일반 요약 캐시로 잘못 전환되지 않게 합니다. memory 모드에도 리뷰 참조 삭제 제한과 Persona 삭제 cascade를 적용했습니다.
 2. **예상 질문 내부 계약이 변경되었습니다.** 이전 `{persona, document, instructions}` / 문자열 질문 배열 대신 `{persona, question_count, evidence: [{id, scope, text}], excluded_questions}` / `{questions: [{question, presentation_evidence_ids, focus}]}`를 사용합니다. DB를 먼저 업그레이드하고 Backend와 LLM Service는 요청을 중단한 유지보수 구간에 함께 교체한 뒤 Frontend를 배포합니다. 서로 다른 버전을 섞지 않습니다.
 3. 질문 결과는 `requested_count`, `generated_count`, `status=complete|fallback|partial`, `warnings`, 질문별 `origin=model|template`를 포함합니다. evidence ID는 실제 전달한 발표 구간만 허용하며, 질문자 참고자료는 평가 관점으로만 사용합니다. 단어·수치·중복 검사는 의미적 사실 검증을 보장하지 않으므로 모델 품질 검증은 별도로 진행합니다.
 4. 롤백은 Backend·LLM·Frontend 버전을 함께 되돌리고 추가된 테이블·컬럼은 보존합니다. Persona 요약 cascade 정책까지 되돌리는 SQL은 `013` 하단에 안내되어 있습니다. 이미 완전 삭제된 행은 백업에서만 복구할 수 있습니다.
@@ -198,13 +198,13 @@ python -m backend.scripts.setup_test_db
 
 ## 문서 운영
 
-저장소에는 이 루트 `README.md`만 유지합니다. 상세 API 계약, DB 변경, 실행·장애 대응, 성능 기록, PR 설명 초안과 팀별 작업은 [프로젝트 Notion](https://app.notion.com/p/ICT-1e29aa63ac5a826b9f1981fca9529d8f)에서 관리합니다.
+버전에 종속되어 코드와 함께 검증해야 하는 API 계약·DB migration·실행 및 장애 대응 문서는 저장소에 유지합니다. 일정, 담당자, 회의 결정, 진행 상태와 PR 설명 초안은 [프로젝트 Notion](https://app.notion.com/p/ICT-1e29aa63ac5a826b9f1981fca9529d8f)에서 관리합니다.
 
 - 기술 계약·운영·성능: [기술 문서 허브](https://app.notion.com/p/3cb9aa63ac5a81759133f1e0fe055579)
 - 일정·담당·완료 조건: Notion Tasks
 - 엔드포인트 상세: Notion API 설계
 - 장애·의사결정·검증 증적: Notion 개발 스토리 기록소
-- PR 작성 시 별도 `docs/*.md`를 만들지 않고 Notion에 배경, 변경 범위, API·DB 영향, 테스트 결과, 배포·rollback, 후속 작업을 기록합니다.
+- 새 저장소 문서는 실행 코드와 함께 변경·검증되어야 하는 기술 계약에 한정합니다. PR의 배경, 일정, 담당, 테스트 증적과 후속 작업은 Notion에 기록합니다.
 
 ## 보안
 
