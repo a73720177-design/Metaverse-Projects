@@ -60,7 +60,8 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_db_health_reports_memory_mode_without_external_db() -> None:
+def test_db_health_reports_memory_mode_without_external_db(monkeypatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
     response = client.get("/health/db")
     assert response.status_code == 200
     assert response.json() == {
@@ -549,7 +550,9 @@ def test_llm_health_uses_versioned_http_service() -> None:
         app.dependency_overrides.clear()
 
 
-def test_services_health_reports_all_backend_dependencies() -> None:
+def test_services_health_reports_all_backend_dependencies(monkeypatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/health"
         return httpx.Response(200, json={"status": "ok"})

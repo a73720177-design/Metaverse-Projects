@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 from app.dependencies import (
+    get_agent_repository,
     get_current_user,
     get_document_repository,
     get_object_storage,
@@ -12,6 +13,7 @@ from app.dependencies import (
 from app.main import app
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.models.user import UserResponse
+from app.repositories.agent_repository import InMemoryAgentRepository
 from app.repositories.document_repository import InMemoryDocumentRepository
 
 
@@ -56,6 +58,7 @@ def test_document_list_get_delete_and_owner_isolation() -> None:
 
     asyncio.run(repository.save(document, OWNER.user_id))
     app.dependency_overrides[get_document_repository] = lambda: repository
+    app.dependency_overrides[get_agent_repository] = lambda: InMemoryAgentRepository()
     app.dependency_overrides[get_object_storage] = lambda: storage
     app.dependency_overrides[get_current_user] = lambda: OWNER
     client = TestClient(app)
