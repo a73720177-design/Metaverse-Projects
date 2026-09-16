@@ -600,7 +600,8 @@ def test_local_persona_fallback_uses_backend_input_without_llm_call() -> None:
             PersonaCreateRequest(name="Professor", description="근거를 중요하게 평가")
         )
     )
-    assert result["role"] == "Evaluator"
+    assert result["role"] == "기본 평가자 (로컬 모드)"
+    assert result["evaluation_style"][0]["value"] == "근거를 중요하게 평가"
 
 
 def test_database_failure_uses_safe_common_error_response() -> None:

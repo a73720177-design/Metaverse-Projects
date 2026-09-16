@@ -605,7 +605,7 @@ def test_review_long_document_uses_map_reduce(monkeypatch):
     assert len(calls) == len(map_calls) + len(reduce_calls)
     body = response.json()
     assert body["coverage"] is not None
-    assert body["feedback"] == {"positive": "p", "negative": "n"}
+    assert body["feedback"] == {"positive": "p", "negative": "n", "positive_sources": [], "negative_sources": []}
 
 
 def test_review_map_reduce_still_returns_valid_feedback_when_all_maps_empty(monkeypatch):

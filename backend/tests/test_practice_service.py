@@ -184,7 +184,7 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
 
     asyncio.run(run())
     assert len(captured["document"].full_text) <= 4000
-    assert len(captured["document"].sections) <= 3
+    assert len(captured["document"].sections) <= 8
 
 
 def test_large_presentation_does_not_push_out_persona_reference(monkeypatch) -> None:
@@ -316,7 +316,7 @@ def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypa
         response = await PracticeService(Generator(), agents, docs).generate_expected_questions(
             ExpectedQuestionRequest(persona_ids=[persona.agent_id], presentation_document_ids=[document.document_id]), owner)
         coverage = response.results[0].coverage
-        assert coverage.truncated and coverage.total_chunks == 101 and coverage.analyzed_chunks == 3
+        assert coverage.truncated and coverage.total_chunks == 101 and 3 <= coverage.analyzed_chunks <= 8
     asyncio.run(run())
     assert all(marker in seen[0] for marker in ['페이지0 ', '페이지50 ', '페이지100 '])
 

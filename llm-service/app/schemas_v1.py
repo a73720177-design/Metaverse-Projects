@@ -106,6 +106,8 @@ class ClaimAssessment(BaseModel):
 class ReviewFeedback(BaseModel):
     positive: str
     negative: str
+    positive_sources: list[ReviewSource] = Field(default_factory=list, max_length=2)
+    negative_sources: list[ReviewSource] = Field(default_factory=list, max_length=2)
 
 
 class ReviewGenerationRequest(BaseModel):

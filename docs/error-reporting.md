@@ -34,4 +34,4 @@
 
 - 프론트: `npm test`, `npm run build`
 - 백엔드: 프로젝트 가상환경으로 `tests/test_error_diagnostics.py`, `tests/test_auth.py`, `tests/test_main.py`, `tests/test_resume_regressions.py` 실행
-- 백엔드 테스트는 `REPOSITORY_MODE=memory`, `RAG_MODE=lexical`, `DB_AUTO_CREATE=false`와 기본 CORS 설정을 사용합니다. 실제 DB를 변경하지 않습니다.
+- 백엔드 테스트는 `REPOSITORY_MODE=memory`, `OBJECT_STORAGE_MODE=local`, `DB_AUTO_CREATE=false`와 기본 CORS 설정을 사용합니다. `RAG_MODE`는 기본값 `vector`를 씁니다. 실제 DB를 변경하지 않습니다.

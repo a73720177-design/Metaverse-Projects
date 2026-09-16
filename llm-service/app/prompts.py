@@ -113,7 +113,8 @@ def truncate(text: str, max_chars: int) -> str:
 
 
 def _render_trait_values(traits: list[PersonaTrait]) -> str:
-    values = [trait.value for trait in traits if trait.status in _ACTIVE_TRAIT_STATUSES]
+    values = [trait.value + (" (추론된 관점)" if trait.status == "inferred" else "")
+              for trait in traits if trait.status in _ACTIVE_TRAIT_STATUSES]
     return ", ".join(values)
 
 
@@ -774,3 +775,17 @@ SUMMARY_REDUCE_PROMPT += _STRUCTURED_QUALITY_RULES + (
     "원문이 아닌 추출 요점만 제공되므로 excerpt를 새로 만들지 말고 생략하세요. "
     "서로 충돌하는 요점은 임의로 하나를 선택하지 말고 차이를 요약하세요.\n"
 )
+
+
+# Feedback must carry its own verbatim evidence, including the reduce path.
+_REVIEW_FEEDBACK_EVIDENCE_RULE = (
+    "\nfeedback.positive_sources와 feedback.negative_sources에 각각 해당 평가의 원문 인용을 "
+    "filename, page, excerpt 형식으로 연결하세요. 인용은 제공된 구간 또는 주장 목록의 "
+    "sources에서 그대로 복사하고 만들거나 바꾸지 마세요. 인용 근거가 없으면 해당 "
+    "평가는 보류한다고 쓰고 sources를 빈 배열로 반환하세요. 일부 발췌에서 보이지 않는다는 "
+    "이유만으로 문서 전체에 내용이 없다고 단정하지 마세요. 비판 질문도 실제 발표 근거에 "
+    "연결되는 것만 작성하고 파일명이나 페르소나 설명만으로 질문을 만들지 마세요. "
+    "외부 사실 검증은 수행하지 않았으며 confidence는 모델의 추정치입니다.\n"
+)
+REVIEW_GENERATION_PROMPT += _REVIEW_FEEDBACK_EVIDENCE_RULE
+REVIEW_REDUCE_PROMPT += _REVIEW_FEEDBACK_EVIDENCE_RULE

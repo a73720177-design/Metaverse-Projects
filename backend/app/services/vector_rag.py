@@ -11,7 +11,6 @@ import httpx
 from sqlalchemy import text
 
 from app.config import (
-    _get_positive_int,
     get_embedding_dimension,
     get_embedding_model,
     get_embedding_timeout_seconds,
@@ -23,7 +22,6 @@ from app.config import (
     get_vector_rag_max_distance,
 )
 from app.db.database import get_session_factory
-from app.integrations.reranker import RerankerClient, reranking_enabled
 from app.models.document import DocumentParseResponse, DocumentSection
 from app.services.rag_service import (
     DocumentContextSelector, combine_document_contexts, fuse_chunk_rankings,
@@ -89,11 +87,9 @@ class VectorRag:
     def __init__(
         self, client: EmbeddingClient | None = None,
         selector: DocumentContextSelector | None = None,
-        reranker: RerankerClient | None = None,
     ) -> None:
         self.client = client or EmbeddingClient()
         self.selector = selector or DocumentContextSelector()
-        self.reranker = reranker
 
     async def index_document(self, document_id: UUID, owner_id: UUID) -> int:
         """현재 내용과 모델에 맞지 않는 청크만 다시 임베딩합니다."""
@@ -224,8 +220,7 @@ class VectorRag:
             for row in rows
             if float(row["distance"]) <= max_distance
         ]
-        # Keep the broader pool until lexical fusion and optional reranking.
-        return hits if reranking_enabled() else hits[: get_vector_rag_final_k()]
+        return hits[: get_vector_rag_final_k()]
 
     async def has_complete_index(
         self, documents: list[DocumentParseResponse], owner_id: UUID
@@ -307,62 +302,9 @@ class VectorRag:
             by_id[document_id].model_copy(update={"sections": sections})
             for document_id, sections in grouped.items() if sections
         ]
-        if reranking_enabled():
-            selected = await self._rerank_contexts(selected, query)
         return combine_document_contexts(
             selected, get_rag_max_context_chars()
         )
-
-    async def _rerank_contexts(self, documents, query):
-        """Rerank fused chunks, retaining source metadata and document diversity."""
-        cap = min(64, _get_positive_int("RAG_RERANK_CANDIDATE_K", 24))
-        candidates = []
-        seen = set()
-        # Round robin prevents the first file from exhausting the candidate pool.
-        for position in range(max((len(doc.sections) for doc in documents), default=0)):
-            for document in documents:
-                if position >= len(document.sections):
-                    continue
-                section = document.sections[position]
-                key = (document.document_id, section.index, section.text.strip())
-                if key not in seen and section.text.strip():
-                    candidates.append((document, section))
-                    seen.add(key)
-                if len(candidates) >= cap:
-                    break
-            if len(candidates) >= cap:
-                break
-        if len(candidates) < 2:
-            return documents
-        try:
-            ranking = await (self.reranker or RerankerClient()).rank(
-                query[:4000], [section.text[:8000] for _, section in candidates],
-            )
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
-            logger.warning("Reranking unavailable; using fused retrieval results")
-            return documents
-        final_k = get_vector_rag_final_k()
-        chosen, document_ids = [], set()
-        for index in ranking:
-            document_id = candidates[index][0].document_id
-            if document_id not in document_ids:
-                chosen.append(index)
-                document_ids.add(document_id)
-            if len(chosen) == final_k:
-                break
-        for index in ranking:
-            if len(chosen) >= final_k:
-                break
-            if index not in chosen:
-                chosen.append(index)
-        chosen_set = set(chosen)
-        grouped = {}
-        for index in ranking:
-            if index in chosen_set:
-                document, section = candidates[index]
-                grouped.setdefault(document.document_id, (document, []))[1].append(section)
-        return [document.model_copy(update={"sections": sections})
-                for document, sections in grouped.values()]
 
 
 async def index_after_save(document_id: UUID, owner_id: UUID) -> None:
