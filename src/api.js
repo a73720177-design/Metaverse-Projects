@@ -80,7 +80,7 @@ export function uploadDocument(file, token, signal) {
   const formData = new FormData()
   formData.append('file', file)
   return apiFetch('/documents/parse', {
-    timeoutMs: 180000,
+    timeoutMs: 900000,
     method: 'POST',
     headers: authHeaders(token),
     body: formData,
@@ -254,5 +254,28 @@ export function getSummary(documentId, token, signal) {
   return apiFetch(`/documents/${encodeURIComponent(documentId)}/summary`, {
     headers: authHeaders(token),
     signal,
+  })
+}
+
+export function listPracticeSessions(token, signal) {
+  return apiFetch('/practice/sessions', { headers: authHeaders(token), signal })
+}
+
+export function getPracticeSession(id, token, signal) {
+  return apiFetch(`/practice/sessions/${encodeURIComponent(id)}`, { headers: authHeaders(token), signal })
+}
+
+export function listReviews(token, signal) {
+  return apiFetch('/reviews', { headers: authHeaders(token), signal })
+}
+
+export function getReview(id, token, signal) {
+  return apiFetch(`/reviews/${encodeURIComponent(id)}`, { headers: authHeaders(token), signal })
+}
+
+export function createReview(agentId, documentId, token, signal) {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/reviews`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ document_id: documentId }), timeoutMs: 900000, signal,
   })
 }

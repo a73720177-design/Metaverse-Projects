@@ -36,8 +36,30 @@ export function readWorkspace(value, documents, personas) {
 
 export function newConversation(question) {
   return {
-    conversationId: newConversationId(), question, input: '', sending: false,
+    conversationId: question.conversation_id || newConversationId(), question, input: '', sending: false,
     messages: [{ id: `q-${question.question_id}`, role: 'persona', text: question.question, sources: question.sources }],
     forceScroll: true,
   }
+}
+
+export function restorePracticeChats(session, history) {
+  return Object.fromEntries(session.response.results.map((result) => {
+    const conversations = Object.fromEntries(result.questions.map((question) => {
+      const conversation = newConversation(question)
+      const records = history.filter((item) => item.agent_id === result.persona_id &&
+        item.conversation_id === conversation.conversationId && !item.deleted_at)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      for (const record of records) {
+        const prefix = `예상 질문: ${question.question}\n발표자의 답변: `
+        const suffix = '\n답변을 평가하고 후속 질문을 해주세요.'
+        const text = record.message.startsWith(prefix) && record.message.endsWith(suffix)
+          ? record.message.slice(prefix.length, -suffix.length) : record.message
+        conversation.messages.push({ id: `u-${record.message_id}`, role: 'user', text })
+        conversation.messages.push({ id: record.message_id, role: 'persona', text: record.answer,
+          sources: record.sources, grounding: record.grounding, timing: record.timing })
+      }
+      return [question.question_id, conversation]
+    }))
+    return [result.persona_id, { activeQuestionId: result.questions[0]?.question_id || null, conversations }]
+  }))
 }

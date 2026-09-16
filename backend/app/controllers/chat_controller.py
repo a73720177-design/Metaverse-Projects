@@ -38,7 +38,7 @@ async def _encode_sse(stream, heartbeat_seconds: float = 10, request_id: str = "
             data = json.dumps(item["data"], ensure_ascii=False)
             yield f"event: {item['event']}\ndata: {data}\n\n"
     except Exception as exc:
-        logging.getLogger(__name__).exception("Chat stream failed request_id=%s", request_id)
+        logging.getLogger(__name__).error("Chat stream failed request_id=%s", request_id)
         data = json.dumps(
             {"code": database_error_code(exc) if isinstance(exc, SQLAlchemyError) else "stream_error",
              "message": "답변 생성 또는 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.",

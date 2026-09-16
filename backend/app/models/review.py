@@ -2,6 +2,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+from app.models.coverage import Coverage
 
 
 class ClaimVerdict(StrEnum):
@@ -43,6 +44,7 @@ class ReviewCreateRequest(BaseModel):
 
 
 class ReviewResult(BaseModel):
+    coverage: Coverage | None = None
     review_id: UUID = Field(default_factory=uuid4)
     agent_id: UUID
     document_id: UUID

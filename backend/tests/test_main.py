@@ -60,7 +60,8 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_db_health_reports_memory_mode_without_external_db() -> None:
+def test_db_health_reports_memory_mode_without_external_db(monkeypatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
     response = client.get("/health/db")
     assert response.status_code == 200
     assert response.json() == {
@@ -123,15 +124,12 @@ def test_rejects_unsupported_document() -> None:
     assert response.json()["error"]["code"] == "http_415"
 
 
-def test_accepts_empty_pdf_for_later_processing() -> None:
+def test_rejects_empty_pdf() -> None:
     response = client.post(
         "/documents/parse",
         files={"file": ("sample.pdf", b"", "application/pdf")},
     )
-    assert response.status_code == 201
-    assert response.json()["document_type"] == "pdf"
-    assert response.json()["sections"] == []
-    assert response.json()["full_text"] == ""
+    assert response.status_code == 400
 
 
 def test_rejects_document_over_configured_limit(
@@ -426,7 +424,8 @@ def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> N
         ),
         TEST_USER.user_id,
     ))
-    assert "근거와 비용을 검증한다." in generator.requests[0].description
+    assert "근거와 비용을 검증한다." in generator.requests[0].reference_context
+    assert generator.requests[0].description == "사업성을 평가한다."
     assert created.description == "사업성을 평가한다."
     assert created.role == "generated-1"
 
@@ -439,7 +438,8 @@ def test_persona_generation_uses_linked_source_without_persisting_excerpt() -> N
         ),
         TEST_USER.user_id,
     ))
-    assert "근거와 비용을 검증한다." in generator.requests[1].description
+    assert "근거와 비용을 검증한다." in generator.requests[1].reference_context
+    assert generator.requests[1].description == "시장성을 우선 평가한다."
     assert updated.description == "시장성을 우선 평가한다."
     assert updated.role == "generated-2"
 
@@ -550,7 +550,9 @@ def test_llm_health_uses_versioned_http_service() -> None:
         app.dependency_overrides.clear()
 
 
-def test_services_health_reports_all_backend_dependencies() -> None:
+def test_services_health_reports_all_backend_dependencies(monkeypatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/health"
         return httpx.Response(200, json={"status": "ok"})

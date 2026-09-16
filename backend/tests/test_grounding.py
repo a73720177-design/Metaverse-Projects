@@ -271,6 +271,12 @@ class _RecordingGroundingChecker:
 
 
 def test_reply_filters_sources_to_cited_chunk_only() -> None:
+    class CitingGenerator(_StubGenerator):
+        async def stream(self, persona, request, document, history):
+            ordinal = next(i for i, section in enumerate(document.sections, 1)
+                           if "매출 성장률" in section.text)
+            yield f"매출 성장률은 25퍼센트입니다 [근거 {ordinal}]."
+
     async def run():
         agent_repository = InMemoryAgentRepository()
         await agent_repository.save(_persona(), OWNER_ID)
@@ -278,7 +284,7 @@ def test_reply_filters_sources_to_cited_chunk_only() -> None:
         document = _multi_section_document()
         await document_repository.save(document, OWNER_ID)
         service = ChatService(
-            _StubGenerator("매출 성장률은 25퍼센트입니다 [근거 1]."),
+            CitingGenerator(""),
             agent_repository,
             document_repository,
             InMemoryChatRepository(),

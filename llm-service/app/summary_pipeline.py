@@ -23,8 +23,9 @@ from typing import Protocol
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.prompts import SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT
-from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle
+from app.pipeline_budget import budgeted_groups, limit_groups, reduce_to_fit
+from app.prompts import UNTRUSTED_INPUT_RULE, OUTPUT_LANGUAGE_RULE, SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT, render_persona
+from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle, ReviewCoverage
 
 _CHUNK_OVERLAP = 200
 
@@ -35,9 +36,9 @@ _STYLE_GUIDANCE: dict[SummaryStyle, str] = {
 }
 
 _STYLE_MAX_TOKENS: dict[SummaryStyle, int] = {
-    SummaryStyle.BRIEF: 512,
-    SummaryStyle.DETAILED: 1024,
-    SummaryStyle.OUTLINE: 768,
+    SummaryStyle.BRIEF: 1024,
+    SummaryStyle.DETAILED: 2048,
+    SummaryStyle.OUTLINE: 1536,
 }
 
 
@@ -171,7 +172,7 @@ def _render_group(group: list[SummaryChunk]) -> str:
 def persona_block(persona: PersonaProfileIn | None) -> str:
     if persona is None:
         return "(특정 평가자 관점 없이 일반적인 독자 관점으로 요약합니다.)"
-    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
+    return render_persona(persona)
 
 
 def generate_summary_map_reduce(
@@ -181,28 +182,56 @@ def generate_summary_map_reduce(
     persona: PersonaProfileIn | None,
     generate: GenerateFn,
     model: str | None,
+    topic_limit: int = 8,
 ) -> SummaryGenerationResponse:
     chunks = _build_chunks(document)
-    groups = _pack_chunks(chunks)
     block = persona_block(persona)
 
+    def map_prompt(group):
+        return SUMMARY_MAP_PROMPT.format(
+            persona_block=block, filename=document.filename, chunk_text=_render_group(group),
+        )
+
+    all_groups = budgeted_groups(chunks, map_prompt, 512, _positive_env_int("SUMMARY_MAP_CHARS", 12000))
+    groups = limit_groups(all_groups, "SUMMARY", _evenly_sample)
+    analyzed = sum(len(group) for group in groups)
+    total = sum(len(group) for group in all_groups)
     all_points: list[dict] = []
     for group in groups:
-        prompt = SUMMARY_MAP_PROMPT.format(
-            persona_block=block,
-            filename=document.filename,
-            chunk_text=_render_group(group),
-        )
-        result = generate(prompt, _MapResult, max_tokens=512, model=model)
+        result = generate(map_prompt(group), _MapResult, max_tokens=512, model=model)
         all_points.extend(point.model_dump(mode="json") for point in result.points)
 
-    reduce_prompt = SUMMARY_REDUCE_PROMPT.format(
-        persona_block=block,
-        filename=document.filename,
-        style_guidance=_STYLE_GUIDANCE[style],
-        points_json=json.dumps(all_points, ensure_ascii=False),
+    all_points = list({p["point"].strip().casefold(): p for p in all_points if p["point"].strip()}.values())
+    topic_limit = min(topic_limit, len(all_points))
+
+    def final_prompt(points):
+        prompt = SUMMARY_REDUCE_PROMPT.format(
+            persona_block=block, filename=document.filename,
+            style_guidance=_STYLE_GUIDANCE[style],
+            points_json=json.dumps(points, ensure_ascii=False), topic_limit=topic_limit,
+        )
+        if analyzed < total:
+            prompt += "\n일부 구간만 표본 분석했습니다. summary에 이 한계를 밝히고 문서 전체를 확인했다고 표현하지 마세요.\n"
+        return prompt
+
+    def compact_prompt(points):
+        return (
+            "중간 요약 결과를 압축하세요. 서로 다른 핵심 주제·수치·제약을 짧게 통합하고 "
+            "source_index는 실제 입력 출처만 유지하세요. 여러 출처는 point에도 구간 번호를 명시하세요. "
+            "points는 최대 3개로 작성하고 시각 분석의 불확실성을 유지하세요.\n"
+            + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
+            + "\n=== 자료 시작 ===\n" + json.dumps(points, ensure_ascii=False) + "\n=== 자료 끝 ==="
+        )
+
+    all_points = reduce_to_fit(
+        all_points, final_prompt=final_prompt, final_tokens=style_max_tokens(style),
+        compact_prompt=compact_prompt, response_model=_MapResult, field="points",
+        generate=generate, model=model,
     )
-    return generate(
-        reduce_prompt, SummaryGenerationResponse,
-        max_tokens=style_max_tokens(style), model=model,
-    )
+    response = generate(final_prompt(all_points), SummaryGenerationResponse,
+                        max_tokens=style_max_tokens(style), model=model)
+    return response.model_copy(update={"key_topics": response.key_topics[:topic_limit], "coverage": ReviewCoverage(
+        total_chunks=total, analyzed_chunks=analyzed,
+        truncated=analyzed < total,
+        selection_method="even_sample" if analyzed < total else "full",
+    )})

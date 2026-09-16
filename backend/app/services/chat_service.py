@@ -1,3 +1,4 @@
+from contextlib import aclosing
 import asyncio
 import logging
 from time import perf_counter
@@ -18,7 +19,7 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.chat_repository import ChatRepository
 from app.services.grounding_service import GroundingChecker
 from app.services.rag_service import (
-    DocumentContextSelector, clean_answer_citations, combine_document_contexts,
+    DocumentContextSelector, build_retrieval_query, clean_answer_citations, combine_document_contexts,
     should_use_document, sources_from_citations, strip_citation_markers,
 )
 from app.services.vector_rag import VectorRag, vector_enabled
@@ -77,10 +78,8 @@ class ChatService:
         # A bare follow-up ("그건 무슨 뜻이야?") carries no retrievable terms on
         # its own, so fold in the last user turn before scoring/searching chunks.
         # The LLM still only sees the untouched current message.
-        retrieval_query = (
-            f"{previous_chats[-1].message} {request.message}"
-            if previous_chats
-            else request.message
+        retrieval_query = build_retrieval_query(
+            request.message, previous_chats[-1].message if previous_chats else None
         )
         previous_used_document = bool(previous_chats) and previous_chats[-1].document_id is not None
         requested_ids = list(dict.fromkeys(
@@ -90,13 +89,12 @@ class ChatService:
         ))
         candidates = []
         if requested_ids:
-            fetched = await asyncio.gather(*(
-                self.document_repository.get(document_id, owner_id)
-                for document_id in requested_ids
-            ))
-            if any(item is None for item in fetched):
+            retrieval_needed = should_use_document(request.message, requested_ids[0])
+            candidates = await self.document_repository.get_for_retrieval(
+                requested_ids, owner_id, retrieval_query if retrieval_needed else ""
+            )
+            if {item.document_id for item in candidates} != set(requested_ids):
                 raise ChatResourceNotFoundError("Document not found")
-            candidates = [item for item in fetched if item is not None]
         effective_request = request.model_copy(update={
             "document_id": candidates[0].document_id if candidates else None,
             "document_ids": [item.document_id for item in candidates],
@@ -110,19 +108,16 @@ class ChatService:
         ):
             if vector_enabled():
                 try:
-                    vector_rag = VectorRag()
-                    if await vector_rag.has_complete_index(candidates, owner_id):
-                        document = await vector_rag.select_context(
-                            candidates, retrieval_query, owner_id
-                        )
-                    else:
-                        logger.info(
-                            "Chat vector index is incomplete; using lexical retrieval"
-                        )
+                    vector_rag = VectorRag(selector=self.context_selector)
+                    # Search already excludes stale vectors and merges lexical
+                    # evidence from every file, including unindexed ones. A
+                    # single failed upload must not disable all semantic hits.
+                    document = await vector_rag.select_context(
+                        candidates, retrieval_query, owner_id
+                    )
                 except Exception:
                     logger.warning(
                         "Vector search failed; falling back to lexical RAG",
-                        exc_info=True,
                     )
                 if document is not None:
                     return persona, effective_request, document, history
@@ -264,11 +259,12 @@ class ChatService:
             llm_started = perf_counter()
             first_content_at: float | None = None
             try:
-                async for token in stream_method(persona, effective_request, document, history):
-                    if token and first_content_at is None:
-                        first_content_at = perf_counter()
-                    parts.append(token)
-                    yield {"event": "token", "data": {"token": token}}
+                async with aclosing(stream_method(persona, effective_request, document, history)) as upstream:
+                    async for token in upstream:
+                        if token and first_content_at is None:
+                            first_content_at = perf_counter()
+                        parts.append(token)
+                        yield {"event": "token", "data": {"token": token}}
                 generation_finished = perf_counter()
                 answer = "".join(parts).strip()
                 if not answer:

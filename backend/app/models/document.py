@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class DocumentSection(BaseModel):
@@ -31,6 +31,16 @@ class DocumentListItem(BaseModel):
     text_length: int = Field(ge=0)
 
 
+    @computed_field
+    @property
+    def parse_status(self) -> str:
+        return "ready" if self.text_length else "no_text"
+
+    @computed_field
+    @property
+    def warnings(self) -> list[str]:
+        return [] if self.text_length else ["원본은 저장했지만 분석할 텍스트를 추출하지 못했습니다."]
+
 class DocumentDetailResponse(BaseModel):
     document_id: UUID
     filename: str
@@ -39,6 +49,16 @@ class DocumentDetailResponse(BaseModel):
     full_text: str
     section_count: int = Field(ge=0)
     text_length: int = Field(ge=0)
+
+    @computed_field
+    @property
+    def parse_status(self) -> str:
+        return "ready" if self.text_length else "no_text"
+
+    @computed_field
+    @property
+    def warnings(self) -> list[str]:
+        return [] if self.text_length else ["원본은 저장했지만 분석할 텍스트를 추출하지 못했습니다."]
 
     @classmethod
     def from_document(cls, document: DocumentParseResponse) -> "DocumentDetailResponse":

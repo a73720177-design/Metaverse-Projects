@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from app.integrations.llm.stream_sanitizer import ReasoningFilter
+
 from app.integrations.llm.response_sanitizer import (
     clean_model_text,
     extract_json_object,
@@ -48,7 +50,8 @@ class HttpLlmClient:
     async def stream_sse(
         self, path: str, payload: dict[str, Any]
     ) -> AsyncIterator[str]:
-        buffered_tokens: list[str] = []
+        reasoning = ReasoningFilter()
+        emitted = False
         buffered_size = 0
         completed = False
         try:
@@ -84,7 +87,10 @@ class HttpLlmClient:
                                     buffered_size += len(token)
                                     if buffered_size > 200_000:
                                         raise LlmServiceResponseError("LLM 스트림 출력 한도를 초과했습니다.")
-                                    buffered_tokens.append(token)
+                                    visible = reasoning.feed(token)
+                                    if visible:
+                                        emitted = emitted or bool(visible.strip())
+                                        yield visible
                                 elif event == "error":
                                     raise LlmServiceResponseError("LLM 서비스 스트리밍 중 오류가 발생했습니다.")
                                 elif event == "done":
@@ -94,10 +100,12 @@ class HttpLlmClient:
                             event = "message"
             if not completed:
                 raise LlmServiceResponseError("LLM 스트림이 완료 전에 끊겼습니다. 다시 시도해 주세요.")
-            cleaned = clean_model_text("".join(buffered_tokens))
-            if not cleaned:
+            tail = reasoning.feed("", final=True)
+            if tail:
+                emitted = emitted or bool(tail.strip())
+                yield tail
+            if not emitted:
                 raise LlmServiceResponseError("LLM이 유효한 최종 답변을 반환하지 않았습니다.")
-            yield cleaned
         except LlmServiceResponseError:
             raise
         except ValueError as exc:

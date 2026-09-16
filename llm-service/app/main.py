@@ -15,8 +15,6 @@ summaries, embeddings, chat). 프리픽스 없는 /health는 프로세스 생존
 
 import json
 import logging
-import math
-import os
 import re
 from typing import TypeVar
 
@@ -24,6 +22,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
+from app.context_budget import prompt_fits, require_prompt_fits
 from app.llm_client import (
     LLMError,
     CHAT_MODEL,
@@ -31,10 +30,11 @@ from app.llm_client import (
     OLLAMA_QUESTION_MODEL,
     OLLAMA_SUMMARY_MODEL,
     OLLAMA_EMBEDDING_MODEL,
+    OLLAMA_MAX_OUTPUT_TOKENS,
     embed_texts,
     call_llm,
     check_ollama_health,
-    stream_llm,
+    stream_llm_async as stream_llm,
 )
 from app.prompts import (
     SUMMARY_GENERATION_PROMPT,
@@ -43,9 +43,12 @@ from app.prompts import (
     build_review_prompt,
     build_expected_question_prompt,
     trim_context_to_chunks,
+    retrieved_context_text,
+    document_text,
+    RAG_CONTEXT_MAX_CHARS,
 )
 from app.review_pipeline import generate_review_map_reduce, should_use_map_reduce
-from app.response_sanitizer import clean_chat_text, extract_json_object, safe_stream, sanitize_payload
+from app.response_sanitizer import clean_chat_text, extract_json_object, ReasoningFilter, sanitize_payload
 from app.summary_pipeline import (
     generate_summary_map_reduce,
     persona_block,
@@ -60,7 +63,9 @@ from app.schemas_v1 import (
     PersonaGenerationResponse,
     ReviewGenerationRequest,
     ReviewGenerationResponse,
+    ReviewCoverage,
     ExpectedQuestionGenerationResponse,
+    ExpectedQuestionGenerationRequest,
     EmbeddingRequest,
     EmbeddingResponse,
     SummaryGenerationRequest,
@@ -87,15 +92,15 @@ def _call_llm_as_json(
     prompt: str, response_schema: dict, max_tokens: int | None = None,
     model: str | None = None, *, think: bool = False,
 ) -> dict:
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     try:
         raw = call_llm(
             prompt, model=model, response_schema=response_schema,
             max_tokens=max_tokens, think=think,
         )
     except LLMError:
-        # 내부 호스트 주소 등 민감할 수 있는 세부 정보는 서버 로그에만 남기고,
-        # 클라이언트에는 일반화된 메시지만 반환한다.
-        logger.exception("Ollama 호출 실패")
+        # 로그와 응답 모두 내부 주소·예외 원문을 제외한다.
+        logger.error("Ollama 호출 실패")
         raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
 
     try:
@@ -129,7 +134,7 @@ def _call_llm_as_text(
         try:
             raw = call_llm(current_prompt, model=model, max_tokens=max_tokens)
         except LLMError:
-            logger.exception("Ollama 채팅 호출 실패")
+            logger.error("Ollama 채팅 호출 실패")
             raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
         if not isinstance(raw, str):
             raise HTTPException(status_code=502, detail="LLM 응답 형식이 올바르지 않습니다.")
@@ -170,76 +175,61 @@ def health_check_v1():
 
 @v1_router.post("/personas", response_model=PersonaGenerationResponse)
 def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
-    # PERSONA_GENERATION_PROMPT의 개수/길이 상한(전문 분야·평가 스타일 각
-    # 2~4개, evidence 1개·60자 이내)이면 512 토큰 안에 충분히 들어온다.
+    # Trait metadata and quoted evidence also consume the JSON output budget.
     return _generate(
-        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=512
+        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=1024
     )
-
-
-def _positive_env_int(name: str, default: int) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.") from exc
-    if value < 1:
-        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.")
-    return value
 
 
 def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
-    """Reserve output/KV budget and trim only retrieved document context."""
-    max_model_len = _positive_env_int("LLM_MAX_MODEL_LEN", 8192)
-    safety_tokens = _positive_env_int("LLM_CONTEXT_SAFETY_TOKENS", 512)
-    try:
-        chars_per_token = float(os.getenv("LLM_APPROX_CHARS_PER_TOKEN", "2.0"))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
-        ) from exc
-    if not math.isfinite(chars_per_token) or chars_per_token <= 0:
-        raise HTTPException(
-            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
-        )
+    """Reserve output budget; discard old history before rejecting current input."""
+    # Budget exactly the rendered prompt, including section labels and wrappers.
+    # Normalize sections first so the renderer cannot restore text already trimmed.
+    if request.document is not None:
+        document = request.document.model_copy(update={
+            "full_text": retrieved_context_text(request.document), "sections": [],
+        })
+        request = request.model_copy(update={"document": document})
 
-    input_budget = max_model_len - request.max_output_tokens - safety_tokens
-    if input_budget < 256:
-        raise HTTPException(
-            status_code=422,
-            detail="출력 길이가 모델 컨텍스트에 비해 너무 큽니다.",
-        )
+    def fits(candidate: ChatGenerationRequest) -> bool:
+        return prompt_fits(build_effective_chat_prompt(candidate), request.max_output_tokens)
 
-    empty_document = (
-        request.document.model_copy(update={"full_text": "", "sections": []})
-        if request.document is not None else None
-    )
-    base_request = request.model_copy(update={"document": empty_document})
-    base_tokens = math.ceil(len(build_effective_chat_prompt(base_request)) / chars_per_token)
-    available_document_tokens = input_budget - base_tokens
-    if available_document_tokens < 1:
-        raise HTTPException(
-            status_code=422,
-            detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.",
-        )
-
+    if fits(request):
+        return request
+    empty_document = (request.document.model_copy(update={"full_text": ""})
+                      if request.document is not None else None)
+    while not fits(request.model_copy(update={"document": empty_document})) and request.history:
+        request = request.model_copy(update={
+            "history": request.history[1:], "history_truncated": True,
+        })
+    base = request.model_copy(update={"document": empty_document})
+    if not fits(base):
+        raise HTTPException(status_code=422, detail="질문과 페르소나가 모델 컨텍스트 한도를 초과했습니다.")
     if request.document is None:
         return request
 
-    max_document_chars = max(1, math.floor(available_document_tokens * chars_per_token))
-    trimmed_full_text = trim_context_to_chunks(request.document.full_text, max_document_chars)
-    if trimmed_full_text == request.document.full_text:
-        return request
-    # sections는 이미 트리밍된 full_text와 어긋나므로 비운다. 전달되는
-    # 라벨은 항상 full_text(Backend가 붙였거나 위에서 자른 것) 기준이다.
-    trimmed_document = request.document.model_copy(
-        update={"full_text": trimmed_full_text, "sections": []}
-    )
-    return request.model_copy(update={"document": trimmed_document})
+    # Binary search whole-chunk prefixes, checking actual prompt overhead each time.
+    text = request.document.full_text
+    low, high = 0, min(len(text), RAG_CONTEXT_MAX_CHARS)
+    best = base
+    while low <= high:
+        middle = (low + high) // 2
+        document = request.document.model_copy(update={
+            "full_text": trim_context_to_chunks(text, middle),
+        })
+        candidate = request.model_copy(update={"document": document})
+        if fits(candidate):
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
-    if should_use_map_reduce(request.document.full_text):
+    if (should_use_map_reduce(document_text(request.document))
+            or not prompt_fits(build_review_prompt(request), 1536)):
         return generate_review_map_reduce(
             persona=request.persona,
             document=request.document,
@@ -250,22 +240,43 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
     # claims를 3~5개(스키마 상한 20보다 훨씬 보수적으로)로 제한해도, 근거
     # 인용(excerpt)·questions까지 더하면 기존 1024 토큰은 여유가 빠듯해
     # 502(JSON 파싱 실패)로 이어지기 쉬웠다. 1536으로 올려 여유를 둔다.
-    return _generate(
+    response = _generate(
         build_review_prompt(request), ReviewGenerationResponse,
         max_tokens=1536, model=OLLAMA_REVIEW_MODEL,
     )
+    total = len([s for s in request.document.sections if s.text.strip()]) or 1
+    return response.model_copy(update={"coverage": ReviewCoverage(
+        total_chunks=total, analyzed_chunks=total, truncated=False, selection_method="full")})
 
 
 @v1_router.post("/practice/questions", response_model=ExpectedQuestionGenerationResponse)
 def generate_expected_questions(
-    request: ReviewGenerationRequest,
+    request: ExpectedQuestionGenerationRequest,
 ) -> ExpectedQuestionGenerationResponse:
+    max_tokens = min(2048, 200 * request.question_count + 128)
+    evidence = list(request.evidence)
+    if not any(item.scope == "presentation" for item in evidence):
+        return ExpectedQuestionGenerationResponse(questions=[])
+    while not prompt_fits(build_expected_question_prompt(request.model_copy(update={"evidence": evidence})), max_tokens):
+        longest = max(range(len(evidence)), key=lambda i: len(evidence[i].text))
+        item = evidence[longest]
+        if len(item.text) > 160:
+            evidence[longest] = item.model_copy(update={"text": item.text[:len(item.text) // 2] + "\n…(이하 생략)"})
+        else:
+            # Keep at least one presentation source; never fabricate evidence IDs.
+            removable = next((i for i in range(len(evidence) - 1, -1, -1)
+                              if evidence[i].scope == "persona_reference"), None)
+            if removable is None and sum(e.scope == "presentation" for e in evidence) > 1:
+                removable = len(evidence) - 1
+            if removable is None:
+                require_prompt_fits(build_expected_question_prompt(request.model_copy(update={"evidence": evidence})), max_tokens)
+            evidence.pop(removable)
+    fitted = request.model_copy(update={"evidence": evidence})
     return _generate(
-        build_expected_question_prompt(request),
+        build_expected_question_prompt(fitted),
         ExpectedQuestionGenerationResponse,
-        # Five focused questions fit within this budget. Letting CPU-based
-        # structured generation run to 1024 caused repetition and timeouts.
-        max_tokens=640,
+        # Reserve output for the requested count, including evidence IDs and focus.
+        max_tokens=max_tokens,
         model=OLLAMA_QUESTION_MODEL,
     )
 
@@ -274,25 +285,31 @@ def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
     return SUMMARY_GENERATION_PROMPT.format(
         persona_block=persona_block(request.persona),
         filename=request.document.filename,
-        full_text=request.document.full_text,
+        full_text=document_text(request.document),
         style_guidance=style_guidance(request.style),
+        topic_limit=request.topic_limit,
     )
 
 
 @v1_router.post("/summaries", response_model=SummaryGenerationResponse)
 def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResponse:
-    if should_use_summary_map_reduce(request.document.full_text):
+    if (should_use_summary_map_reduce(document_text(request.document))
+            or not prompt_fits(_build_summary_prompt(request), style_max_tokens(request.style))):
         return generate_summary_map_reduce(
             document=request.document,
             style=request.style,
             persona=request.persona,
             generate=_generate,
             model=OLLAMA_SUMMARY_MODEL,
+            topic_limit=request.topic_limit,
         )
-    return _generate(
+    response = _generate(
         _build_summary_prompt(request), SummaryGenerationResponse,
         max_tokens=style_max_tokens(request.style), model=OLLAMA_SUMMARY_MODEL,
     )
+    total = len([s for s in request.document.sections if s.text.strip()]) or 1
+    return response.model_copy(update={"key_topics": response.key_topics[:request.topic_limit], "coverage": ReviewCoverage(
+        total_chunks=total, analyzed_chunks=total, truncated=False, selection_method="full")})
 
 
 @v1_router.post("/embeddings", response_model=EmbeddingResponse)
@@ -329,42 +346,50 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
 
 
 @v1_router.post("/chat/stream")
-def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
+async def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
     effective_request = _fit_chat_context(request)
 
-    def events():
+    async def events():
+        from contextlib import aclosing
+        reasoning = ReasoningFilter()
+        emitted = False
+        line_breaks = 0
+        output_chars = 0
         try:
-            tokens = list(safe_stream(stream_llm(
-                build_effective_chat_prompt(effective_request),
-                model=CHAT_MODEL,
-                max_tokens=request.max_output_tokens,
-            )))
-            if _contains_chinese_text("".join(tokens)):
-                tokens = [_call_llm_as_text(
-                    build_effective_chat_prompt(effective_request),
-                    model=CHAT_MODEL,
-                    max_tokens=request.max_output_tokens,
-                )]
-            emitted = False
-            for token in tokens:
-                emitted = emitted or bool(token.strip())
-                data = json.dumps({"token": token}, ensure_ascii=False)
-                yield f"event: token\ndata: {data}\n\n"
+            async with aclosing(stream_llm(build_effective_chat_prompt(effective_request),
+                                           model=CHAT_MODEL, max_tokens=request.max_output_tokens)) as tokens:
+                async for token in tokens:
+                    output_chars += len(token)
+                    if output_chars > 200_000:
+                        raise LLMError("출력 한도 초과")
+                    visible = reasoning.feed(token)
+                    if _contains_chinese_text(visible):
+                        raise LLMError("한국어 답변 생성 실패")
+                    remaining = 30 - line_breaks
+                    pieces = visible.split("\n")
+                    at_limit = len(pieces) > remaining
+                    visible = "\n".join(pieces[:remaining])
+                    if visible:
+                        emitted = emitted or bool(visible.strip())
+                        yield "event: token\ndata: " + json.dumps({"token": visible}, ensure_ascii=False) + "\n\n"
+                        line_breaks += visible.count("\n")
+                    if at_limit:
+                        break
+            tail = reasoning.feed("", final=True)
+            if _contains_chinese_text(tail):
+                raise LLMError("한국어 답변 생성 실패")
+            if tail and line_breaks < 30:
+                emitted = emitted or bool(tail.strip())
+                yield "event: token\ndata: " + json.dumps({"token": tail}, ensure_ascii=False) + "\n\n"
             if not emitted:
-                data = json.dumps({"message": "LLM이 빈 답변을 반환했습니다."}, ensure_ascii=False)
-                yield f"event: error\ndata: {data}\n\n"
-                return
+                raise LLMError("유효한 답변 없음")
             yield "event: done\ndata: {}\n\n"
-        except LLMError:
-            logger.exception("Ollama 채팅 스트리밍 실패")
-            data = json.dumps({"message": "LLM 서버에 연결할 수 없습니다."}, ensure_ascii=False)
-            yield f"event: error\ndata: {data}\n\n"
+        except (LLMError, ValueError):
+            logger.error("Chat stream failed")
+            yield 'event: error\ndata: {"message":"답변 생성에 실패했습니다. 다시 시도해 주세요."}\n\n'
 
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 app.include_router(v1_router)

@@ -68,7 +68,7 @@ export function createApiClient(baseUrl, { fetchImpl = (...args) => fetch(...arg
         let completed = null
         let display = ''
         const flush = (force = false) => {
-          if (!display || (!force && !/(?:\n|[.!?。！？]\s*)$/.test(display) && display.length < 80)) return
+          if (!display) return
           try { onToken?.(display) } catch {
             throw new AppError('받은 답변을 화면에 표시하지 못했습니다.', { ...context, code: 'client_error' })
           }

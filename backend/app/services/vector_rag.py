@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy import text
 
 from app.config import (
+    _get_positive_int,
     get_embedding_dimension,
     get_embedding_model,
     get_embedding_timeout_seconds,
@@ -22,8 +23,11 @@ from app.config import (
     get_vector_rag_max_distance,
 )
 from app.db.database import get_session_factory
+from app.integrations.reranker import RerankerClient, reranking_enabled
 from app.models.document import DocumentParseResponse, DocumentSection
-from app.services.rag_service import DocumentContextSelector, combine_document_contexts
+from app.services.rag_service import (
+    DocumentContextSelector, combine_document_contexts, fuse_chunk_rankings,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -82,8 +86,14 @@ class EmbeddingClient:
 
 
 class VectorRag:
-    def __init__(self, client: EmbeddingClient | None = None) -> None:
+    def __init__(
+        self, client: EmbeddingClient | None = None,
+        selector: DocumentContextSelector | None = None,
+        reranker: RerankerClient | None = None,
+    ) -> None:
         self.client = client or EmbeddingClient()
+        self.selector = selector or DocumentContextSelector()
+        self.reranker = reranker
 
     async def index_document(self, document_id: UUID, owner_id: UUID) -> int:
         """현재 내용과 모델에 맞지 않는 청크만 다시 임베딩합니다."""
@@ -170,17 +180,24 @@ class VectorRag:
                                    PARTITION BY c.document_id
                                    ORDER BY c.embedding <=> CAST(:vector AS vector), c.chunk_id
                                ) AS document_rank
-                        FROM document_chunks c
-                        JOIN documents d ON d.document_id = c.document_id
+                        FROM documents d
+                        CROSS JOIN LATERAL (
+                          SELECT c.* FROM document_chunks c
+                          WHERE c.document_id = d.document_id
+                            AND c.document_id = ANY(CAST(:ids AS uuid[]))
+                            AND c.embedding IS NOT NULL
+                            AND c.embedding_model = :model
+                            AND c.content_hash =
+                              encode(sha256(convert_to(c.content, 'UTF8')), 'hex')
+                          ORDER BY c.embedding <=> CAST(:vector AS vector)
+                          LIMIT :per_document_limit
+                        ) c
                         WHERE d.owner_id = :owner
-                          AND c.document_id = ANY(CAST(:ids AS uuid[]))
-                          AND c.embedding IS NOT NULL
-                          AND c.embedding_model = :model
-                          AND c.content_hash =
-                            encode(sha256(convert_to(c.content, 'UTF8')), 'hex')
+                          AND d.document_id = ANY(CAST(:ids AS uuid[]))
                         )
                         SELECT document_id, filename, chunk_index, content, distance
                         FROM ranked
+                        WHERE distance <= :max_distance
                         ORDER BY document_rank, distance, document_id, chunk_index
                         LIMIT :limit
                         """
@@ -190,7 +207,9 @@ class VectorRag:
                         "ids": [document.document_id for document in documents],
                         "model": self.client.model,
                         "vector": json.dumps(vector),
+                        "max_distance": max_distance,
                         "limit": max(candidate_limit, len({item.document_id for item in documents})),
+                        "per_document_limit": candidate_limit,
                     },
                 )
             ).mappings().all()
@@ -205,7 +224,8 @@ class VectorRag:
             for row in rows
             if float(row["distance"]) <= max_distance
         ]
-        return hits[: get_vector_rag_final_k()]
+        # Keep the broader pool until lexical fusion and optional reranking.
+        return hits if reranking_enabled() else hits[: get_vector_rag_final_k()]
 
     async def has_complete_index(
         self, documents: list[DocumentParseResponse], owner_id: UUID
@@ -262,21 +282,87 @@ class VectorRag:
             grouped.setdefault(hit.document_id, []).append(
                 DocumentSection(index=hit.chunk_index, text=hit.content)
             )
-        # An entirely unindexed file must not disappear just because another
-        # requested file has vector hits.
-        selector = DocumentContextSelector()
+        # Refine page-sized vector hits with lexical chunks. This also recovers
+        # exact names/numbers missed by embeddings within an otherwise matched file.
+        # Fuse rankings without comparing incompatible lexical/distance scores.
+        selector = self.selector
+        refinement_selector = DocumentContextSelector()
         for document_id, document in by_id.items():
-            if document_id not in grouped:
-                lexical = selector.select(document, query)
-                if lexical is not None:
-                    grouped[document_id] = lexical.sections
+            lexical = selector.select(document, query)
+            semantic = grouped.get(document_id, [])
+            refined = []
+            for section in semantic:
+                hit_document = document.model_copy(update={
+                    "sections": [section], "full_text": section.text,
+                })
+                hit_context = refinement_selector.select(hit_document, query)
+                refined.extend(
+                    hit_context.sections if hit_context else refinement_selector._chunks(hit_document)[:1]
+                )
+            lexical_sections = lexical.sections if lexical is not None else []
+            merged = fuse_chunk_rankings(refined, lexical_sections)
+            if merged:
+                grouped[document_id] = merged
         selected = [
             by_id[document_id].model_copy(update={"sections": sections})
             for document_id, sections in grouped.items() if sections
         ]
+        if reranking_enabled():
+            selected = await self._rerank_contexts(selected, query)
         return combine_document_contexts(
             selected, get_rag_max_context_chars()
         )
+
+    async def _rerank_contexts(self, documents, query):
+        """Rerank fused chunks, retaining source metadata and document diversity."""
+        cap = min(64, _get_positive_int("RAG_RERANK_CANDIDATE_K", 24))
+        candidates = []
+        seen = set()
+        # Round robin prevents the first file from exhausting the candidate pool.
+        for position in range(max((len(doc.sections) for doc in documents), default=0)):
+            for document in documents:
+                if position >= len(document.sections):
+                    continue
+                section = document.sections[position]
+                key = (document.document_id, section.index, section.text.strip())
+                if key not in seen and section.text.strip():
+                    candidates.append((document, section))
+                    seen.add(key)
+                if len(candidates) >= cap:
+                    break
+            if len(candidates) >= cap:
+                break
+        if len(candidates) < 2:
+            return documents
+        try:
+            ranking = await (self.reranker or RerankerClient()).rank(
+                query[:4000], [section.text[:8000] for _, section in candidates],
+            )
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+            logger.warning("Reranking unavailable; using fused retrieval results")
+            return documents
+        final_k = get_vector_rag_final_k()
+        chosen, document_ids = [], set()
+        for index in ranking:
+            document_id = candidates[index][0].document_id
+            if document_id not in document_ids:
+                chosen.append(index)
+                document_ids.add(document_id)
+            if len(chosen) == final_k:
+                break
+        for index in ranking:
+            if len(chosen) >= final_k:
+                break
+            if index not in chosen:
+                chosen.append(index)
+        chosen_set = set(chosen)
+        grouped = {}
+        for index in ranking:
+            if index in chosen_set:
+                document, section = candidates[index]
+                grouped.setdefault(document.document_id, (document, []))[1].append(section)
+        return [document.model_copy(update={"sections": sections})
+                for document, sections in grouped.values()]
 
 
 async def index_after_save(document_id: UUID, owner_id: UUID) -> None:
@@ -288,5 +374,4 @@ async def index_after_save(document_id: UUID, owner_id: UUID) -> None:
         logger.warning(
             "Embedding indexing failed for document %s; lexical RAG remains available",
             document_id,
-            exc_info=True,
         )

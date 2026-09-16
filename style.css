@@ -944,3 +944,10 @@ button { cursor: pointer; }
 .source-evidence blockquote { margin: 8px 0; padding-left: 10px; border-left: 2px solid #a78bfa; white-space: pre-wrap; overflow-wrap: anywhere; }
 .global-error, .form-error { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 3s; } }
+
+.workspace-library { margin: 2rem 0; }
+.workspace-library nav, .workspace-library form { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
+.workspace-library article { padding: 1rem 0; border-bottom: 1px solid #d8dce3; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-library button, .workspace-library select, .generate-bar select { padding: .5rem .75rem; border: 1px solid #b6bdca; border-radius: .5rem; background: white; color: #232936; cursor: pointer; }
+.workspace-library button[aria-pressed="true"] { background: #e7edff; border-color: #597bd5; }
+.workspace-library button:disabled { opacity: .5; cursor: wait; }

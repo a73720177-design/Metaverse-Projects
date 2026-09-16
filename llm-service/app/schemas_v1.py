@@ -38,6 +38,7 @@ class PersonaTrait(BaseModel):
 class PersonaGenerationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=5000)
+    reference_context: str = Field(default="", max_length=3000)
 
 
 class PersonaGenerationResponse(BaseModel):
@@ -117,6 +118,7 @@ class ReviewCoverage(BaseModel):
     total_chunks: int = Field(ge=0)
     analyzed_chunks: int = Field(ge=0)
     truncated: bool = False
+    selection_method: str = "full"
 
 
 class ReviewGenerationResponse(BaseModel):
@@ -128,10 +130,27 @@ class ReviewGenerationResponse(BaseModel):
     coverage: ReviewCoverage | None = None
 
 
+class QuestionEvidence(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    scope: Literal["presentation", "persona_reference"]
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class ExpectedQuestionGenerationRequest(BaseModel):
+    persona: PersonaProfileIn
+    question_count: int = Field(default=5, ge=1, le=10)
+    evidence: list[QuestionEvidence] = Field(min_length=1, max_length=80)
+    excluded_questions: list[str] = Field(default_factory=list, max_length=40)
+
+
+class GeneratedQuestion(BaseModel):
+    question: str = Field(min_length=12, max_length=500)
+    presentation_evidence_ids: list[str] = Field(min_length=1, max_length=3)
+    focus: str = Field(min_length=1, max_length=150)
+
+
 class ExpectedQuestionGenerationResponse(BaseModel):
-    questions: list[Annotated[str, Field(min_length=12, max_length=500)]] = Field(
-        min_length=5, max_length=5
-    )
+    questions: list[GeneratedQuestion] = Field(max_length=10)
 
 
 class ChatTurn(BaseModel):
@@ -146,6 +165,7 @@ class ChatGenerationRequest(BaseModel):
     max_output_tokens: int = Field(default=1024, ge=128, le=2048)
     # default_factory=list이므로 history를 안 보내는 기존 클라이언트와도 호환된다.
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
+    history_truncated: bool = False
 
 
 class ChatGenerationResponse(BaseModel):
@@ -178,12 +198,14 @@ class KeyTopic(BaseModel):
 
 
 class SummaryGenerationRequest(BaseModel):
+    topic_limit: int = Field(default=8, ge=0, le=8)
     document: DocumentIn
     style: SummaryStyle = SummaryStyle.BRIEF
     persona: PersonaProfileIn | None = None
 
 
 class SummaryGenerationResponse(BaseModel):
+    coverage: ReviewCoverage | None = None
     summary: str = Field(min_length=1)
     key_topics: list[KeyTopic] = Field(default_factory=list, max_length=8)
     outline: list[str] = Field(default_factory=list, max_length=20)

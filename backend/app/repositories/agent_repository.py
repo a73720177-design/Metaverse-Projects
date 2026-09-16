@@ -26,7 +26,8 @@ class AgentRepository(Protocol):
 class InMemoryAgentRepository:
     """실제 DB 연결 전까지 사용하는 개발용 임시 저장소입니다."""
 
-    def __init__(self) -> None:
+    def __init__(self, related_repositories=()) -> None:
+        self.related_repositories = related_repositories
         self._agents: dict[UUID, tuple[UUID, PersonaHistoryItem]] = {}
 
     async def save(self, persona: PersonaProfile, owner_id: UUID) -> None:
@@ -62,6 +63,8 @@ class InMemoryAgentRepository:
         stored = self._agents.get(agent_id)
         if stored is None or stored[0] != owner_id or stored[1].deleted_at is None:
             return False
+        for repository in self.related_repositories:
+            await repository.remove_agent(agent_id, owner_id)
         del self._agents[agent_id]
         return True
 

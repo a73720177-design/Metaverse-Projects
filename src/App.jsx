@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createAgent, createSummary, deleteAgent, generateExpectedQuestions, getCurrentUser, listAgents, listDocuments, login, signup, streamChat, updateAgent, updateAgentDocuments, uploadDocument } from './api'
-import { newConversation, readWorkspace, validateFiles as checkFiles } from './workspace-utils.mjs'
+import { deleteDocument, getPracticeSession, listChats } from './api'
+import WorkspaceLibrary, { CoverageNotice } from './WorkspaceLibrary'
+import { newConversation, readWorkspace, restorePracticeChats, validateFiles as checkFiles } from './workspace-utils.mjs'
 import { reportLocalError, subscribeErrors } from './api-errors.mjs'
 
 const ACCEPTED = [
@@ -93,7 +95,7 @@ function Uploader({ documents, busyFiles, onFiles, onRemove, onCancel }) {
   const input = useRef(null)
   const [drag, setDrag] = useState(false)
   return <section className="source-block">
-    <Heading title="1. 검토받을 발표 자료" text="PPT, 대본, 기획서와 부록을 제한 없이 추가합니다." count={`${documents.length}개`} />
+    <Heading title="1. 검토받을 발표 자료" text="PPT, 대본, 기획서와 부록을 추가합니다. 질문 생성에는 최대 20개를 선택하세요." count={`${documents.length}개`} />
     <button type="button" className={`drop-zone ${drag ? 'dragging' : ''}`} onClick={() => input.current?.click()} onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); onFiles([...e.dataTransfer.files]) }}>
       <b>＋</b><strong>여러 파일을 끌어놓거나 선택</strong><small>PDF · PPTX · DOCX, 파일당 최대 25MB</small>
     </button>
@@ -275,10 +277,11 @@ function ChatPanel({ result, token, documentIds, chat, update }) {
   }
   return <article className="chat-panel">
     <header className="chat-persona-header"><img src={result.avatar_data_url} alt={`${result.persona_name} AI 생성 아바타`} /><div><h3>{result.persona_name}</h3><p>{result.persona_role} · AI 생성 아바타</p></div>{conversation?.sending && <Spinner label={`답변 중 · ${sec(elapsed)}`} />}</header>
-    <div className="question-strip" aria-label={`${result.persona_name}의 예상 질문`}>{result.questions.map((q, i) => <button type="button" aria-pressed={activeId === q.question_id} className={activeId === q.question_id ? 'active' : ''} key={q.question_id} onClick={() => choose(q)}><b>Q{i + 1}</b>{q.question}{chat?.conversations?.[q.question_id]?.sending && <span className="loading-spinner" aria-label="답변 생성 중" />}</button>)}</div>
+    <CoverageNotice coverage={result.coverage} />{result.warnings?.map((w) => <p key={w} className="grounding-note">{w}</p>)}{result.assessment && <p className="grounding-note">{result.assessment.basis}</p>}<p>요청 상한 {result.requested_count ?? 5}개 · 생성 {result.generated_count ?? result.questions.length}개</p>
+    <div className="question-strip" aria-label={`${result.persona_name}의 예상 질문`}>{result.questions.map((q, i) => <button type="button" aria-pressed={activeId === q.question_id} className={activeId === q.question_id ? 'active' : ''} key={q.question_id} onClick={() => choose(q)}><b>Q{i + 1}</b>{q.origin === 'template' && <small>보충 질문 · </small>}{q.question}{chat?.conversations?.[q.question_id]?.sending && <span className="loading-spinner" aria-label="답변 생성 중" />}</button>)}</div>
     <div className="messages" aria-label={`${result.persona_name} 질문별 대화 기록`} tabIndex={0} ref={box} onScroll={(e) => { const n = e.currentTarget; nearBottom.current = n.scrollHeight - n.scrollTop - n.clientHeight < 80; setShowJump(!nearBottom.current) }}>
       {!conversation && <p className="empty-state">예상 질문을 선택하세요.</p>}
-      {(conversation?.messages || []).map((m) => <div className={`message ${m.role}`} key={m.id}><div>{m.text || (m.pending && <Spinner label="첫 응답 대기 중" />)}</div><SourceEvidence sources={m.sources} />{m.grounding?.checked && m.grounding.unsupported?.length > 0 && <p className="grounding-note">일부 주장의 문서 근거가 부족합니다. 참고자료와 함께 확인해주세요.</p>}{m.timing && <details className="timing"><summary>첫 응답 {sec(m.timing.first_content_latency_ms)} · 전체 {sec(m.timing.total_ms)} · {m.timing.output_lines}줄</summary><p>자료 {sec(m.timing.context_ms)} · 생성 {sec(m.timing.generation_ms)} · 저장 {sec(m.timing.save_ms)}</p></details>}</div>)}
+      {(conversation?.messages || []).map((m) => <div className={`message ${m.role}`} key={m.id}><div>{m.text || (m.pending && <Spinner label="첫 응답 대기 중" />)}</div><SourceEvidence sources={m.sources} />{m.pending && m.text && <small>생성 중 · 근거 검증 전</small>}{m.grounding && !m.grounding.checked && <p className="grounding-note">근거 검증을 완료하지 못했습니다.</p>}{m.sources?.length > 0 && !m.id?.startsWith('q-') && !/\[근거\s+\d+\]/.test(m.text) && <small>참고자료이며 답변의 직접 인용은 확인되지 않았습니다.</small>}{m.grounding?.checked && m.grounding.unsupported?.length > 0 && <p className="grounding-note">일부 주장의 문서 근거가 부족합니다. 참고자료와 함께 확인해주세요.</p>}{m.timing && <details className="timing"><summary>첫 응답 {sec(m.timing.first_content_latency_ms)} · 전체 {sec(m.timing.total_ms)} · {m.timing.output_lines}줄</summary><p>자료 {sec(m.timing.context_ms)} · 생성 {sec(m.timing.generation_ms)} · 저장 {sec(m.timing.save_ms)}</p></details>}</div>)}
       {showJump && <button className="jump-bottom" onClick={() => activeId && mutateConversation(activeId, (state) => ({ ...state, forceScroll: true }))}>새 메시지 보기 ↓</button>}
     </div>
     <form className="chat-composer" onSubmit={send}><textarea value={conversation?.input || ''} aria-label={`${result.persona_name}에게 보낼 답변`} maxLength={Math.max(1, 4900 - (conversation?.question.question.length || 0))} onChange={(e) => activeId && mutateConversation(activeId, (state) => ({ ...state, input: e.target.value }))} placeholder={conversation ? '발표자의 답변을 입력하세요' : '먼저 예상 질문을 선택하세요'} disabled={!conversation || conversation.sending} />{conversation?.sending ? <button type="button" className="send-btn" onClick={() => inFlight.current.get(activeId)?.abort()}>중지</button> : <button className="send-btn" disabled={!conversation || !conversation.input?.trim()}>전송</button>}</form>
@@ -323,8 +326,8 @@ function DocumentSummaryPanel({ doc, token }) {
       {busy && <Spinner label="요약 생성 중" />}
       {error && <p className="form-error">{error}</p>}
       {data && !busy && <>
-        <p className="summary-text">{data.summary}</p>
-        {data.key_topics?.length > 0 && <ul className="summary-topics">{data.key_topics.map((topic, i) => <li key={i}><strong>{topic.topic}</strong> — {topic.description}</li>)}</ul>}
+        <CoverageNotice coverage={data.coverage} />{data.warnings?.map((warning) => <p className="grounding-note" key={warning}>{warning}</p>)}<p className="summary-text">{data.summary}</p>
+        {data.key_topics?.length > 0 && <ul className="summary-topics">{data.key_topics.map((topic, i) => <li key={i}><strong>{topic.topic}</strong> — {topic.description}<SourceEvidence sources={topic.sources} /></li>)}</ul>}
         {data.outline?.length > 0 && <ol className="summary-outline">{data.outline.map((item, i) => <li key={i}>{item}</li>)}</ol>}
       </>}
     </div>}
@@ -353,22 +356,60 @@ function Workspace({ token, onLogout }) {
   const [results, setResults] = useState([])
   const [chats, setChats] = useState({})
   const [generating, setGenerating] = useState(false)
+  const [questionCount, setQuestionCount] = useState(5)
+  const [sessionRevision, setSessionRevision] = useState(0)
+  const [activeSessionId, setActiveSessionId] = useState(null)
+  const [practiceDocumentIds, setPracticeDocumentIds] = useState([])
+  function resumeSession(session, history, docs = documents, agents = personas) {
+    setSessionRevision((n) => n + 1)
+    const availableIds = new Set(agents.map((p) => p.id || p.agent_id))
+    const response = { ...session.response, results: session.response.results.filter((r) => availableIds.has(r.persona_id)) }
+    const restored = { ...session, response }
+    setResults(response.results); setChats(restorePracticeChats(restored, history))
+    setActiveSessionId(session.session_id)
+    setQuestionCount(session.request.question_count_per_persona)
+    const ids = session.request.presentation_document_ids.filter((id) => docs.some((d) => d.document_id === id))
+    setProjectIds(ids); setPracticeDocumentIds(ids)
+    setSelected(session.request.persona_ids.filter((id) => availableIds.has(id)))
+    setError(session.warnings.join(' '))
+  }
+  async function refreshResources() {
+    const [docs, agents] = await Promise.all([listDocuments(token), listAgents(token)])
+    setDocuments(docs); setPersonas(agents.map(adaptPersona))
+    if (activeSessionId) {
+      const [session, history] = await Promise.all([getPracticeSession(activeSessionId, token), listChats(token)])
+      resumeSession(session, history, docs, agents)
+    }
+  }
+  async function removeDocument(doc) {
+    if (!window.confirm(`${doc.filename} 원본과 문서 데이터를 삭제하시겠습니까?`)) return
+    try { await deleteDocument(doc.document_id, token); await refreshResources(); setProjectIds((ids) => ids.filter((id) => id !== doc.document_id)) }
+    catch (err) { setError(err.message) }
+  }
   const [editingPersonaId, setEditingPersonaId] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     if (!token) { setLoading(false); return }
     let alive = true; setLoading(true)
-    Promise.all([getCurrentUser(token), listDocuments(token), listAgents(token)]).then(([u, docs, agents]) => {
+    Promise.all([getCurrentUser(token), listDocuments(token), listAgents(token)]).then(async ([u, docs, agents]) => {
       if (!alive) return
       setUser(u); setDocuments(docs); setPersonas(agents.map(adaptPersona))
       const saved = readWorkspace(stored(`presentationWorkspace:${u.user_id}`), docs, agents)
       setProjectIds(saved.projectIds)
       setSelected(saved.selected)
+      const sessionId = stored(`activePractice:${u.user_id}`)
+      if (sessionId) {
+        try {
+          const [session, history] = await Promise.all([getPracticeSession(sessionId, token), listChats(token)])
+          if (alive) resumeSession(session, history, docs, agents)
+        } catch (err) { if (alive) setError(err.message) }
+      }
     }).catch((err) => { if (!alive) return; if (err.status === 401) onLogout(); else setError(err.message) }).finally(() => alive && setLoading(false))
     return () => { alive = false }
   }, [token])
   useEffect(() => { if (user) remember(`presentationWorkspace:${user.user_id}`, JSON.stringify({ projectIds, selected })) }, [user, projectIds, selected])
+  useEffect(() => { if (user && activeSessionId) remember(`activePractice:${user.user_id}`, activeSessionId) }, [user, activeSessionId])
   const projectDocs = useMemo(() => documents.filter((d) => projectIds.includes(d.document_id)), [documents, projectIds])
 
   async function addFiles(files) {
@@ -394,7 +435,7 @@ function Workspace({ token, onLogout }) {
   async function makeQuestions() {
     if (generating) return
     setGenerating(true); setError('')
-    try { await requests.run(async (signal) => { const data = await generateExpectedQuestions({ personaIds: selected, presentationDocumentIds: projectIds }, token, signal); if (signal.aborted) return; setResults(data.results); setChats(Object.fromEntries(data.results.map((r) => [r.persona_id, { activeQuestionId: null, conversations: {} }]))) }) } catch (err) { if (!isCancelled(err)) setError(err.message) } finally { setGenerating(false) }
+    try { await requests.run(async (signal) => { const data = await generateExpectedQuestions({ personaIds: selected, presentationDocumentIds: projectIds, questionCount }, token, signal); if (signal.aborted) return; setResults(data.results); setActiveSessionId(data.session_id); setPracticeDocumentIds(projectIds); setChats(Object.fromEntries(data.results.map((r) => [r.persona_id, { activeQuestionId: null, conversations: {} }]))) }) } catch (err) { if (!isCancelled(err)) setError(err.message) } finally { setGenerating(false) }
   }
   if (loading) return <main className="center-screen"><Spinner label="작업공간 불러오는 중" /></main>
   return <div className="workspace-shell">
@@ -417,10 +458,11 @@ function Workspace({ token, onLogout }) {
           <PersonaCreator token={token} onDocuments={(docs) => setDocuments((items) => [...items, ...docs.filter((doc) => !items.some((item) => item.document_id === doc.document_id))])} onCreated={(p) => setPersonas((x) => [...x, p])} />
         </section>
       </div>
-      <section className="generate-bar"><div><strong>예상 질문 준비</strong><p>발표 자료 {projectIds.length}개 · 질문자 {selected.length}명</p></div><button className="primary-btn" disabled={generating || !projectIds.length || !selected.length} onClick={makeQuestions}>{generating ? <Spinner label="페르소나별 질문 생성 중" /> : '예상 질문 생성'}</button></section>
+      <section className="generate-bar"><div><strong>예상 질문 준비</strong><label> 질문자별 개수 <select value={questionCount} onChange={(e) => setQuestionCount(Number(e.target.value))}>{Array.from({ length: 10 }, (_, i) => <option key={i + 1}>{i + 1}</option>)}</select></label><p>발표 자료 {projectIds.length}/20개 · 질문자 {selected.length}명</p>{projectIds.length > 20 && <p role="alert">질문 생성에 사용할 발표 자료를 20개 이하로 줄여주세요.</p>}</div><button className="primary-btn" disabled={generating || !projectIds.length || projectIds.length > 20 || !selected.length || projectDocs.some((d) => !textLength(d))} onClick={makeQuestions}>{generating ? <Spinner label="페르소나별 질문 생성 중" /> : '예상 질문 생성'}</button></section>
       {error && <p className="global-error">{error}</p>}
-      {results.length > 0 && <section><div className="section-title"><span className="eyebrow">PRACTICE</span><h2>페르소나별 답변 연습</h2><p>질문을 고른 뒤 답변하세요. 각 채팅창은 독립적으로 동작합니다.</p></div><div className={`chat-grid panels-${results.length}`}>{results.map((r) => <ChatPanel key={r.persona_id} result={r} token={token} documentIds={projectIds} chat={chats[r.persona_id]} update={(fn) => setChats((all) => ({ ...all, [r.persona_id]: fn(all[r.persona_id]) }))} />)}</div></section>}
-      <section className="materials-overview"><div className="section-title"><span className="eyebrow">SOURCE MAP</span><h2>자료 사용 위치</h2><p>발표·페르소나·예상 질문·채팅에 사용된 위치를 표시합니다.</p></div><div className="materials-table">{documents.map((d) => { const linked = personas.filter((p) => p.documentIds.includes(d.document_id)); const used = results.some((r) => r.questions.some((q) => q.sources?.some((s) => s.document_id === d.document_id))); const chatUsed = Object.values(chats).some((chat) => Object.values(chat.conversations || {}).some((conversation) => (conversation.messages || []).some((message) => (message.sources || []).some((source) => source.document_id === d.document_id)))); return <div className="material-card" key={d.document_id}><div><strong>{d.filename}</strong><small>{d.document_type?.toUpperCase()} · {d.text_length || d.full_text?.length || 0}자</small></div><div className="usage-list">{projectIds.includes(d.document_id) && <em className="usage-badge user">사용자 발표 자료</em>}{linked.map((p) => <em className="usage-badge persona" key={p.id}>{p.name} 자료</em>)}{used && <em className="usage-badge question">예상 질문 사용</em>}{chatUsed && <em className="usage-badge chat">채팅 사용</em>}{!projectIds.includes(d.document_id) && !linked.length && <em className="usage-badge unused">미사용</em>}</div><button className="text-btn" onClick={() => setProjectIds((x) => x.includes(d.document_id) ? x.filter((id) => id !== d.document_id) : [...x, d.document_id])}>{projectIds.includes(d.document_id) ? '발표에서 제외' : '발표에 사용'}</button><DocumentSummaryPanel doc={d} token={token} /></div> })}</div></section>
+      {results.length > 0 && <section><div className="section-title"><span className="eyebrow">PRACTICE</span><h2>페르소나별 답변 연습</h2><p>질문을 고른 뒤 답변하세요. 각 채팅창은 독립적으로 동작합니다.</p></div><div className={`chat-grid panels-${results.length}`}>{results.map((r) => <ChatPanel key={`${activeSessionId}-${sessionRevision}-${r.persona_id}`} result={r} token={token} documentIds={practiceDocumentIds} chat={chats[r.persona_id]} update={(fn) => setChats((all) => ({ ...all, [r.persona_id]: fn(all[r.persona_id]) }))} />)}</div></section>}
+      <WorkspaceLibrary token={token} documents={documents} personas={personas} onResume={resumeSession} onChanged={refreshResources} />
+      <section className="materials-overview"><div className="section-title"><span className="eyebrow">SOURCE MAP</span><h2>자료 사용 위치</h2><p>발표·페르소나·예상 질문·채팅에 사용된 위치를 표시합니다.</p></div><div className="materials-table">{documents.map((d) => { const linked = personas.filter((p) => p.documentIds.includes(d.document_id)); const used = results.some((r) => r.questions.some((q) => q.sources?.some((s) => s.document_id === d.document_id))); const chatUsed = Object.values(chats).some((chat) => Object.values(chat.conversations || {}).some((conversation) => (conversation.messages || []).some((message) => !message.id?.startsWith('q-') && (message.sources || []).some((source) => source.document_id === d.document_id)))); return <div className="material-card" key={d.document_id}><div><strong>{d.filename}</strong><small>{d.document_type?.toUpperCase()} · {d.text_length || d.full_text?.length || 0}자</small></div><div className="usage-list">{projectIds.includes(d.document_id) && <em className="usage-badge user">사용자 발표 자료</em>}{linked.map((p) => <em className="usage-badge persona" key={p.id}>{p.name} 자료</em>)}{used && <em className="usage-badge question">예상 질문 사용</em>}{chatUsed && <em className="usage-badge chat">채팅 참고 후보</em>}{!projectIds.includes(d.document_id) && !linked.length && <em className="usage-badge unused">미사용</em>}</div><button className="text-btn" onClick={() => setProjectIds((x) => x.includes(d.document_id) ? x.filter((id) => id !== d.document_id) : [...x, d.document_id])}>{projectIds.includes(d.document_id) ? '발표에서 제외' : '발표에 사용'}</button><button className="text-btn" onClick={() => removeDocument(d)}>문서 삭제</button>{d.warnings?.map((w) => <p key={w} className="grounding-note">{w}</p>)}<DocumentSummaryPanel doc={d} token={token} /></div> })}</div></section>
     </main>
   </div>
 }

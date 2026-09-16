@@ -57,12 +57,12 @@ def get_llm_client() -> HttpLlmClient:
 
 @lru_cache
 def get_agent_repository() -> AgentRepository:
-    return PostgresAgentRepository() if get_repository_mode() == "postgres" else InMemoryAgentRepository()
+    return PostgresAgentRepository() if get_repository_mode() == "postgres" else InMemoryAgentRepository((get_review_repository(), get_chat_repository(), get_summary_repository()))
 
 
 @lru_cache
 def get_document_repository() -> DocumentRepository:
-    return PostgresDocumentRepository() if get_repository_mode() == "postgres" else InMemoryDocumentRepository()
+    return PostgresDocumentRepository() if get_repository_mode() == "postgres" else InMemoryDocumentRepository(get_review_repository(), (get_chat_repository(), get_summary_repository()))
 
 
 @lru_cache
@@ -189,10 +189,18 @@ def get_summary_service() -> SummaryService:
 
 @lru_cache
 def get_practice_service() -> PracticeService:
-    generator = HttpReviewGenerator(get_llm_client(), endpoint="/practice/questions")
+    from app.integrations.llm.generators import HttpQuestionGenerator
+    generator = HttpQuestionGenerator(get_llm_client())
     return PracticeService(
         generator=generator,
         agent_repository=get_agent_repository(),
         document_repository=get_document_repository(),
         max_concurrent_personas=get_practice_max_concurrent_personas(),
+        session_repository=get_practice_repository(),
     )
+
+
+@lru_cache
+def get_practice_repository():
+    from app.repositories.practice_repository import InMemoryPracticeRepository, PostgresPracticeRepository
+    return PostgresPracticeRepository() if get_repository_mode() == "postgres" else InMemoryPracticeRepository()

@@ -17,6 +17,11 @@ from app.main import app
 client = TestClient(app)
 
 
+async def async_tokens(items):
+    for item in items:
+        yield item
+
+
 def _persona_payload() -> dict:
     return {
         "agent_id": "11111111-1111-1111-1111-111111111111",
@@ -52,8 +57,8 @@ ENDPOINTS = [
     ),
     (
         "/api/v1/practice/questions",
-        {"persona": _persona_payload(), "document": _document_payload(), "instructions": "5개"},
-        '{"questions": ["첫 번째 발표 근거를 어떻게 검증했습니까?", "두 번째 실행 방법의 현실성을 어떻게 확인했습니까?", "세 번째 비교 대안보다 우수한 근거는 무엇입니까?", "네 번째 위험 요소에 대한 대응 계획은 무엇입니까?", "다섯 번째 자료의 한계를 어떻게 보완할 계획입니까?"]}',
+        {"persona": _persona_payload(), "question_count": 1, "evidence": [{"id": "e1", "scope": "presentation", "text": "발표 근거"}]},
+        '{"questions": [{"question": "발표 근거를 어떻게 검증했습니까?", "presentation_evidence_ids": ["e1"], "focus": "검증"}]}',
     ),
     (
         "/api/v1/chat",
@@ -210,7 +215,7 @@ def test_chat_hides_reasoning_and_limits_duplicate_long_answer(monkeypatch):
 
 def test_chat_stream_hides_split_reasoning_and_signals_empty_answer(monkeypatch):
     monkeypatch.setattr(
-        "app.main.stream_llm", lambda *a, **k: iter(["<thi", "nk>private", "</think>"])
+        "app.main.stream_llm", lambda *a, **k: async_tokens(["<thi", "nk>private", "</think>"])
     )
     response = client.post(
         "/api/v1/chat/stream", json={"persona": _persona_payload(), "message": "안녕"}
@@ -232,7 +237,7 @@ def test_no_document_chat_still_checks_context_capacity(monkeypatch):
 
 
 def test_chat_stream_returns_token_and_done_events(monkeypatch):
-    monkeypatch.setattr("app.main.stream_llm", lambda *a, **k: iter(["안녕", "하세요"]))
+    monkeypatch.setattr("app.main.stream_llm", lambda *a, **k: async_tokens(["안녕", "하세요"]))
     response = client.post(
         "/api/v1/chat/stream",
         json={"persona": _persona_payload(), "message": "안녕"},
@@ -285,9 +290,10 @@ def test_chat_keeps_ambiguous_question_grounded_when_document_is_attached(monkey
 def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
     captured = {}
 
-    def fake_stream(prompt, **kwargs):
+    async def fake_stream(prompt, **kwargs):
         captured["prompt"] = prompt
-        return iter(["반갑", "습니다"])
+        for token in ["반갑", "습니다"]:
+            yield token
 
     monkeypatch.setattr("app.main.stream_llm", fake_stream)
     response = client.post(
@@ -470,9 +476,10 @@ def test_chat_history_is_truncated_from_oldest_when_over_budget(monkeypatch):
 def test_chat_stream_includes_history_block(monkeypatch):
     captured = {}
 
-    def fake_stream(prompt, **kwargs):
+    async def fake_stream(prompt, **kwargs):
         captured["prompt"] = prompt
-        return iter(["답", "변"])
+        for token in ["답", "변"]:
+            yield token
 
     monkeypatch.setattr("app.main.stream_llm", fake_stream)
     payload = {
@@ -570,7 +577,7 @@ def test_review_short_document_uses_single_pass_call(monkeypatch):
 
     assert response.status_code == 200
     assert len(calls) == 1
-    assert response.json()["coverage"] is None
+    assert response.json()["coverage"] == {"total_chunks": 1, "analyzed_chunks": 1, "truncated": False, "selection_method": "full"}
 
 
 def test_review_long_document_uses_map_reduce(monkeypatch):
@@ -771,4 +778,31 @@ def test_summary_map_reduce_bad_schema_returns_502(monkeypatch):
         json={"document": _long_document_payload(50000)},
     )
 
+    assert response.status_code == 502
+
+
+def test_llm_failures_do_not_log_private_exceptions(monkeypatch, caplog):
+    def fail(*args, **kwargs):
+        raise LLMError('PRIVATE_DOCUMENT http://internal-service:11434')
+    monkeypatch.setattr('app.main.call_llm', fail)
+    response = client.post('/api/v1/personas', json={'name': '평가자', 'description': '근거 검증'})
+    assert response.status_code == 503
+    assert 'PRIVATE_DOCUMENT' not in response.text + caplog.text
+    assert 'internal-service' not in response.text + caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_short_summary_coverage_is_derived_not_trusted_from_model(monkeypatch):
+    monkeypatch.setattr('app.main.call_llm', lambda *a, **k: json.dumps({
+        'summary': '요약', 'key_topics': [], 'outline': [],
+        'coverage': {'total_chunks': 99, 'analyzed_chunks': 1, 'truncated': True}}))
+    response = client.post('/api/v1/summaries', json={'document': _document_payload(), 'style': 'brief'})
+    assert response.status_code == 200
+    assert response.json()['coverage'] == {'total_chunks': 1, 'analyzed_chunks': 1, 'truncated': False, 'selection_method': 'full'}
+
+
+def test_summary_rejects_complete_nested_object_inside_truncated_response(monkeypatch):
+    monkeypatch.setattr('app.main.call_llm', lambda *a, **k:
+                        '{"key_topics":[{"summary":"이 요점만 전체 요약으로 반환하면 안 됩니다."}]')
+    response = client.post('/api/v1/summaries', json={'document': _document_payload()})
     assert response.status_code == 502

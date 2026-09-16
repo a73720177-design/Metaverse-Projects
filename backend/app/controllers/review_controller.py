@@ -6,9 +6,16 @@ from app.dependencies import get_current_user, get_review_service
 from app.models.error import ErrorResponse
 from app.models.review import ReviewCreateRequest, ReviewResult
 from app.models.user import UserResponse
+from app.services.review_service import ReviewSourceUnavailableError
 from app.services.review_service import ReviewResourceNotFoundError, ReviewService, ReviewServiceError
 
 router = APIRouter(tags=["리뷰"])
+
+
+@router.get("/reviews", response_model=list[ReviewResult])
+async def list_reviews(service: ReviewService = Depends(get_review_service),
+                       current_user: UserResponse = Depends(get_current_user)):
+    return await service.repository.list(current_user.user_id)
 
 
 @router.post("/agents/{agent_id}/reviews", response_model=ReviewResult,
@@ -25,6 +32,8 @@ async def create_review(
         return await service.create(agent_id, request, current_user.user_id)
     except ReviewResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReviewSourceUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ReviewServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

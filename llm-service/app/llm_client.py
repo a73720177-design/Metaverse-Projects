@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from threading import BoundedSemaphore
 
 import requests
+from app.context_budget import context_length, require_prompt_fits
 from dotenv import load_dotenv
 
 # os.getenv()가 모듈 로드 시점에 바로 읽히므로, 반드시 그 전에 .env를 로드해야 한다.
@@ -63,7 +64,8 @@ def _vllm_headers() -> dict[str, str]:
 
 def _vllm_model(model: str | None) -> str:
     configured = os.getenv("VLLM_MODEL", VLLM_MODEL).strip()
-    resolved = model or configured
+    # Task callers pass Ollama model names; the vLLM server exposes its own alias.
+    resolved = configured or model
     if not resolved:
         raise LLMError("VLLM_MODEL is required when LLM_PROVIDER=vllm")
     return resolved
@@ -95,6 +97,7 @@ def call_llm(
     Raises:
         LLMError: Ollama 서버 호출 실패 시
     """
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt, think=think)
     if _provider() == "vllm":
         payload = {
@@ -117,7 +120,10 @@ def call_llm(
                     timeout=REQUEST_TIMEOUT,
                 )
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"] or ""
+                text = response.json()["choices"][0]["message"]["content"]
+                if text is not None and not isinstance(text, str):
+                    raise ValueError("invalid generation content")
+                return text if text is not None else ""
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError("vLLM 호출 실패") from exc
 
@@ -128,6 +134,7 @@ def call_llm(
         "think": think,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
+            "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
@@ -166,6 +173,8 @@ def stream_llm(
     max_tokens: int | None = None,
 ) -> Iterator[str]:
     """Ollama token chunks for latency-sensitive chat responses."""
+    completed = False
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt)
     if _provider() == "vllm":
         payload = {
@@ -195,6 +204,7 @@ def stream_llm(
                             continue
                         data = decoded.removeprefix("data:").strip()
                         if data == "[DONE]":
+                            completed = True
                             break
                         event = json.loads(data)
                         if event.get("error"):
@@ -207,6 +217,8 @@ def stream_llm(
                             raise ValueError("invalid stream content")
                         if chunk:
                             yield chunk
+            if not completed:
+                raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
             return
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             raise LLMError("vLLM 스트리밍 호출 실패") from exc
@@ -218,6 +230,7 @@ def stream_llm(
         "think": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
+            "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
@@ -245,7 +258,10 @@ def stream_llm(
                     if chunk:
                         yield chunk
                     if event.get("done"):
+                        completed = True
                         break
+        if not completed:
+            raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
     except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         raise LLMError("Ollama 스트리밍 호출 실패") from exc
 
@@ -314,3 +330,72 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             raise LLMError("임베딩 모델 호출 실패") from exc
         embeddings.extend(batch_embeddings)
     return embeddings
+
+
+async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: int | None = None):
+    """Cancellation closes the provider HTTP response, including while awaiting tokens."""
+    import asyncio
+    import httpx
+    provider = _provider()
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
+    guarded = _disable_thinking_prompt(prompt)
+    if provider == "vllm":
+        url = f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions"
+        payload = {"model": _vllm_model(model), "messages": [{"role": "user", "content": guarded}],
+                   "stream": True, "max_tokens": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+                   "temperature": 0.35, "repetition_penalty": 1.18,
+                   "chat_template_kwargs": {"enable_thinking": False}}
+    else:
+        url = f"{OLLAMA_HOST}/api/generate"
+        payload = {"model": model or OLLAMA_MODEL, "prompt": guarded, "stream": True,
+                   "think": False, "keep_alive": OLLAMA_KEEP_ALIVE,
+                   "options": {"num_ctx": context_length(),
+                               "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+                               "temperature": 0.35, "repeat_penalty": 1.18, "repeat_last_n": 256}}
+    acquired = False
+    completed = False
+    try:
+        async with asyncio.timeout(REQUEST_TIMEOUT):
+            while not _GENERATION_SLOTS.acquire(blocking=False):
+                await asyncio.sleep(0.05)
+            acquired = True
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                async with client.stream("POST", url, json=payload,
+                                         headers=_vllm_headers() if provider == "vllm" else {}) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if provider == "vllm":
+                            if not line.startswith("data:"):
+                                continue
+                            line = line[5:].strip()
+                            if line == "[DONE]":
+                                completed = True
+                                break
+                        event = json.loads(line)
+                        if event.get("error"):
+                            raise LLMError("모델 스트리밍 생성 실패")
+                        if provider == "vllm":
+                            choices = event["choices"]
+                            if not isinstance(choices, list):
+                                raise ValueError("invalid choices")
+                            chunk = choices[0]["delta"].get("content") if choices else ""
+                            if chunk is None:
+                                chunk = ""
+                        else:
+                            chunk = event.get("response", "")
+                        if not isinstance(chunk, str):
+                            raise ValueError("invalid token")
+                        if chunk:
+                            yield chunk
+                        if provider == "ollama" and event.get("done"):
+                            completed = True
+                            break
+        if not completed:
+            raise LLMError("모델 스트림이 완료 전에 종료되었습니다.")
+    except (httpx.HTTPError, TimeoutError, KeyError, IndexError, ValueError, TypeError, AttributeError) as exc:
+        raise LLMError("모델 스트리밍 연결 또는 응답 오류") from exc
+    finally:
+        if acquired:
+            _GENERATION_SLOTS.release()

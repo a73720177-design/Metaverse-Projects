@@ -50,6 +50,14 @@ class InMemorySummaryRepository:
                 return summary
         return None
 
+    async def remove_agent(self, agent_id, owner_id):
+        self._summaries = {key: (o, s) for key, (o, s) in self._summaries.items()
+                           if not (o == owner_id and s.agent_id == agent_id)}
+
+    async def remove_document(self, document_id, owner_id):
+        self._summaries = {key: (o, s) for key, (o, s) in self._summaries.items()
+                           if not (o == owner_id and s.document_id == document_id)}
+
 
 class PostgresSummaryRepository:
     async def save(self, summary: SummaryResult, owner_id: UUID) -> SummaryResult:
@@ -63,6 +71,11 @@ class PostgresSummaryRepository:
             summary=summary.summary,
             key_topics=data["key_topics"],
             outline=data["outline"],
+            # Keep generation metadata in the existing JSON coverage column;
+            # legacy rows remain readable without a schema migration.
+            coverage={**(data["coverage"] or {}),
+                      "generation_assessment": data["assessment"],
+                      "generation_warnings": data["warnings"]},
             created_at=summary.created_at,
         )
         async with get_session_factory()() as session:
@@ -133,6 +146,9 @@ class PostgresSummaryRepository:
                 "summary": row.summary,
                 "key_topics": row.key_topics,
                 "outline": row.outline,
+                "coverage": row.coverage if row.coverage and "total_chunks" in row.coverage else None,
+                "assessment": (row.coverage or {}).get("generation_assessment"),
+                "warnings": (row.coverage or {}).get("generation_warnings", []),
                 "created_at": row.created_at,
             }
         )

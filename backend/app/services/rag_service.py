@@ -1,5 +1,7 @@
 
 import hashlib
+import json
+from bisect import bisect_right
 import logging
 import re
 import math
@@ -16,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _SENTENCE_BOUNDARY_RE = re.compile(
-    r"(?<=[.!?。！？])(?:\s+|(?=[0-9A-Za-z가-힣]))|\n+"
+    r"(?<=[.!?。！？])\s+|(?<=[!?。！？])(?=[0-9A-Za-z가-힣])|\n+"
 )
 _LOW_SIGNAL_TERMS = {
     "질문", "답변", "발표", "자료", "문서", "내용", "평가", "관련",
@@ -42,6 +44,21 @@ def should_use_document(
     return _SMALL_TALK_RE.fullmatch(message.strip()) is None
 
 
+_FOLLOW_UP_RE = re.compile(
+    r"^(?:그(?:건|것|거|게|걸|러면|렇다면|래서)|이(?:것|건|거)|저것|"
+    r"그\s|이\s|좀\s*더|더\s*(?:자세|설명)|왜(?:요|죠)?[?？.!\s]*$|"
+    r"예시|예를\s*들|다시\s*설명|계속|이어서|what about|why[?!.\s]*$|"
+    r"tell me more|explain (?:that|it))", re.IGNORECASE,
+)
+
+
+def build_retrieval_query(message: str, previous_message: str | None = None) -> str:
+    """Carry the previous topic only for an explicit referential follow-up."""
+    if previous_message and _FOLLOW_UP_RE.search(message.strip()):
+        return f"{previous_message} {message}"
+    return message
+
+
 # llm-service/app/prompts.py의 CHUNK_LABEL_TEMPLATE과 반드시 같은 형식이어야
 # 한다. 두 서비스는 분리되어 있어 import로 공유할 수 없으므로 문자열을 양쪽에
 # 두고, 계약 테스트(backend/tests/test_llm_v1_contract.py,
@@ -53,6 +70,22 @@ _CHUNK_LABEL_TEMPLATE = "[근거 {ordinal}] 파일: {filename} / 구간 {index}"
 
 def _chunk_header(ordinal: int, filename: str, index: int) -> str:
     return _CHUNK_LABEL_TEMPLATE.format(ordinal=ordinal, filename=filename, index=index) + "\n"
+
+
+def fuse_chunk_rankings(*rankings: list[DocumentSection]) -> list[DocumentSection]:
+    """Reciprocal rank fusion, with stable ties and one vote per list/chunk."""
+    scores: dict[tuple[int, str], float] = {}
+    sections: dict[tuple[int, str], DocumentSection] = {}
+    for ranking in rankings:
+        seen = set()
+        for section in ranking:
+            key = (section.index, section.text.strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            sections.setdefault(key, section)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + len(seen))
+    return [sections[key] for key in sorted(scores, key=scores.get, reverse=True)]
 
 
 def combine_document_contexts(
@@ -237,12 +270,15 @@ class DocumentContextSelector:
         self.cache_size = cache_size
         self.max_context_chars = max_context_chars
         self._cache: OrderedDict[UUID, tuple[str, list[DocumentSection]]] = OrderedDict()
+        self._term_cache: dict[UUID, tuple[list[Counter], list[int], Counter, float]] = {}
 
     @staticmethod
     def _fingerprint(document: DocumentParseResponse) -> str:
         # sha256 (not the builtin hash()) so the fingerprint is stable across
         # processes/restarts, matching vector_rag's content_hash convention.
-        return hashlib.sha256(document.full_text.encode("utf-8")).hexdigest()
+        payload = {"full_text": document.full_text,
+                   "sections": [section.model_dump(mode="json") for section in document.sections]}
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode("utf-8")).hexdigest()
 
     def _split(self, document: DocumentParseResponse) -> list[DocumentSection]:
         chunks: list[DocumentSection] = []
@@ -251,61 +287,28 @@ class DocumentContextSelector:
             text = section.text.strip()
             if not text:
                 continue
-            units = [unit.strip() for unit in _SENTENCE_BOUNDARY_RE.split(text) if unit.strip()]
-            current: list[str] = []
-            current_length = 0
-
-            def append_current() -> None:
-                nonlocal current, current_length
-                if not current:
-                    return
-                chunk_text = " ".join(current).strip()
-                chunks.append(
-                    DocumentSection(
-                        index=section.index,
-                        text=chunk_text,
-                        source_document_id=section.source_document_id,
-                        source_filename=section.source_filename,
-                        source_document_type=section.source_document_type,
-                    )
-                )
-                overlap_units: list[str] = []
-                overlap_length = 0
-                for unit in reversed(current):
-                    added = len(unit) + (1 if overlap_units else 0)
-                    if not overlap_units and added > self.overlap:
-                        break
-                    if overlap_units and overlap_length + added > self.overlap:
-                        break
-                    overlap_units.insert(0, unit)
-                    overlap_length += added
-                current = overlap_units
-                current_length = overlap_length
-
-            for unit in units:
-                if len(unit) > self.chunk_size:
-                    append_current()
-                    for start in range(0, len(unit), self.chunk_size):
-                        part = unit[start : start + self.chunk_size].strip()
-                        if part:
-                            chunks.append(
-                                DocumentSection(
-                                    index=section.index,
-                                    text=part,
-                                    source_document_id=section.source_document_id,
-                                    source_filename=section.source_filename,
-                                    source_document_type=section.source_document_type,
-                                )
-                            )
-                    current = []
-                    current_length = 0
-                    continue
-                added = len(unit) + (1 if current else 0)
-                if current and current_length + added > self.chunk_size:
-                    append_current()
-                current.append(unit)
-                current_length += len(unit) + (1 if len(current) > 1 else 0)
-            append_current()
+            # Slice the original text: table rows, paragraphs and decimal values
+            # must survive retrieval. Prefer sentence/line endings within the cap.
+            boundaries = [match.end() for match in _SENTENCE_BOUNDARY_RE.finditer(text)]
+            start = 0
+            while start < len(text):
+                end = min(start + self.chunk_size, len(text))
+                if end < len(text):
+                    boundary_index = bisect_right(boundaries, end) - 1
+                    if boundary_index >= 0 and boundaries[boundary_index] > start + self.overlap:
+                        end = boundaries[boundary_index]
+                content = text[start:end].strip()
+                if content:
+                    chunks.append(section.model_copy(update={"text": content}))
+                if end == len(text):
+                    break
+                # Keep overlap even for a single long sentence, while ensuring
+                # forward progress when overlap is close to the chunk size.
+                next_start = max(start + 1, end - self.overlap)
+                boundary_index = bisect_right(boundaries, next_start - 1)
+                if boundary_index < len(boundaries) and boundaries[boundary_index] < end:
+                    next_start = boundaries[boundary_index]
+                start = next_start
         return chunks
 
     @staticmethod
@@ -327,14 +330,17 @@ class DocumentContextSelector:
         query_terms = set(self._features(query))
         if not query_terms or not chunks:
             return []
-        chunk_terms = [self._features(chunk.text) for chunk in chunks]
-        document_frequency = Counter(
-            term for terms in chunk_terms for term in set(terms) if term in query_terms
-        )
-        average_length = sum(len(terms) for terms in chunk_terms) / len(chunk_terms) or 1
+        if document.document_id not in self._term_cache:
+            terms = [self._features(chunk.text) for chunk in chunks]
+            lengths = [len(items) for items in terms]
+            self._term_cache[document.document_id] = (
+                [Counter(items) for items in terms], lengths,
+                Counter(term for items in terms for term in set(items)),
+                sum(lengths) / len(chunks) or 1,
+            )
+        counters, lengths, document_frequency, average_length = self._term_cache[document.document_id]
         ranked: list[tuple[float, int, DocumentSection]] = []
-        for position, (chunk, terms) in enumerate(zip(chunks, chunk_terms)):
-            frequencies = Counter(terms)
+        for position, (chunk, frequencies, length) in enumerate(zip(chunks, counters, lengths)):
             score = 0.0
             for term in query_terms:
                 frequency = frequencies[term]
@@ -343,7 +349,7 @@ class DocumentContextSelector:
                 idf = math.log(1 + (len(chunks) - document_frequency[term] + 0.5) /
                                (document_frequency[term] + 0.5))
                 denominator = frequency + 1.2 * (
-                    0.25 + 0.75 * len(terms) / average_length
+                    0.25 + 0.75 * length / average_length
                 )
                 score += idf * frequency * 2.2 / denominator
             if score > 0:
@@ -357,10 +363,12 @@ class DocumentContextSelector:
             self._cache.move_to_end(document.document_id)
             return cached[1]
         chunks = self._split(document)
+        self._term_cache.pop(document.document_id, None)
         self._cache[document.document_id] = (fingerprint, chunks)
         self._cache.move_to_end(document.document_id)
         while len(self._cache) > self.cache_size:
-            self._cache.popitem(last=False)
+            evicted_id, _ = self._cache.popitem(last=False)
+            self._term_cache.pop(evicted_id, None)
         return chunks
 
     def select(
@@ -390,7 +398,6 @@ class DocumentContextSelector:
             rendered_length += added_length
             if len(selected) == self.max_chunks:
                 break
-        selected.sort(key=lambda chunk: chunk.index)
         context = "\n\n".join(
             f"[구간 {chunk.index}]\n{chunk.text}" for chunk in selected
         )

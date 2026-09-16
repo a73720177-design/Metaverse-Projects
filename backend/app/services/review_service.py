@@ -13,6 +13,10 @@ class ReviewServiceError(RuntimeError):
     pass
 
 
+class ReviewSourceUnavailableError(RuntimeError):
+    pass
+
+
 class ReviewResourceNotFoundError(RuntimeError):
     pass
 
@@ -39,6 +43,10 @@ class ReviewService:
         document = await self.document_repository.get(request.document_id, owner_id)
         if document is None:
             raise ReviewResourceNotFoundError("Document not found")
+        if len(document.sections) > 1000 or len(document.full_text) > 2_000_000:
+            raise ReviewSourceUnavailableError("문서 분석 한도(1,000개 구간·200만 자)를 초과했습니다.")
+        if not document.full_text.strip():
+            raise ReviewSourceUnavailableError("분석할 텍스트가 없습니다. 텍스트를 포함한 자료를 업로드해주세요.")
         try:
             generated = await self.generator.generate(
                 persona, document, request.instructions

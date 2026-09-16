@@ -131,6 +131,7 @@ class ReviewTable(Base):
     claims: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     feedback: Mapped[dict] = mapped_column(JSONB, nullable=False)
     questions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    coverage: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -181,6 +182,7 @@ class ChatMessageTable(Base):
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     timing: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    grounding: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -202,12 +204,24 @@ class SummaryTable(Base):
         PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
     )
     agent_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="SET NULL")
+        PG_UUID(as_uuid=True), ForeignKey("agents.agent_id", ondelete="CASCADE")
     )
     style: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     key_topics: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     outline: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    coverage: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class PracticeSessionTable(Base):
+    __tablename__ = "practice_sessions"
+    __table_args__ = (Index("ix_practice_sessions_owner_created", "owner_id", "created_at"),)
+    session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

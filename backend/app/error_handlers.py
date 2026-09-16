@@ -85,22 +85,27 @@ class RequestErrorMiddleware:
         request_id = uuid4().hex
         scope.setdefault("state", {})["request_id"] = request_id
         started = False
+        finished = False
 
         async def send_with_id(message):
-            nonlocal started
+            nonlocal started, finished
             if message["type"] == "http.response.start":
                 started = True
                 headers = [(key, value) for key, value in message.get("headers", [])
                            if key.lower() != b"x-request-id"]
                 message = {**message, "headers": [*headers, (b"x-request-id", request_id.encode())]}
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                finished = True
             await send(message)
 
         try:
             await self.app(scope, receive, send_with_id)
         except Exception as exc:
-            logger.exception("Unhandled request error request_id=%s type=%s", request_id, type(exc).__name__)
+            logger.error("Unhandled request error request_id=%s type=%s", request_id, type(exc).__name__)
             if started:
-                raise
+                if not finished:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
             response = error_response(Request(scope), 500, {
                 "code": "internal_server_error",
                 "message": "서버 내부 오류로 요청을 처리하지 못했습니다. 요청 ID로 서버 로그를 확인해주세요.",

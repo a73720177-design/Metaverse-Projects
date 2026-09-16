@@ -6,7 +6,9 @@ from app.models.persona import (
     PersonaCreateRequest, PersonaHistoryItem, PersonaProfile, PersonaUpdateRequest,
 )
 from app.models.document import DocumentParseResponse
-from app.integrations.llm.contracts import PersonaGenerator, PersonaGeneratorError
+from app.integrations.llm.contracts import (
+    PersonaGenerationRequest, PersonaGenerator, PersonaGeneratorError,
+)
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.document_repository import DocumentRepository
 
@@ -53,31 +55,27 @@ class PersonaService:
     @staticmethod
     def _generation_request(
         request: PersonaCreateRequest, documents: list[DocumentParseResponse]
-    ) -> PersonaCreateRequest:
+    ) -> PersonaGenerationRequest:
         """Give the generator bounded source evidence without persisting it as description."""
-        if not documents:
-            return request
-
         remaining = 3000
         excerpts: list[str] = []
         for document in documents:
             text = " ".join(document.full_text.split())
             if not text:
                 continue
-            excerpt = text[:remaining]
-            excerpts.append(f"[{document.filename}]\n{excerpt}")
-            remaining -= len(excerpt)
-            if remaining <= 0:
+            header = f"[{document.filename}]\n"
+            separator = 2 if excerpts else 0
+            available = remaining - separator - len(header)
+            if available <= 0:
                 break
-        if not excerpts:
-            return request
-
-        description = (
-            f"{request.description}\n\n"
-            "아래는 질문자 관점과 평가 기준을 추론할 때만 사용할 참고자료입니다. "
-            "자료에 없는 성향을 단정하지 마세요.\n" + "\n\n".join(excerpts)
+            excerpt = header + text[:available]
+            excerpts.append(excerpt)
+            remaining -= separator + len(excerpt)
+        return PersonaGenerationRequest(
+            name=request.name,
+            description=request.description,
+            reference_context="\n\n".join(excerpts),
         )
-        return request.model_copy(update={"description": description})
 
     async def create(self, request: PersonaCreateRequest, owner_id: UUID) -> PersonaProfile:
         documents = await self._owned_documents(request.document_ids, owner_id)

@@ -20,7 +20,8 @@ from typing import Protocol
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.prompts import REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT
+from app.pipeline_budget import budgeted_groups, limit_groups, reduce_to_fit
+from app.prompts import UNTRUSTED_INPUT_RULE, OUTPUT_LANGUAGE_RULE, REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT, render_persona, render_instructions, FULL_TEXT_MAX_CHARS
 from app.schemas_v1 import (
     ClaimAssessment,
     DocumentIn,
@@ -61,7 +62,7 @@ def _positive_env_int(name: str, default: int) -> int:
 
 def should_use_map_reduce(full_text: str) -> bool:
     threshold = _positive_env_int("REVIEW_SINGLE_PASS_CHARS", 12000)
-    return len(full_text) > threshold
+    return len(full_text) > min(threshold, FULL_TEXT_MAX_CHARS)
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -151,7 +152,7 @@ def _render_group(group: list[ReviewChunk]) -> str:
 
 
 def _persona_json(persona: PersonaProfileIn) -> str:
-    return json.dumps(persona.model_dump(mode="json"), ensure_ascii=False)
+    return render_persona(persona)
 
 
 def generate_review_map_reduce(
@@ -163,33 +164,53 @@ def generate_review_map_reduce(
     model: str | None,
 ) -> ReviewGenerationResponse:
     chunks = _build_chunks(document)
-    groups, truncated = _pack_chunks(chunks)
 
     persona_json = _persona_json(persona)
-    instructions_text = instructions or "(없음)"
+    instructions_text = render_instructions(instructions)
 
+    def map_prompt(group):
+        return REVIEW_MAP_PROMPT.format(
+            persona_json=persona_json, filename=document.filename,
+            instructions=instructions_text, chunk_text=_render_group(group),
+        )
+
+    all_groups = budgeted_groups(chunks, map_prompt, 768, _positive_env_int("REVIEW_MAP_CHARS", 12000))
+    groups = limit_groups(all_groups, "REVIEW", _evenly_sample)
+    truncated = len(groups) < len(all_groups)
     all_claims: list[dict] = []
     for group in groups:
-        prompt = REVIEW_MAP_PROMPT.format(
-            persona_json=persona_json,
-            filename=document.filename,
-            instructions=instructions_text,
-            chunk_text=_render_group(group),
-        )
-        result = generate(prompt, _MapResult, max_tokens=768, model=model)
+        result = generate(map_prompt(group), _MapResult, max_tokens=768, model=model)
         all_claims.extend(claim.model_dump(mode="json") for claim in result.claims)
 
-    reduce_prompt = REVIEW_REDUCE_PROMPT.format(
-        persona_json=persona_json,
-        filename=document.filename,
-        instructions=instructions_text,
-        claims_json=json.dumps(all_claims, ensure_ascii=False),
+    def final_prompt(claims):
+        prompt = REVIEW_REDUCE_PROMPT.format(
+            persona_json=persona_json, filename=document.filename,
+            instructions=instructions_text, claims_json=json.dumps(claims, ensure_ascii=False),
+        )
+        if truncated:
+            prompt += "\n일부 구간만 표본 검토했습니다. 피드백에 이 한계를 밝히고 문서 전체를 검토했다고 표현하지 마세요.\n"
+        return prompt
+
+    def compact_prompt(claims):
+        return (
+            "중간 검토 결과를 압축하세요. 핵심 주장, 상충 근거, verdict와 출처 페이지를 유지하고 "
+            "중복만 합치세요. 인용문과 주장은 짧게, claims는 최대 3개로 작성하세요. "
+            "시각 분석의 불확실성을 유지하세요.\n"
+            + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
+            + "\n=== 자료 시작 ===\n" + json.dumps(claims, ensure_ascii=False) + "\n=== 자료 끝 ==="
+        )
+
+    all_claims = reduce_to_fit(
+        all_claims, final_prompt=final_prompt, final_tokens=2048,
+        compact_prompt=compact_prompt, response_model=_MapResult, field="claims",
+        generate=generate, model=model, compact_tokens=768,
     )
-    response = generate(reduce_prompt, ReviewGenerationResponse, max_tokens=1024, model=model)
+    response = generate(final_prompt(all_claims), ReviewGenerationResponse, max_tokens=2048, model=model)
 
     coverage = ReviewCoverage(
-        total_chunks=len(chunks),
+        total_chunks=sum(len(group) for group in all_groups),
         analyzed_chunks=sum(len(group) for group in groups),
         truncated=truncated,
+        selection_method="even_sample" if truncated else "full",
     )
     return response.model_copy(update={"coverage": coverage})
