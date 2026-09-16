@@ -45,4 +45,3 @@ class ReasoningFilter:
                 visible.append(self._pending[:pending_start] if possible_tag else self._pending)
             self._pending = ""
         return "".join(visible)
-

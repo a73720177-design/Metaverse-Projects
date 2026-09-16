@@ -41,7 +41,7 @@ migration을 적용하지 않았다. 운영 적용 시 GIN 생성 시간·잠금
 ## 검증
 
 ```sh
-REPOSITORY_MODE=memory OBJECT_STORAGE_MODE=local DB_AUTO_CREATE=false python -m pytest -q
+REPOSITORY_MODE=memory RAG_MODE=lexical python -m pytest -q
 python scripts/benchmark_lexical_cache.py
 ```
 

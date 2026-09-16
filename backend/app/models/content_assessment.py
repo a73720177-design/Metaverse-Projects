@@ -8,4 +8,3 @@ class ContentAssessment(BaseModel):
     output_limit: int = 0
     saturated: bool = False
     basis: str = "중복을 제외한 내용량 기준의 추정치이며 정확도 평가는 아닙니다."
-

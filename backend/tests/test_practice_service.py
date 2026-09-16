@@ -302,7 +302,13 @@ def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypa
     async def run():
         owner = uuid4()
         agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
-        sections = [DocumentSection(index=i + 1, text=f'페이지{i} 핵심 근거를 실험으로 검증했습니다. ' * 100) for i in range(101)]
+        sections = [
+            DocumentSection(
+                index=i + 1,
+                text=f'페이지{i} 프로젝트 성과 검증을 위한 구체적인 핵심 근거와 측정 결과 ' * 100,
+            )
+            for i in range(101)
+        ]
         document = _document('긴발표.pdf').model_copy(update={'sections': sections, 'full_text': '\n'.join(s.text for s in sections)})
         persona = PersonaProfile(name='평가자')
         await agents.save(persona, owner)

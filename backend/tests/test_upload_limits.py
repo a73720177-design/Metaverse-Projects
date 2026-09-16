@@ -60,8 +60,11 @@ def test_timeout_kills_parser_process(monkeypatch):
     process = Process()
     async def start(*args, **kwargs):
         return process
+    async def terminate(target):
+        target.killed = True
+        target.returncode = -9
     monkeypatch.setattr('app.services.parser_process.asyncio.create_subprocess_exec', start)
-    monkeypatch.setattr('app.services.parser_process.os.killpg', lambda *args: setattr(process, 'killed', True))
+    monkeypatch.setattr('app.services.parser_process._terminate_process_tree', terminate)
     monkeypatch.setenv('PARSER_TIMEOUT_SECONDS', '0')
     with pytest.raises(ValueError, match='시간 제한'):
         asyncio.run(parse_in_process('unused', 'unused.pdf'))

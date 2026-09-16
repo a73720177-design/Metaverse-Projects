@@ -1,0 +1,5 @@
+# Install in a separate Python 3.11/3.12 environment if torch wheels for the
+# main service's Python version are unavailable. Serving uses local weights.
+-r requirements.txt
+torch>=2.6,<3
+transformers>=4.51,<5
