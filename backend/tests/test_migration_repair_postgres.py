@@ -22,7 +22,7 @@ def test_fresh_replay_selective_apply_and_batch_rollback():
         connection = None
         try:
             migrations = discover_migrations(DEFAULT_MIGRATIONS_DIR)
-            assert len(await apply_migrations(target, migrations)) == 12
+            assert len(await apply_migrations(target, migrations)) == len(migrations)
             assert await apply_migrations(target, migrations) == []
             connection = await asyncpg.connect(target.database_url)
             user, agent, document = uuid4(), uuid4(), uuid4()
@@ -54,8 +54,8 @@ def test_fresh_replay_selective_apply_and_batch_rollback():
             def migration(version, sql):
                 return Migration(version, f'{version}_test.sql', hashlib.sha256(sql.encode()).hexdigest(), sql)
 
-            additions = [migration('013', 'CREATE TABLE migration_rollback_probe(id integer)'),
-                         migration('014', 'INSERT INTO definitely_missing_repair_table VALUES (1)')]
+            additions = [migration('015', 'CREATE TABLE migration_rollback_probe(id integer)'),
+                         migration('016', 'INSERT INTO definitely_missing_repair_table VALUES (1)')]
             with pytest.raises(asyncpg.UndefinedTableError):
                 await apply_migrations(target, [*migrations, *additions])
             assert await connection.fetchval("SELECT to_regclass('migration_rollback_probe')") is None
@@ -65,7 +65,7 @@ def test_fresh_replay_selective_apply_and_batch_rollback():
             # Even --only must verify every historical checksum before writing.
             altered = [migration('001', 'SELECT 1'), *migrations[1:], additions[0]]
             with pytest.raises(RuntimeError, match='No migrations were applied'):
-                await apply_migrations(target, altered, only_versions={'013'})
+                await apply_migrations(target, altered, only_versions={'015'})
             assert await connection.fetchval("SELECT to_regclass('migration_rollback_probe')") is None
         finally:
             if connection is not None:

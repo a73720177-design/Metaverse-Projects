@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import * as api from './api'
+import LoadingProgress from './LoadingProgress'
 
 export function CoverageNotice({ coverage }) {
   if (!coverage) return <small>분석 범위 정보 없음</small>
@@ -47,7 +48,7 @@ export default function WorkspaceLibrary({ token, documents, personas, onResume,
     <h2>리뷰와 저장된 기록</h2>
     <nav aria-label="저장 기록 메뉴">{[['reviews', '자료 리뷰'], ['sessions', '연습 기록'], ['chats', '대화 이력'], ['trash', '휴지통']].map(([id, label]) => <button key={id} aria-pressed={tab === id} disabled={busy} onClick={() => { setItems([]); setTrashPersonas([]); setTab(id); setReview(null) }}>{label}</button>)}</nav>
     {error && <p role="alert" className="form-error">{error}</p>}
-    {busy && <p role="status">처리 중…</p>}
+    {busy && <LoadingProgress label="저장 기록 처리 중" expected="목록 조회·복원은 보통 1~15초, AI 리뷰 생성은 최대 수 분" slowAfterMs={120000} />}
     {tab === 'reviews' && <>
       <form onSubmit={(e) => { e.preventDefault(); action(async () => setReview(await api.createReview(agent, document, token))) }}>
         <label>질문자 <select value={agent} onChange={(e) => setAgent(e.target.value)} required><option value="">선택</option>{personas.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>

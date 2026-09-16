@@ -42,6 +42,14 @@ export function newConversation(question) {
   }
 }
 
+export function shouldSubmitChatKey({ key, shiftKey, isComposing, keyCode }) {
+  return key === 'Enter' && !shiftKey && !isComposing && keyCode !== 229
+}
+
+export function documentDeletePrompt(filename) {
+  return `정말 "${filename}" 을 삭제하시겠습니까?`
+}
+
 export function restorePracticeChats(session, history) {
   return Object.fromEntries(session.response.results.map((result) => {
     const conversations = Object.fromEntries(result.questions.map((question) => {

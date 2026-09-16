@@ -32,8 +32,8 @@
 - Node.js: 24.19.0
 - npm: 11.17.0
 - Docker Desktop/Engine: 29.7.2
-- Ollama 모델: `qwen3:4b`, `qwen2.5:7b`
-- 현재 Git 브랜치: `backend-latest`
+- Ollama 텍스트 모델: `qwen3:4b` (임베딩은 `bge-m3`)
+- 실행 전 `git branch --show-current`와 `git status --short`로 현재 브랜치와 변경사항을 확인합니다.
 
 현재 데스크톱 Backend는 Docker의 PostgreSQL과 MinIO를 사용하는 모드입니다.
 
@@ -97,11 +97,11 @@ if (-not (Test-Path "$ProjectRoot\llm-service\.env")) {
 LLM_PROVIDER=ollama
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:4b
-OLLAMA_CHAT_MODEL=qwen2.5:7b
+OLLAMA_CHAT_MODEL=qwen3:4b
 OLLAMA_REVIEW_MODEL=qwen3:4b
 OLLAMA_QUESTION_MODEL=qwen3:4b
 OLLAMA_SUMMARY_MODEL=qwen3:4b
-LLM_MAX_CONCURRENT_GENERATIONS=3
+LLM_MAX_CONCURRENT_GENERATIONS=1
 OLLAMA_KEEP_ALIVE=5m
 ```
 
@@ -271,7 +271,7 @@ PRACTICE_MAX_CONCURRENT_PERSONAS=1
 LLM_PROVIDER=ollama
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:4b
-OLLAMA_CHAT_MODEL=qwen2.5:7b
+OLLAMA_CHAT_MODEL=qwen3:4b
 OLLAMA_REVIEW_MODEL=qwen3:4b
 OLLAMA_QUESTION_MODEL=qwen3:4b
 OLLAMA_SUMMARY_MODEL=qwen3:4b
