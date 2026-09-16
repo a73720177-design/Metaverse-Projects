@@ -28,10 +28,10 @@
 
 회귀 테스트는 긴 페이지 끝의 근거, 키워드·벡터 혼합, 출처 매핑,
 청크 크기·겹침, 숫자·줄바꿈 보존, 질문 전환과 캐시 갱신을 검증한다.
-로컬 테스트는 CI와 같은 `REPOSITORY_MODE=memory`, `RAG_MODE=lexical`,
-`OBJECT_STORAGE_MODE=local`, `DB_AUTO_CREATE=false`,
-`LLM_CONTRACT_MODE=legacy_questions` 환경을 사용하며 벡터 단위 테스트는
-검색 결과 또는 임베딩 클라이언트를 대체한다.
+로컬 테스트는 CI와 같은 `REPOSITORY_MODE=memory`,
+`OBJECT_STORAGE_MODE=local`, `DB_AUTO_CREATE=false` 환경을 사용하며 벡터 단위
+테스트는 검색 결과 또는 임베딩 클라이언트를 대체한다. `RAG_MODE`는 기본값
+`vector`를 그대로 쓴다.
 
 이번 변경은 검색 시점에 적용되므로 기존 문서 재업로드나 재색인은 필요 없다.
 DB의 벡터 저장 단위는 여전히 파서의 섹션(주로 페이지)이다. 임베딩 API의
