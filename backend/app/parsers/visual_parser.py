@@ -32,7 +32,7 @@ def _enrich_visual_pages(path: Path, parsed: list[tuple[int, str]]) -> list[tupl
     deadline = monotonic() + _get_positive_int("VLM_DOCUMENT_TIMEOUT_SECONDS", 600)
     page_timeout = _get_positive_int("VLM_PAGE_TIMEOUT_SECONDS", 120)
     client = OllamaVisionClient()
-    with TemporaryDirectory(prefix="document-vision-") as directory:
+    with client.document_session(), TemporaryDirectory(prefix="document-vision-") as directory:
         work = Path(directory)
         pdf_path = path
         if path.suffix.lower() == ".pptx":

@@ -15,8 +15,6 @@ summaries, embeddings, chat). 프리픽스 없는 /health는 프로세스 생존
 
 import json
 import logging
-import math
-import os
 import re
 from typing import TypeVar
 
@@ -24,6 +22,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
+from app.context_budget import prompt_fits, require_prompt_fits
 from app.llm_client import (
     LLMError,
     CHAT_MODEL,
@@ -31,6 +30,7 @@ from app.llm_client import (
     OLLAMA_QUESTION_MODEL,
     OLLAMA_SUMMARY_MODEL,
     OLLAMA_EMBEDDING_MODEL,
+    OLLAMA_MAX_OUTPUT_TOKENS,
     embed_texts,
     call_llm,
     check_ollama_health,
@@ -92,6 +92,7 @@ def _call_llm_as_json(
     prompt: str, response_schema: dict, max_tokens: int | None = None,
     model: str | None = None, *, think: bool = False,
 ) -> dict:
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     try:
         raw = call_llm(
             prompt, model=model, response_schema=response_schema,
@@ -180,38 +181,8 @@ def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResp
     )
 
 
-def _positive_env_int(name: str, default: int) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.") from exc
-    if value < 1:
-        raise HTTPException(status_code=500, detail=f"{name} 설정이 올바르지 않습니다.")
-    return value
-
-
 def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
     """Reserve output budget; discard old history before rejecting current input."""
-    max_model_len = _positive_env_int("LLM_MAX_MODEL_LEN", 8192)
-    safety_tokens = _positive_env_int("LLM_CONTEXT_SAFETY_TOKENS", 512)
-    try:
-        chars_per_token = float(os.getenv("LLM_APPROX_CHARS_PER_TOKEN", "2.0"))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
-        ) from exc
-    if not math.isfinite(chars_per_token) or chars_per_token <= 0:
-        raise HTTPException(
-            status_code=500, detail="LLM_APPROX_CHARS_PER_TOKEN 설정이 올바르지 않습니다."
-        )
-
-    input_budget = max_model_len - request.max_output_tokens - safety_tokens
-    if input_budget < 256:
-        raise HTTPException(
-            status_code=422,
-            detail="출력 길이가 모델 컨텍스트에 비해 너무 큽니다.",
-        )
-
     # Budget exactly the rendered prompt, including section labels and wrappers.
     # Normalize sections first so the renderer cannot restore text already trimmed.
     if request.document is not None:
@@ -221,7 +192,7 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
         request = request.model_copy(update={"document": document})
 
     def fits(candidate: ChatGenerationRequest) -> bool:
-        return math.ceil(len(build_effective_chat_prompt(candidate)) / chars_per_token) <= input_budget
+        return prompt_fits(build_effective_chat_prompt(candidate), request.max_output_tokens)
 
     if fits(request):
         return request
@@ -257,7 +228,8 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
 
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
-    if should_use_map_reduce(document_text(request.document)):
+    if (should_use_map_reduce(document_text(request.document))
+            or not prompt_fits(build_review_prompt(request), 1536)):
         return generate_review_map_reduce(
             persona=request.persona,
             document=request.document,
@@ -281,11 +253,30 @@ def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationRespons
 def generate_expected_questions(
     request: ExpectedQuestionGenerationRequest,
 ) -> ExpectedQuestionGenerationResponse:
+    max_tokens = min(2048, 200 * request.question_count + 128)
+    evidence = list(request.evidence)
+    if not any(item.scope == "presentation" for item in evidence):
+        return ExpectedQuestionGenerationResponse(questions=[])
+    while not prompt_fits(build_expected_question_prompt(request.model_copy(update={"evidence": evidence})), max_tokens):
+        longest = max(range(len(evidence)), key=lambda i: len(evidence[i].text))
+        item = evidence[longest]
+        if len(item.text) > 160:
+            evidence[longest] = item.model_copy(update={"text": item.text[:len(item.text) // 2] + "\n…(이하 생략)"})
+        else:
+            # Keep at least one presentation source; never fabricate evidence IDs.
+            removable = next((i for i in range(len(evidence) - 1, -1, -1)
+                              if evidence[i].scope == "persona_reference"), None)
+            if removable is None and sum(e.scope == "presentation" for e in evidence) > 1:
+                removable = len(evidence) - 1
+            if removable is None:
+                require_prompt_fits(build_expected_question_prompt(request.model_copy(update={"evidence": evidence})), max_tokens)
+            evidence.pop(removable)
+    fitted = request.model_copy(update={"evidence": evidence})
     return _generate(
-        build_expected_question_prompt(request),
+        build_expected_question_prompt(fitted),
         ExpectedQuestionGenerationResponse,
         # Reserve output for the requested count, including evidence IDs and focus.
-        max_tokens=min(2048, 200 * request.question_count + 128),
+        max_tokens=max_tokens,
         model=OLLAMA_QUESTION_MODEL,
     )
 
@@ -302,7 +293,8 @@ def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
 
 @v1_router.post("/summaries", response_model=SummaryGenerationResponse)
 def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResponse:
-    if should_use_summary_map_reduce(document_text(request.document)):
+    if (should_use_summary_map_reduce(document_text(request.document))
+            or not prompt_fits(_build_summary_prompt(request), style_max_tokens(request.style))):
         return generate_summary_map_reduce(
             document=request.document,
             style=request.style,

@@ -1,9 +1,15 @@
 """Local Ollama vision adapter. Images never use a remote URL."""
 import base64
+from contextlib import contextmanager
+import logging
 import os
 from urllib.parse import urlsplit
 
 import httpx
+
+from app.config import _get_positive_int
+
+logger = logging.getLogger(__name__)
 
 
 class VisionUnavailableError(RuntimeError):
@@ -31,14 +37,39 @@ class OllamaVisionClient:
         self.model = os.getenv("VLM_MODEL", "qwen3-vl:4b-instruct").strip()
         if not self.model or "cloud" in self.model.lower():
             raise ValueError("VLM_MODEL에는 클라우드 모델을 사용할 수 없습니다.")
+        self.keep_alive = _get_positive_int("VLM_KEEP_ALIVE_SECONDS", 300)
+        self.unload_after_document = os.getenv("VLM_UNLOAD_AFTER_DOCUMENT", "true").strip().lower()
+        if self.unload_after_document not in {"true", "false"}:
+            raise ValueError("VLM_UNLOAD_AFTER_DOCUMENT는 true 또는 false여야 합니다.")
+        self._used = False
+
+    @contextmanager
+    def document_session(self):
+        """Retain weights between pages; release once on success or failure."""
+        try:
+            yield self
+        finally:
+            if self._used and self.unload_after_document == "true":
+                try:
+                    with httpx.Client(timeout=5, trust_env=False, follow_redirects=False) as client:
+                        response = client.post(self.url + "/api/generate", json={
+                            "model": self.model, "keep_alive": 0, "stream": False,
+                        })
+                        response.raise_for_status()
+                except httpx.HTTPError:
+                    # The finite keep_alive is the fallback. Cleanup must not hide
+                    # a page failure or turn an otherwise complete upload into 503.
+                    logger.warning("Vision model unload failed; waiting for keep_alive expiry")
+            self._used = False
 
     def describe(self, png: bytes, text: str, page: int, timeout: float) -> str:
+        self._used = True
         try:
             with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
                 response = client.post(self.url + "/api/chat", json={
                     "model": self.model,
                     "stream": False,
-                    "keep_alive": 0,
+                    "keep_alive": self.keep_alive,
                     "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 1600},
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},

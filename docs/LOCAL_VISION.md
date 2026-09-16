@@ -54,6 +54,8 @@ VLM_MAX_PAGES=40
 VLM_IMAGE_MAX_EDGE=1600
 VLM_PAGE_TIMEOUT_SECONDS=120
 VLM_DOCUMENT_TIMEOUT_SECONDS=600
+VLM_KEEP_ALIVE_SECONDS=300
+VLM_UNLOAD_AFTER_DOCUMENT=true
 ```
 
 macOS에서 `soffice`를 찾지 못하면 `LIBREOFFICE_BINARY=/Applications/LibreOffice.app/Contents/MacOS/soffice`로 지정합니다. 한글 글꼴을 설치해야 슬라이드 렌더링에서 글꼴 대체/글자 누락을 줄일 수 있습니다.
@@ -66,7 +68,7 @@ macOS에서 `soffice`를 찾지 못하면 `LIBREOFFICE_BINARY=/Applications/Libr
 - 한 백엔드 프로세스에서 한 문서씩 분석합니다. 다른 분석이 진행 중이면 503을 반환합니다. 여러 worker를 사용하면 worker별 제한이므로 단일 GPU 환경에서는 한 worker를 권장합니다.
 - 기본 최대 40페이지, 이미지 긴 변 1600px(설정 상한 2400px), 페이지 요청 제한 120초입니다. 문서 처리 예산은 600초이며 각 페이지 호출 전후에 확인합니다. HTTP 제한은 연결/읽기 단계별 제한이므로 엄격한 전체 작업 취소 타이머는 아닙니다.
 - LibreOffice 변환 제한은 최대 60초입니다. 프런트 업로드 대기는 15분입니다. 별도 reverse proxy가 있다면 업로드 응답 대기도 맞춰야 합니다.
-- 메모리를 다른 로컬 모델에 돌려주기 위해 페이지 요청의 `keep_alive=0`을 사용합니다. 페이지마다 모델 재로딩이 발생할 수 있어 긴 자료는 느립니다. 제한에 걸리면 파일을 나눠 업로드하세요.
+- 페이지 요청에는 `VLM_KEEP_ALIVE_SECONDS`(기본 300초)를 적용해 페이지 사이의 모델 재로딩을 줄입니다. 문서 종료 시 성공·실패 여부와 관계없이 한 번만 해제합니다. `VLM_UNLOAD_AFTER_DOCUMENT=false`이면 문서 종료 후에도 keep_alive 만료까지 유지합니다. 해제 요청 실패는 원래 분석 결과를 덮어쓰지 않으며 keep_alive 만료가 대체 해제 수단입니다. 다른 모델의 메모리 사용량과 함께 조정하세요.
 - VLM 오류/모델 없음/렌더링 실패는 503, 손상 파일/페이지 수 초과는 400을 반환합니다. 이미지 분석이 켜져 있으면 실패한 문서를 텍스트만 있는 성공 결과로 저장하지 않습니다.
 - 업로드는 동기 응답 방식입니다. 브라우저 요청 취소가 이미 실행 중인 서버 추론을 즉시 중단시키지는 않습니다. 작업 큐와 중간 결과 재개는 현재 구현 범위에 포함되지 않습니다.
 - DOCX는 기존 텍스트 파싱을 사용합니다. PPTX 애니메이션·동영상의 시간 흐름은 정적 렌더링에 포함되지 않습니다.

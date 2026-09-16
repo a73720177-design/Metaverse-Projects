@@ -208,3 +208,46 @@ def test_failed_vision_upload_returns_503_without_persisting(tmp_path, monkeypat
         assert list(uploads.iterdir()) == []
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("fail_second_page", [False, True])
+def test_model_stays_loaded_across_pages_and_unloads_once(tmp_path, monkeypatch, fail_second_page):
+    path = tmp_path / "slides.pdf"
+    make_pdf(path)
+    calls = []
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append((request.url.path, body))
+        if request.url.path == "/api/generate":
+            return httpx.Response(200, json={"done": True})
+        if fail_second_page and len(calls) == 2:
+            return httpx.Response(503, json={"error": "failed"})
+        return httpx.Response(200, json={"done": True, "message": {"content": "차트"}})
+    mock_transport(monkeypatch, handler)
+    monkeypatch.setenv("VLM_KEEP_ALIVE_SECONDS", "300")
+    monkeypatch.setenv("VLM_UNLOAD_AFTER_DOCUMENT", "true")
+    if fail_second_page:
+        with pytest.raises(vision.VisionUnavailableError):
+            parse_document(path, path.name)
+    else:
+        parse_document(path, path.name)
+    assert [url for url, _ in calls] == ["/api/chat", "/api/chat", "/api/generate"]
+    assert [body["keep_alive"] for _, body in calls] == [300, 300, 0]
+
+
+def test_keep_warm_policy_skips_unload_and_cleanup_failure_does_not_hide_success(monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/api/generate":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"done": True, "message": {"content": "차트"}})
+    mock_transport(monkeypatch, handler)
+    monkeypatch.setenv("VLM_UNLOAD_AFTER_DOCUMENT", "false")
+    with vision.OllamaVisionClient().document_session() as client:
+        assert client.describe(b"png", "", 1, 2) == "차트"
+    assert calls == ["/api/chat"]
+    monkeypatch.setenv("VLM_UNLOAD_AFTER_DOCUMENT", "true")
+    with vision.OllamaVisionClient().document_session() as client:
+        assert client.describe(b"png", "", 1, 2) == "차트"
+    assert calls[-1] == "/api/generate"

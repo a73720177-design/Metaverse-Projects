@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from threading import BoundedSemaphore
 
 import requests
+from app.context_budget import context_length, require_prompt_fits
 from dotenv import load_dotenv
 
 # os.getenv()가 모듈 로드 시점에 바로 읽히므로, 반드시 그 전에 .env를 로드해야 한다.
@@ -96,6 +97,7 @@ def call_llm(
     Raises:
         LLMError: Ollama 서버 호출 실패 시
     """
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt, think=think)
     if _provider() == "vllm":
         payload = {
@@ -132,6 +134,7 @@ def call_llm(
         "think": think,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
+            "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
@@ -171,6 +174,7 @@ def stream_llm(
 ) -> Iterator[str]:
     """Ollama token chunks for latency-sensitive chat responses."""
     completed = False
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt)
     if _provider() == "vllm":
         payload = {
@@ -226,6 +230,7 @@ def stream_llm(
         "think": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
+            "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
@@ -332,6 +337,7 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
     import asyncio
     import httpx
     provider = _provider()
+    require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded = _disable_thinking_prompt(prompt)
     if provider == "vllm":
         url = f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/chat/completions"
@@ -343,7 +349,8 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
         url = f"{OLLAMA_HOST}/api/generate"
         payload = {"model": model or OLLAMA_MODEL, "prompt": guarded, "stream": True,
                    "think": False, "keep_alive": OLLAMA_KEEP_ALIVE,
-                   "options": {"num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+                   "options": {"num_ctx": context_length(),
+                               "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
                                "temperature": 0.35, "repeat_penalty": 1.18, "repeat_last_n": 256}}
     acquired = False
     completed = False
