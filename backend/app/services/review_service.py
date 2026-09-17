@@ -51,7 +51,7 @@ class ReviewService:
             raise ReviewSourceUnavailableError("분석할 텍스트가 없습니다. 텍스트를 포함한 자료를 업로드해주세요.")
         try:
             generated = await self.generator.generate(
-                persona, document, request.instructions
+                persona, document, request.instructions, request.model
             )
             review = ReviewResult.model_validate(
                 {

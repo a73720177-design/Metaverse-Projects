@@ -71,6 +71,7 @@ class PersonaService:
             name=request.name,
             description=request.description,
             reference_context="\n\n".join(excerpts)[:3000],
+            model=request.model,
         )
 
     @staticmethod
@@ -100,8 +101,8 @@ class PersonaService:
                     "agent_id": uuid4(),
                     "name": request.name,
                     "description": request.description,
-                    "gender": request.gender,
-                    "age": request.age,
+                    "gender": "unspecified",
+                    "age": None,
                     "document_ids": request.document_ids,
                 }
             )
@@ -130,8 +131,8 @@ class PersonaService:
                 "agent_id": current.agent_id,
                 "name": request.name,
                 "description": request.description,
-                "gender": request.gender,
-                "age": request.age,
+                "gender": "unspecified",
+                "age": None,
                 "document_ids": request.document_ids,
             })
         except (PersonaGeneratorError, ValidationError) as exc:

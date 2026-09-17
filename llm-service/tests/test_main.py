@@ -184,6 +184,23 @@ def test_chat_uses_requested_output_limit_and_deduplicated_document_prompt(monke
     assert '"sections"' not in captured["prompt"]
 
 
+def test_chat_uses_frontend_selected_model_and_rejects_unknown_model(monkeypatch):
+    captured = {}
+
+    def fake_call(_prompt, **kwargs):
+        captured.update(kwargs)
+        return "선택 모델 답변"
+
+    monkeypatch.setattr("app.main.call_llm", fake_call)
+    payload = {"persona": _persona_payload(), "message": "질문", "model": "qwen3.5:9b"}
+    response = client.post("/api/v1/chat", json=payload)
+    assert response.status_code == 200
+    assert captured["model"] == "qwen3.5:9b"
+
+    payload["model"] = "unapproved-model"
+    assert client.post("/api/v1/chat", json=payload).status_code == 422
+
+
 def test_chat_rejects_empty_text_response(monkeypatch):
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: "   ")
     response = client.post(

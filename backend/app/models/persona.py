@@ -5,6 +5,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, computed_field
 
+from app.models.llm import DEFAULT_LLM_MODEL, LlmModel
+
 
 class EvidenceStatus(StrEnum):
     USER_STATED = "user_stated"
@@ -28,6 +30,7 @@ class PersonaTrait(BaseModel):
 
 
 class PersonaCreateRequest(BaseModel):
+    model: LlmModel = DEFAULT_LLM_MODEL
     name: str = Field(
         min_length=1,
         max_length=100,
@@ -37,14 +40,8 @@ class PersonaCreateRequest(BaseModel):
     description: str = Field(
         min_length=1,
         max_length=5000,
-        description="전문 분야, 평가 기준 등 사용자가 알고 있는 평가자 정보",
-        examples=["인공지능을 연구하며 발표의 근거와 비교 실험을 중요하게 평가한다."],
-    )
-    gender: Literal["male", "female", "other", "unspecified"] = Field(
-        default="unspecified", description="아바타 생성에 사용할 질문자의 성별"
-    )
-    age: int | None = Field(
-        default=None, ge=1, le=120, description="아바타 생성에 사용할 질문자의 나이"
+        description="질문자가 검토할 전문 분야",
+        examples=["인공지능"],
     )
     document_ids: list[UUID] = Field(
         default_factory=list,

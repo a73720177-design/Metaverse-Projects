@@ -67,12 +67,16 @@ def test_expected_questions_use_multiple_documents_and_personas() -> None:
     assert len(response.results[0].questions) == 1
     assert response.results[1].questions == []
     assert response.session_id is not None
-    assert all(result.avatar_data_url.startswith("data:image/svg+xml;base64,") for result in response.results)
+    assert all("avatar_data_url" not in result.model_dump() for result in response.results)
     assert len(response.results[0].questions[0].sources) == 1
     assert all(s.document_id != reference.document_id for r in response.results for q in r.questions for s in q.sources)
 
 
-def test_expected_question_http_calls_respect_persona_concurrency_limit() -> None:
+@pytest.mark.parametrize("limit, expected_peak", [(1, 1), (2, 2)])
+def test_expected_question_http_calls_respect_persona_concurrency_limit(
+    limit: int, expected_peak: int, monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.services.practice_service.vector_enabled", lambda: False)
     class ConcurrencyGenerator:
         def __init__(self):
             self.active = 0
@@ -97,7 +101,7 @@ def test_expected_question_http_calls_respect_persona_concurrency_limit() -> Non
         for persona in personas:
             await agents.save(persona, owner_id)
         await PracticeService(
-            generator, agents, documents, max_concurrent_personas=1
+            generator, agents, documents, max_concurrent_personas=limit
         ).generate_expected_questions(
             ExpectedQuestionRequest(
                 persona_ids=[persona.agent_id for persona in personas],
@@ -107,7 +111,7 @@ def test_expected_question_http_calls_respect_persona_concurrency_limit() -> Non
         )
 
     asyncio.run(run())
-    assert generator.peak == 1
+    assert generator.peak == expected_peak
 
 
 def test_expected_questions_reject_more_than_four_personas() -> None:
@@ -154,6 +158,7 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
     class CapturingGenerator:
         async def generate(self, persona, document, instructions, **kwargs):
             captured["document"] = document
+            captured["model"] = kwargs["model"]
             return {"questions": []}
 
     monkeypatch.setattr("app.services.practice_service.vector_enabled", lambda: False)
@@ -176,6 +181,7 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
             CapturingGenerator(), agent_repository, document_repository
         ).generate_expected_questions(
             ExpectedQuestionRequest(
+                model="qwen3.5:9b",
                 persona_ids=[persona.agent_id],
                 presentation_document_ids=[document.document_id],
             ),
@@ -184,6 +190,7 @@ def test_expected_questions_limit_large_context_with_lexical_rag(monkeypatch) ->
 
     asyncio.run(run())
     assert len(captured["document"].full_text) <= 4000
+    assert captured["model"] == "qwen3.5:9b"
     assert len(captured["document"].sections) <= 8
 
 
@@ -316,7 +323,7 @@ def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypa
         response = await PracticeService(Generator(), agents, docs).generate_expected_questions(
             ExpectedQuestionRequest(persona_ids=[persona.agent_id], presentation_document_ids=[document.document_id]), owner)
         coverage = response.results[0].coverage
-        assert coverage.truncated and coverage.total_chunks == 101 and 3 <= coverage.analyzed_chunks <= 8
+        assert coverage.truncated and coverage.total_chunks == 101 and coverage.analyzed_chunks == 3
     asyncio.run(run())
     assert all(marker in seen[0] for marker in ['페이지0 ', '페이지50 ', '페이지100 '])
 

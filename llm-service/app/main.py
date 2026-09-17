@@ -34,6 +34,7 @@ from app.llm_client import (
     embed_texts,
     call_llm,
     check_ollama_health,
+    get_runtime_diagnostics,
     stream_llm_async as stream_llm,
 )
 from app.prompts import (
@@ -173,11 +174,18 @@ def health_check_v1():
     return {"status": "ok"}
 
 
+@v1_router.get("/diagnostics")
+def runtime_diagnostics():
+    """Developer status only; never expose provider URLs or credentials."""
+    return get_runtime_diagnostics()
+
+
 @v1_router.post("/personas", response_model=PersonaGenerationResponse)
 def generate_persona(request: PersonaGenerationRequest) -> PersonaGenerationResponse:
     # Trait metadata and quoted evidence also consume the JSON output budget.
     return _generate(
-        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=1024
+        build_persona_prompt(request), PersonaGenerationResponse, max_tokens=1024,
+        model=request.model,
     )
 
 
@@ -229,19 +237,20 @@ def _fit_chat_context(request: ChatGenerationRequest) -> ChatGenerationRequest:
 @v1_router.post("/reviews", response_model=ReviewGenerationResponse)
 def generate_review(request: ReviewGenerationRequest) -> ReviewGenerationResponse:
     if (should_use_map_reduce(document_text(request.document))
-            or not prompt_fits(build_review_prompt(request), 2048)):
+            or not prompt_fits(build_review_prompt(request), 1536)):
         return generate_review_map_reduce(
             persona=request.persona,
             document=request.document,
             instructions=request.instructions,
             generate=_generate,
-            model=OLLAMA_REVIEW_MODEL,
+            model=request.model,
         )
-    # Reserve output space for claim citations and both feedback source lists.
-    # The routing check above uses the same budget to avoid context overflow.
+    # claims를 3~5개(스키마 상한 20보다 훨씬 보수적으로)로 제한해도, 근거
+    # 인용(excerpt)·questions까지 더하면 기존 1024 토큰은 여유가 빠듯해
+    # 502(JSON 파싱 실패)로 이어지기 쉬웠다. 1536으로 올려 여유를 둔다.
     response = _generate(
         build_review_prompt(request), ReviewGenerationResponse,
-        max_tokens=2048, model=OLLAMA_REVIEW_MODEL,
+        max_tokens=2048, model=request.model,
     )
     total = len([s for s in request.document.sections if s.text.strip()]) or 1
     return response.model_copy(update={"coverage": ReviewCoverage(
@@ -276,7 +285,7 @@ def generate_expected_questions(
         ExpectedQuestionGenerationResponse,
         # Reserve output for the requested count, including evidence IDs and focus.
         max_tokens=max_tokens,
-        model=OLLAMA_QUESTION_MODEL,
+        model=request.model,
     )
 
 
@@ -337,7 +346,7 @@ def generate_chat(request: ChatGenerationRequest) -> ChatGenerationResponse:
     return ChatGenerationResponse(
         answer=_call_llm_as_text(
             build_effective_chat_prompt(effective_request),
-            model=CHAT_MODEL,
+            model=request.model,
             max_tokens=request.max_output_tokens,
         ),
         sources=[],
@@ -356,7 +365,7 @@ async def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
         output_chars = 0
         try:
             async with aclosing(stream_llm(build_effective_chat_prompt(effective_request),
-                                           model=CHAT_MODEL, max_tokens=request.max_output_tokens)) as tokens:
+                                           model=request.model, max_tokens=request.max_output_tokens)) as tokens:
                 async for token in tokens:
                     output_chars += len(token)
                     if output_chars > 200_000:

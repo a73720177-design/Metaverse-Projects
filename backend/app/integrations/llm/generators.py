@@ -14,6 +14,7 @@ from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.summary import SummaryStyle
+from app.models.llm import DEFAULT_LLM_MODEL, LlmModel
 from app.services.content_budget import document_assessment
 from app.services.rag_service import sources_from_citations
 
@@ -60,13 +61,15 @@ class HttpReviewGenerator:
         self.endpoint = endpoint
 
     async def generate(self, persona: PersonaProfile, document: DocumentParseResponse,
-                       instructions: str | None) -> dict[str, Any]:
+                       instructions: str | None,
+                       model: LlmModel = DEFAULT_LLM_MODEL) -> dict[str, Any]:
         payload = {
             "persona": persona.model_dump(mode="json"),
             "document": document.model_dump(
                 mode="json", exclude={"saved_path"}, exclude_none=True
             ),
             "instructions": instructions,
+            "model": model,
         }
         try:
             return await self.client.post_json(self.endpoint, payload)
@@ -78,7 +81,8 @@ class HttpQuestionGenerator:
     def __init__(self, client: HttpLlmClient):
         self.client = client
 
-    async def generate(self, persona, document, instructions, *, question_count=5, excluded_questions=None):
+    async def generate(self, persona, document, instructions, *, question_count=5,
+                       excluded_questions=None, model: LlmModel = DEFAULT_LLM_MODEL):
         evidence = [{"id": f"e{i}",
                      "scope": "presentation" if section.text.startswith("[발표 자료:") else "persona_reference",
                      "text": section.text}
@@ -88,6 +92,7 @@ class HttpQuestionGenerator:
                 "persona": persona.model_dump(mode="json"),
                 "question_count": question_count, "evidence": evidence,
                 "excluded_questions": (excluded_questions or [])[-40:],
+                "model": model,
             })
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:
             raise ReviewGeneratorError("예상 질문 생성 응답을 확인할 수 없습니다.") from exc
@@ -132,6 +137,7 @@ class HttpChatGenerator:
             "persona": persona.model_dump(mode="json"),
             "message": request.message,
             "max_output_tokens": self._max_output_tokens(request),
+            "model": request.model,
             # full_text already contains only selected RAG chunks. Omitting
             # sections prevents the same source text from being sent twice.
             "document": document.model_dump(
@@ -158,6 +164,7 @@ class HttpChatGenerator:
             "persona": persona.model_dump(mode="json"),
             "message": request.message,
             "max_output_tokens": self._max_output_tokens(request),
+            "model": request.model,
             "document": document.model_dump(
                 mode="json", exclude={"saved_path", "sections"}
             ) if document else None,

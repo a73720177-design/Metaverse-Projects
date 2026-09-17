@@ -13,6 +13,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+LlmModel = Literal["qwen3:4b", "qwen3.5:9b"]
+
 
 class EvidenceStatus(StrEnum):
     USER_STATED = "user_stated"
@@ -36,6 +38,7 @@ class PersonaTrait(BaseModel):
 
 
 class PersonaGenerationRequest(BaseModel):
+    model: LlmModel = "qwen3:4b"
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=5000)
     reference_context: str = Field(default="", max_length=3000)
@@ -111,6 +114,7 @@ class ReviewFeedback(BaseModel):
 
 
 class ReviewGenerationRequest(BaseModel):
+    model: LlmModel = "qwen3:4b"
     persona: PersonaProfileIn
     document: DocumentIn
     instructions: str | None = Field(default=None, max_length=2000)
@@ -139,6 +143,7 @@ class QuestionEvidence(BaseModel):
 
 
 class ExpectedQuestionGenerationRequest(BaseModel):
+    model: LlmModel = "qwen3:4b"
     persona: PersonaProfileIn
     question_count: int = Field(default=5, ge=1, le=10)
     evidence: list[QuestionEvidence] = Field(min_length=1, max_length=80)
@@ -161,6 +166,7 @@ class ChatTurn(BaseModel):
 
 
 class ChatGenerationRequest(BaseModel):
+    model: LlmModel = "qwen3:4b"
     persona: PersonaProfileIn
     message: str = Field(min_length=1, max_length=5000)
     document: DocumentIn | None = None

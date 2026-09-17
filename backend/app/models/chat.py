@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from app.models.review import ReviewSource
+from app.models.llm import DEFAULT_LLM_MODEL, LlmModel
 
 
 class ResponseDetail(StrEnum):
@@ -22,6 +23,7 @@ class ChatTurn(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model: LlmModel = DEFAULT_LLM_MODEL
     conversation_id: UUID | None = Field(
         default=None,
         description="질문별 대화 UUID. 생략하면 기존 일반 대화 이력만 사용합니다.",

@@ -64,7 +64,8 @@ def _vllm_headers() -> dict[str, str]:
 
 def _vllm_model(model: str | None) -> str:
     configured = os.getenv("VLLM_MODEL", VLLM_MODEL).strip()
-    # Task callers pass Ollama model names; the vLLM server exposes its own alias.
+    # A single vLLM process exposes its configured served alias. Request-level
+    # Ollama tags are used by Ollama, but must not override that vLLM alias.
     resolved = configured or model
     if not resolved:
         raise LLMError("VLLM_MODEL is required when LLM_PROVIDER=vllm")
@@ -298,6 +299,91 @@ def check_ollama_health() -> bool:
         return required <= available
     except (requests.RequestException, LLMError, ValueError):
         return False
+
+
+def get_runtime_diagnostics() -> dict:
+    """Return a secret-free snapshot of the configured model runtime.
+
+    Generation and embeddings intentionally have separate states: vLLM can be
+    the active text provider while bge-m3 embeddings still come from Ollama.
+    """
+    provider = _provider()
+    ollama_models: set[str] = set()
+    ollama_reachable = False
+    try:
+        response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+        ollama_reachable = response.ok
+        if response.ok:
+            ollama_models = {
+                str(model.get("name", ""))
+                for model in response.json().get("models", [])
+                if model.get("name")
+            }
+    except (requests.RequestException, ValueError, AttributeError, TypeError):
+        pass
+
+    def model_available(name: str) -> bool:
+        base = name.split(":")[0]
+        return any(candidate == name or candidate.split(":")[0] == base for candidate in ollama_models)
+
+    vllm_reachable = False
+    vllm_model_available = False
+    if provider == "vllm":
+        try:
+            response = requests.get(
+                f"{os.getenv('VLLM_BASE_URL', VLLM_BASE_URL).rstrip('/')}/v1/models",
+                headers=_vllm_headers(),
+                timeout=5,
+            )
+            vllm_reachable = response.ok
+            if response.ok:
+                model_ids = {
+                    str(item.get("id", ""))
+                    for item in response.json().get("data", [])
+                    if item.get("id")
+                }
+                configured = os.getenv("VLLM_MODEL", VLLM_MODEL).strip()
+                vllm_model_available = bool(model_ids) and (not configured or configured in model_ids)
+        except (requests.RequestException, ValueError, AttributeError, TypeError):
+            pass
+
+    generation_models = {
+        "chat": CHAT_MODEL,
+        "question": OLLAMA_QUESTION_MODEL if provider == "ollama" else CHAT_MODEL,
+        "review": OLLAMA_REVIEW_MODEL if provider == "ollama" else CHAT_MODEL,
+        "summary": OLLAMA_SUMMARY_MODEL if provider == "ollama" else CHAT_MODEL,
+    }
+    generation_operational = (
+        vllm_reachable and vllm_model_available
+        if provider == "vllm"
+        else ollama_reachable and all(model_available(name) for name in generation_models.values())
+    )
+    embedding_operational = ollama_reachable and model_available(OLLAMA_EMBEDDING_MODEL)
+    return {
+        "status": "ok" if generation_operational and embedding_operational else "degraded",
+        "provider": provider,
+        "features": {
+            "vllm": {
+                "enabled": provider == "vllm",
+                "operational": vllm_reachable and vllm_model_available if provider == "vllm" else None,
+                "model": os.getenv("VLLM_MODEL", VLLM_MODEL).strip() or None,
+            },
+            "ollama_generation": {
+                "enabled": provider == "ollama",
+                "operational": generation_operational if provider == "ollama" else None,
+                "models": generation_models if provider == "ollama" else {},
+            },
+            "ollama_embedding": {
+                "enabled": True,
+                "operational": embedding_operational,
+                "model": OLLAMA_EMBEDDING_MODEL,
+            },
+            "streaming": {
+                "enabled": True,
+                "operational": generation_operational,
+            },
+        },
+    }
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
