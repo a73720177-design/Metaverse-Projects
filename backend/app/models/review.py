@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 from app.models.coverage import Coverage
+from app.models.llm import DEFAULT_LLM_MODEL, LlmModel
 
 
 class ClaimVerdict(StrEnum):
@@ -38,6 +39,7 @@ class ReviewFeedback(BaseModel):
 
 
 class ReviewCreateRequest(BaseModel):
+    model: LlmModel = DEFAULT_LLM_MODEL
     document_id: UUID = Field(description="리뷰할 업로드 문서의 UUID")
     instructions: str | None = Field(
         default=None,

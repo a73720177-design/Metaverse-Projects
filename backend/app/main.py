@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager          #시작, 종료시 실행할 작업 정의
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -7,6 +8,8 @@ from app.config import (
     get_db_auto_create,
     get_frontend_origin_regex,
     get_frontend_origins,
+    get_object_storage_mode,
+    get_practice_max_concurrent_personas,
     get_repository_mode,
     get_rag_mode,
     validate_runtime_contract,
@@ -17,7 +20,7 @@ from app.controllers.chat_controller import router as chat_router
 from app.controllers.document_controller import router as document_router
 from app.controllers.review_controller import router as review_router
 from app.controllers.practice_controller import router as practice_router
-from app.dependencies import get_llm_client
+from app.dependencies import get_llm_client, get_object_storage
 from app.db.database import check_db, close_db, init_db, inspect_db_contract
 from app.error_handlers import register_error_handlers
 from app.integrations.llm.client import (
@@ -228,4 +231,97 @@ async def services_health(
     return {
         "status": "degraded" if degraded else "ok",
         "services": services,
+    }
+
+
+@app.get(
+    "/health/features",
+    tags=["시스템"],
+    summary="개발자 기능 상태 확인",
+    description="활성 기능과 실제 연결 상태를 비밀 설정값 없이 반환합니다.",
+)
+async def feature_health(
+    client: HttpLlmClient = Depends(get_llm_client),
+) -> dict[str, object]:
+    repository_mode = get_repository_mode()
+    rag_mode = get_rag_mode()
+    storage_mode = get_object_storage_mode()
+
+    database_operational = True
+    if repository_mode == "postgres":
+        try:
+            await check_db()
+            contract = await inspect_db_contract(require_vector=rag_mode == "vector")
+            database_operational = contract["status"] == "ok"
+        except Exception:
+            database_operational = False
+
+    try:
+        llm = await client.get_json("/diagnostics")
+    except (LlmServiceConnectionError, LlmServiceResponseError):
+        llm = {"status": "unavailable", "provider": "unknown", "features": {}}
+
+    storage_operational: bool | None = True
+    if storage_mode == "minio":
+        try:
+            storage = get_object_storage()
+            await asyncio.to_thread(storage.client.bucket_exists, storage.bucket)
+        except Exception:
+            storage_operational = False
+
+    llm_features = llm.get("features") if isinstance(llm.get("features"), dict) else {}
+    features: dict[str, dict[str, object]] = {
+        "vllm": {
+            "label": "vLLM 생성 서버",
+            **(llm_features.get("vllm") or {"enabled": None, "operational": None}),
+        },
+        "ollama_generation": {
+            "label": "Ollama 답변 생성",
+            **(llm_features.get("ollama_generation") or {"enabled": None, "operational": None}),
+        },
+        "embedding": {
+            "label": "Ollama 임베딩",
+            **(llm_features.get("ollama_embedding") or {"enabled": True, "operational": False}),
+        },
+        "streaming": {
+            "label": "스트리밍 채팅",
+            **(llm_features.get("streaming") or {"enabled": True, "operational": False}),
+        },
+        "database": {
+            "label": "PostgreSQL DB",
+            "enabled": repository_mode == "postgres",
+            "operational": database_operational if repository_mode == "postgres" else None,
+            "mode": repository_mode,
+        },
+        "vector_rag": {
+            "label": "Vector RAG",
+            "enabled": rag_mode == "vector",
+            "operational": (
+                database_operational
+                and bool((llm_features.get("ollama_embedding") or {}).get("operational"))
+                if rag_mode == "vector" else None
+            ),
+            "mode": rag_mode,
+        },
+        "object_storage": {
+            "label": "문서 파일 저장소",
+            "enabled": True,
+            "operational": storage_operational,
+            "mode": storage_mode,
+        },
+        "persona_parallelism": {
+            "label": "페르소나 병렬 생성",
+            "enabled": get_practice_max_concurrent_personas() > 1,
+            "operational": True,
+            "workers": get_practice_max_concurrent_personas(),
+        },
+    }
+    degraded = any(
+        item.get("enabled") is True and item.get("operational") is False
+        for item in features.values()
+    )
+    return {
+        "status": "degraded" if degraded else "ok",
+        "active_llm_provider": llm.get("provider", "unknown"),
+        "features": features,
     }

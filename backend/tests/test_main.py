@@ -218,7 +218,7 @@ def test_agent_is_hidden_from_another_user() -> None:
 
 
 class FakeReviewGenerator:
-    async def generate(self, persona, document, instructions) -> dict:
+    async def generate(self, persona, document, instructions, model="qwen3:4b") -> dict:
         return {
             "feedback": {"positive": "Clear structure", "negative": "Add evidence"},
             "claims": [],
@@ -382,7 +382,10 @@ def test_agent_persists_owned_document_contract() -> None:
         )
         assert updated.status_code == 200
         assert updated.json()["name"] == "Updated evaluator"
-        assert updated.json()["age"] == 51
+        # Demographics are no longer part of persona creation/editing. Legacy
+        # payload keys are ignored instead of being persisted.
+        assert updated.json()["age"] is None
+        assert updated.json()["gender"] == "unspecified"
         assert updated.json()["document_ids"] == [str(document.document_id)]
     finally:
         app.dependency_overrides.clear()
@@ -588,6 +591,43 @@ def test_services_health_returns_degraded_without_exposing_llm_error() -> None:
         assert payload["services"]["llm"]["status"] == "unavailable"
         assert "private-host" not in response.text
         assert "secret" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feature_health_reports_safe_runtime_switches(monkeypatch) -> None:
+    monkeypatch.setenv("REPOSITORY_MODE", "memory")
+    monkeypatch.setenv("RAG_MODE", "lexical")
+    monkeypatch.setenv("OBJECT_STORAGE_MODE", "local")
+    monkeypatch.setenv("PRACTICE_MAX_CONCURRENT_PERSONAS", "1")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/diagnostics"
+        return httpx.Response(200, json={
+            "status": "degraded",
+            "provider": "vllm",
+            "features": {
+                "vllm": {"enabled": True, "operational": True, "model": "qwen-safe"},
+                "ollama_generation": {"enabled": False, "operational": None},
+                "ollama_embedding": {"enabled": True, "operational": False, "model": "bge-m3"},
+                "streaming": {"enabled": True, "operational": True},
+            },
+        })
+
+    app.dependency_overrides[get_llm_client] = lambda: HttpLlmClient(
+        httpx.MockTransport(handler)
+    )
+    try:
+        response = client.get("/health/features")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "degraded"
+        assert payload["active_llm_provider"] == "vllm"
+        assert payload["features"]["vllm"]["operational"] is True
+        assert payload["features"]["embedding"]["operational"] is False
+        assert payload["features"]["vector_rag"]["enabled"] is False
+        assert "url" not in response.text.lower()
+        assert "key" not in response.text.lower()
     finally:
         app.dependency_overrides.clear()
 

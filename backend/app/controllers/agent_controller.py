@@ -17,7 +17,7 @@ router = APIRouter(prefix="/agents", tags=["평가자"])
 
 @router.post("", response_model=PersonaProfile, status_code=status.HTTP_201_CREATED,
              summary="평가자 페르소나 생성",
-             description="이름과 설명을 받아 LLM으로 페르소나를 만들고 Backend가 ID를 발급합니다.")
+             description="전문 분야를 받아 LLM으로 질문자를 만들고 Backend가 ID를 발급합니다.")
 async def create_agent(
     request: PersonaCreateRequest,
     service: PersonaService = Depends(get_persona_service),

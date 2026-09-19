@@ -16,6 +16,10 @@ export function getServiceStatus(signal) {
   return apiFetch('/health/services', { signal, timeoutMs: 15000 })
 }
 
+export function getDeveloperFeatureStatus(signal) {
+  return apiFetch('/health/features', { signal, timeoutMs: 15000 })
+}
+
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
@@ -52,12 +56,23 @@ export function getCurrentUser(token, signal) {
 }
 
 // Requires auth — Backend scopes agents to the caller. ->
-// { agent_id, name, description, role, expertise, evaluation_style }
-export function createAgent({ name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
+// The UI collects a domain only. Backend legacy fields stay populated with
+// deterministic defaults so existing DB migrations and saved personas remain compatible.
+export function createAgent({ field, model = 'qwen3:4b', documentIds = [] }, token, signal) {
+  const normalizedField = field.trim()
   return apiFetch('/agents', {
+    // Local 4B/9B generation can exceed the common 30 second API deadline,
+    // especially on CPU. Keep the UI request alive so it cannot look failed
+    // while Backend is still creating and saving the persona.
+    timeoutMs: 900000,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
+    body: JSON.stringify({
+      name: `${normalizedField.slice(0, 94)} 평가자`,
+      description: normalizedField,
+      model,
+      document_ids: documentIds,
+    }),
     signal,
   })
 }
@@ -97,6 +112,7 @@ export async function streamChat({
   documentIds = [],
   conversationId = null,
   responseDetail = 'detailed',
+  model = 'qwen3:4b',
   token,
   signal,
   onToken,
@@ -113,6 +129,7 @@ export async function streamChat({
           document_ids: documentIds,
           conversation_id: conversationId,
           response_detail: responseDetail,
+          model,
         }),
         signal,
       }, onToken,
@@ -128,11 +145,18 @@ export function updateAgentDocuments(agentId, documentIds, token, signal) {
   })
 }
 
-export function updateAgent(agentId, { name, description, gender = 'unspecified', age = null, documentIds = [] }, token, signal) {
+export function updateAgent(agentId, { field, model = 'qwen3:4b', documentIds = [] }, token, signal) {
+  const normalizedField = field.trim()
   return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
+    timeoutMs: 900000,
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ name, description, gender, age, document_ids: documentIds }),
+    body: JSON.stringify({
+      name: `${normalizedField.slice(0, 94)} 평가자`,
+      description: normalizedField,
+      model,
+      document_ids: documentIds,
+    }),
     signal,
   })
 }
@@ -145,7 +169,7 @@ export function deleteAgent(agentId, token, signal) {
   })
 }
 
-export function generateExpectedQuestions({ personaIds, presentationDocumentIds, questionCount = 5 }, token, signal) {
+export function generateExpectedQuestions({ personaIds, presentationDocumentIds, questionCount = 5, model = 'qwen3:4b' }, token, signal) {
   return apiFetch('/practice/questions', {
     // CPU-only laptop profile generates personas sequentially to avoid Ollama
     // memory contention. Four personas can legitimately take over five minutes.
@@ -156,6 +180,7 @@ export function generateExpectedQuestions({ personaIds, presentationDocumentIds,
       persona_ids: personaIds,
       presentation_document_ids: presentationDocumentIds,
       question_count_per_persona: questionCount,
+      model,
     }),
     signal,
   })
@@ -273,9 +298,9 @@ export function getReview(id, token, signal) {
   return apiFetch(`/reviews/${encodeURIComponent(id)}`, { headers: authHeaders(token), signal })
 }
 
-export function createReview(agentId, documentId, token, signal) {
+export function createReview(agentId, documentId, token, model = 'qwen3:4b', signal) {
   return apiFetch(`/agents/${encodeURIComponent(agentId)}/reviews`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ document_id: documentId }), timeoutMs: 900000, signal,
+    body: JSON.stringify({ document_id: documentId, model }), timeoutMs: 900000, signal,
   })
 }

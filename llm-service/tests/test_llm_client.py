@@ -1,7 +1,14 @@
 import json
 import pytest
 
-from app.llm_client import LLMError, call_llm, check_ollama_health, embed_texts, stream_llm
+from app.llm_client import (
+    LLMError,
+    call_llm,
+    check_ollama_health,
+    embed_texts,
+    get_runtime_diagnostics,
+    stream_llm,
+)
 
 
 class FakeResponse:
@@ -74,6 +81,24 @@ def test_vllm_health_uses_models_endpoint(monkeypatch):
     monkeypatch.setattr("app.llm_client.requests.get", fake_get)
     assert check_ollama_health() is True
     assert captured["url"].endswith("/v1/models")
+
+
+def test_runtime_diagnostics_separates_vllm_and_ollama_embedding(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "vllm")
+    monkeypatch.setenv("VLLM_MODEL", "quantized-model")
+
+    def fake_get(url, **_kwargs):
+        if url.endswith("/v1/models"):
+            return FakeResponse({"data": [{"id": "quantized-model"}]})
+        return FakeResponse({"models": [{"name": "bge-m3:latest"}]})
+
+    monkeypatch.setattr("app.llm_client.requests.get", fake_get)
+    result = get_runtime_diagnostics()
+    assert result["provider"] == "vllm"
+    assert result["features"]["vllm"]["operational"] is True
+    assert result["features"]["ollama_generation"]["enabled"] is False
+    assert result["features"]["ollama_embedding"]["operational"] is True
+    assert "url" not in result
 
 
 def test_vllm_stream_skips_reasoning_and_usage_events(monkeypatch):

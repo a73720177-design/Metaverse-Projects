@@ -1,6 +1,4 @@
 import asyncio
-import base64
-import html
 import logging
 import re
 from uuid import UUID
@@ -81,32 +79,6 @@ def _too_similar(question: str, accepted: list[str]) -> bool:
         if union and len(terms & other) / len(union) >= 0.65:
             return True
     return False
-
-
-def _avatar_data_url(name: str, role: str, gender: str, age: int | None) -> str:
-    label = html.escape((name.strip() or role.strip() or "AI")[:2])
-    hue = sum(ord(char) for char in f"{name}:{role}:{gender}:{age}") % 360
-    hair = {
-        "male": '<path d="M48 58c3-30 61-38 67 3-18-13-45-15-67-3" fill="#24202b"/>',
-        "female": '<path d="M44 73c-5-48 77-57 75 2l-7 42-13-18c17-48-53-46-38 0l-13 18z" fill="#302535"/>',
-        "other": '<path d="M45 65c7-35 62-39 72-3-22-8-48-7-72 3" fill="#332944"/>',
-        "unspecified": '<path d="M48 60c9-27 55-31 66 0-23-9-44-9-66 0" fill="#2b2932"/>',
-    }[gender]
-    age_marks = "" if age is None or age < 45 else '<path d="M58 77h10M92 77h10M67 101c8 4 18 4 26 0" stroke="white" stroke-opacity=".36" stroke-width="2" fill="none"/>'
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">'
-        f'<defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="hsl({hue} 72% 60%)"/>'
-        f'<stop offset="1" stop-color="hsl({(hue + 55) % 360} 72% 42%)"/></linearGradient></defs>'
-        '<rect width="160" height="160" rx="80" fill="url(#g)"/>'
-        f'{hair}'
-        '<circle cx="80" cy="61" r="29" fill="white" fill-opacity=".28"/>'
-        f'{age_marks}'
-        '<path d="M32 139c7-31 25-46 48-46s41 15 48 46" fill="white" fill-opacity=".23"/>'
-        f'<text x="80" y="91" text-anchor="middle" font-family="sans-serif" font-size="34" '
-        f'font-weight="700" fill="white">{label}</text></svg>'
-    )
-    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    return f"data:image/svg+xml;base64,{encoded}"
 
 
 class PracticeService:
@@ -290,7 +262,8 @@ class PracticeService:
             for attempt in range(2 if count else 0):
                 try:
                     generated = await self.generator.generate(persona, synthetic, instructions,
-                        question_count=count - len(questions), excluded_questions=accepted_across_personas[-40:])
+                        question_count=count - len(questions), excluded_questions=accepted_across_personas[-40:],
+                        model=request.model)
                 except ReviewGeneratorError:
                     warnings.append("모델 응답을 받지 못했습니다. 잠시 후 다시 생성해 주세요.")
                     break
@@ -313,8 +286,7 @@ class PracticeService:
             if analyzed < total or selected_chars < original_chars:
                 warnings.append("전체 원문 중 선택한 발췌만 질문 생성에 사용했습니다. 선택되지 않은 내용은 평가하지 않았습니다.")
             return PersonaQuestionResult(
-                persona_id=persona.agent_id, persona_name=persona.name, persona_role=persona.role,
-                avatar_data_url=_avatar_data_url(persona.name, persona.role, persona.gender, persona.age),
+                persona_id=persona.agent_id, persona_name=persona.name,
                 questions=questions, requested_count=requested_count, generated_count=len(questions),
                 assessment=assessment,
                 status="partial" if len(questions) < requested_count else "complete",
@@ -324,9 +296,18 @@ class PracticeService:
                     selection_method="vector" if retrieved else "overview_and_relevance"),
             )
 
-        results = []
-        for persona in personas:
-            results.append(await generate_for_persona(persona))
+        # Keep result ordering stable while limiting expensive model calls.
+        # `accept()` has no await points, so shared duplicate filtering remains
+        # atomic within the event loop even when model requests finish together.
+        slots = asyncio.Semaphore(self.max_concurrent_personas)
+
+        async def generate_limited(persona) -> PersonaQuestionResult:
+            async with slots:
+                return await generate_for_persona(persona)
+
+        results = list(await asyncio.gather(*(
+            generate_limited(persona) for persona in personas
+        )))
         response = ExpectedQuestionResponse(results=results)
         session = PracticeSession(request=request, response=response)
         response.session_id = session.session_id

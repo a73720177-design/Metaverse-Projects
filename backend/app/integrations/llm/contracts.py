@@ -7,6 +7,7 @@ from app.models.chat import ChatRequest, ChatTurn
 from app.models.document import DocumentParseResponse
 from app.models.persona import PersonaProfile
 from app.models.summary import SummaryStyle
+from app.models.llm import DEFAULT_LLM_MODEL, LlmModel
 
 
 class PersonaGeneratorError(RuntimeError):
@@ -31,6 +32,7 @@ class PersonaGenerationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=5000)
     reference_context: str = Field(default="", max_length=3000)
+    model: LlmModel = DEFAULT_LLM_MODEL
 
 
 class PersonaGenerator(Protocol):
@@ -43,6 +45,7 @@ class ReviewGenerator(Protocol):
         persona: PersonaProfile,
         document: DocumentParseResponse,
         instructions: str | None,
+        model: LlmModel = DEFAULT_LLM_MODEL,
     ) -> dict[str, Any]: ...
 
 
@@ -51,6 +54,7 @@ class QuestionGenerator(Protocol):
         self, persona: PersonaProfile, document: DocumentParseResponse,
         instructions: str | None, *, question_count: int = 5,
         excluded_questions: list[str] | None = None,
+        model: LlmModel = DEFAULT_LLM_MODEL,
     ) -> dict[str, Any]: ...
 
 

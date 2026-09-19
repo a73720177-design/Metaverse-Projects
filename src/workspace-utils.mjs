@@ -50,7 +50,7 @@ export function documentDeletePrompt(filename) {
   return `정말 "${filename}" 을 삭제하시겠습니까?`
 }
 
-export function restorePracticeChats(session, history) {
+export function restorePracticeChats(session, history, activeConversationId = null) {
   return Object.fromEntries(session.response.results.map((result) => {
     const conversations = Object.fromEntries(result.questions.map((question) => {
       const conversation = newConversation(question)
@@ -68,6 +68,36 @@ export function restorePracticeChats(session, history) {
       }
       return [question.question_id, conversation]
     }))
-    return [result.persona_id, { activeQuestionId: result.questions[0]?.question_id || null, conversations }]
+    const focusedQuestion = activeConversationId
+      ? result.questions.find((question) => question.conversation_id === activeConversationId)
+      : null
+    return [result.persona_id, {
+      activeQuestionId: focusedQuestion?.question_id || result.questions[0]?.question_id || null,
+      conversations,
+    }]
   }))
+}
+
+export function groupChatsByConversation(history) {
+  const groups = new Map()
+  for (const item of history.filter((chat) => !chat.deleted_at)) {
+    const key = item.conversation_id || `message:${item.message_id}`
+    const group = groups.get(key) || {
+      conversationId: item.conversation_id || null,
+      agentId: item.agent_id,
+      messages: [],
+      latestAt: item.created_at,
+    }
+    group.messages.push(item)
+    if (String(item.created_at) > String(group.latestAt)) group.latestAt = item.created_at
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, messages: group.messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))) }))
+    .sort((a, b) => String(b.latestAt).localeCompare(String(a.latestAt)))
+}
+
+export function chatPromptPreview(message = '') {
+  const match = message.match(/^예상 질문:\s*(.*?)\n발표자의 답변:\s*([\s\S]*?)\n답변을 평가하고 후속 질문을 해주세요\.$/)
+  return match ? { question: match[1], answer: match[2] } : { question: '', answer: message }
 }
