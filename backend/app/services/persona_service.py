@@ -183,4 +183,4 @@ class PersonaService:
 
     async def permanently_delete(self, agent_id: UUID, owner_id: UUID) -> None:
         if not await self.repository.permanently_delete(agent_id, owner_id):
-            raise PersonaNotFoundError("Trashed persona not found")
+            raise PersonaNotFoundError("Persona not found")

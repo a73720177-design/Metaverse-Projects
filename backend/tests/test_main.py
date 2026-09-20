@@ -176,22 +176,11 @@ def test_create_and_get_agent_through_contracts() -> None:
         assert active.status_code == 200
         assert active.json()[0]["agent_id"] == payload["agent_id"]
 
-        moved = client.delete(f"/agents/{payload['agent_id']}")
-        assert moved.status_code == 200
-        assert moved.json()["deleted_at"] is not None
+        deleted = client.delete(f"/agents/{payload['agent_id']}")
+        assert deleted.status_code == 204
         assert client.get(f"/agents/{payload['agent_id']}").status_code == 404
         assert client.get("/agents").json() == []
-        assert client.get("/agents/trash").json()[0]["agent_id"] == payload["agent_id"]
-
-        restored = client.post(f"/agents/trash/{payload['agent_id']}/restore")
-        assert restored.status_code == 200
-        assert restored.json()["deleted_at"] is None
-        assert client.get(f"/agents/{payload['agent_id']}").status_code == 200
-
-        assert client.delete(f"/agents/{payload['agent_id']}").status_code == 200
-        assert client.delete(f"/agents/trash/{payload['agent_id']}").status_code == 204
-        assert client.get("/agents/trash").json() == []
-        assert client.post(f"/agents/trash/{payload['agent_id']}/restore").status_code == 404
+        assert client.delete(f"/agents/{payload['agent_id']}").status_code == 404
     finally:
         app.dependency_overrides.clear()
 
@@ -309,21 +298,10 @@ def test_chat_contract() -> None:
         message_id = response.json()["message_id"]
         assert client.get("/chats").json()[0]["message_id"] == message_id
 
-        moved = client.delete(f"/chats/{message_id}")
-        assert moved.status_code == 200
-        assert moved.json()["deleted_at"] is not None
+        deleted = client.delete(f"/chats/{message_id}")
+        assert deleted.status_code == 204
         assert client.get("/chats").json() == []
-        assert client.get("/trash/chats").json()[0]["message_id"] == message_id
-
-        restored = client.post(f"/trash/chats/{message_id}/restore")
-        assert restored.status_code == 200
-        assert restored.json()["deleted_at"] is None
-        assert client.get("/trash/chats").json() == []
-
-        assert client.delete(f"/chats/{message_id}").status_code == 200
-        assert client.delete(f"/trash/chats/{message_id}").status_code == 204
-        assert client.get("/trash/chats").json() == []
-        assert client.post(f"/trash/chats/{message_id}/restore").status_code == 404
+        assert client.delete(f"/chats/{message_id}").status_code == 404
     finally:
         app.dependency_overrides.clear()
 
@@ -606,10 +584,15 @@ def test_feature_health_reports_safe_runtime_switches(monkeypatch) -> None:
         return httpx.Response(200, json={
             "status": "degraded",
             "provider": "vllm",
+            "models": [
+                {"id": "qwen3:4b", "installed": True, "available": True},
+                {"id": "qwen3.5:9b", "installed": False, "available": False},
+            ],
             "features": {
                 "vllm": {"enabled": True, "operational": True, "model": "qwen-safe"},
                 "ollama_generation": {"enabled": False, "operational": None},
                 "ollama_embedding": {"enabled": True, "operational": False, "model": "bge-m3"},
+                "gpu_acceleration": {"enabled": True, "operational": True, "mode": "gpu", "gpu_percent": 100.0},
                 "streaming": {"enabled": True, "operational": True},
             },
         })
@@ -625,6 +608,9 @@ def test_feature_health_reports_safe_runtime_switches(monkeypatch) -> None:
         assert payload["active_llm_provider"] == "vllm"
         assert payload["features"]["vllm"]["operational"] is True
         assert payload["features"]["embedding"]["operational"] is False
+        assert payload["features"]["gpu_acceleration"]["gpu_percent"] == 100.0
+        assert payload["models"][0]["id"] == "qwen3:4b"
+        assert payload["models"][1]["available"] is False
         assert payload["features"]["vector_rag"]["enabled"] is False
         assert "url" not in response.text.lower()
         assert "key" not in response.text.lower()

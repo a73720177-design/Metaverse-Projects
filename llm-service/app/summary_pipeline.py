@@ -24,16 +24,19 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.pipeline_budget import budgeted_groups, limit_groups, reduce_to_fit
-from app.prompts import UNTRUSTED_INPUT_RULE, OUTPUT_LANGUAGE_RULE, SUMMARY_MAP_PROMPT, SUMMARY_REDUCE_PROMPT, render_persona
+from app.prompts import (
+    FULL_TEXT_MAX_CHARS,
+    OUTPUT_LANGUAGE_RULE,
+    UNTRUSTED_INPUT_RULE,
+    build_summary_map_prompt,
+    build_summary_reduce_prompt,
+    escape_prompt_data,
+    summary_persona_block,
+    summary_style_guidance,
+)
 from app.schemas_v1 import DocumentIn, PersonaProfileIn, SummaryGenerationResponse, SummaryStyle, ReviewCoverage
 
 _CHUNK_OVERLAP = 200
-
-_STYLE_GUIDANCE: dict[SummaryStyle, str] = {
-    SummaryStyle.BRIEF: "전체 내용을 3~5문장으로 간결하게 요약하세요.",
-    SummaryStyle.DETAILED: "문단 흐름에 따라 자세히 요약하고, 마지막에 전체 결론을 덧붙이세요.",
-    SummaryStyle.OUTLINE: "summary는 핵심 흐름을 담은 3~5문장으로 짧게 쓰고, 세부 구조는 outline으로 표현하세요.",
-}
 
 _STYLE_MAX_TOKENS: dict[SummaryStyle, int] = {
     SummaryStyle.BRIEF: 1024,
@@ -69,7 +72,7 @@ def style_max_tokens(style: SummaryStyle) -> int:
 
 
 def style_guidance(style: SummaryStyle) -> str:
-    return _STYLE_GUIDANCE[style]
+    return summary_style_guidance(style)
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -84,7 +87,7 @@ def _positive_env_int(name: str, default: int) -> int:
 
 def should_use_map_reduce(full_text: str) -> bool:
     threshold = _positive_env_int("SUMMARY_SINGLE_PASS_CHARS", 12000)
-    return len(full_text) > threshold
+    return len(full_text) > min(threshold, FULL_TEXT_MAX_CHARS)
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -170,9 +173,7 @@ def _render_group(group: list[SummaryChunk]) -> str:
 
 
 def persona_block(persona: PersonaProfileIn | None) -> str:
-    if persona is None:
-        return "(특정 평가자 관점 없이 일반적인 독자 관점으로 요약합니다.)"
-    return render_persona(persona)
+    return summary_persona_block(persona)
 
 
 def generate_summary_map_reduce(
@@ -185,11 +186,12 @@ def generate_summary_map_reduce(
     topic_limit: int = 8,
 ) -> SummaryGenerationResponse:
     chunks = _build_chunks(document)
-    block = persona_block(persona)
 
     def map_prompt(group):
-        return SUMMARY_MAP_PROMPT.format(
-            persona_block=block, filename=document.filename, chunk_text=_render_group(group),
+        return build_summary_map_prompt(
+            persona=persona,
+            filename=document.filename,
+            chunk_text=_render_group(group),
         )
 
     all_groups = budgeted_groups(chunks, map_prompt, 512, _positive_env_int("SUMMARY_MAP_CHARS", 12000))
@@ -205,10 +207,12 @@ def generate_summary_map_reduce(
     topic_limit = min(topic_limit, len(all_points))
 
     def final_prompt(points):
-        prompt = SUMMARY_REDUCE_PROMPT.format(
-            persona_block=block, filename=document.filename,
-            style_guidance=_STYLE_GUIDANCE[style],
-            points_json=json.dumps(points, ensure_ascii=False), topic_limit=topic_limit,
+        prompt = build_summary_reduce_prompt(
+            persona=persona,
+            filename=document.filename,
+            style=style,
+            points=points,
+            topic_limit=topic_limit,
         )
         if analyzed < total:
             prompt += "\n일부 구간만 표본 분석했습니다. summary에 이 한계를 밝히고 문서 전체를 확인했다고 표현하지 마세요.\n"
@@ -220,7 +224,9 @@ def generate_summary_map_reduce(
             "source_index는 실제 입력 출처만 유지하세요. 여러 출처는 point에도 구간 번호를 명시하세요. "
             "points는 최대 3개로 작성하고 시각 분석의 불확실성을 유지하세요.\n"
             + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
-            + "\n=== 자료 시작 ===\n" + json.dumps(points, ensure_ascii=False) + "\n=== 자료 끝 ==="
+            + "\n<document_data>\n"
+            + escape_prompt_data(json.dumps(points, ensure_ascii=False))
+            + "\n</document_data>"
         )
 
     all_points = reduce_to_fit(

@@ -37,6 +37,7 @@ class OllamaVisionClient:
         self.model = os.getenv("VLM_MODEL", "qwen3-vl:4b-instruct").strip()
         if not self.model or "cloud" in self.model.lower():
             raise ValueError("VLM_MODEL에는 클라우드 모델을 사용할 수 없습니다.")
+        self.num_gpu = int(os.getenv("OLLAMA_NUM_GPU", "-1"))
         self.keep_alive = _get_positive_int("VLM_KEEP_ALIVE_SECONDS", 300)
         self.unload_after_document = os.getenv("VLM_UNLOAD_AFTER_DOCUMENT", "true").strip().lower()
         if self.unload_after_document not in {"true", "false"}:
@@ -70,7 +71,10 @@ class OllamaVisionClient:
                     "model": self.model,
                     "stream": False,
                     "keep_alive": self.keep_alive,
-                    "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 1600},
+                    "options": {
+                        "temperature": 0, "num_ctx": 8192, "num_predict": 1600,
+                        "num_gpu": self.num_gpu,
+                    },
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": f"페이지 {page}\n참고용 추출 텍스트:\n{text[:5000]}",

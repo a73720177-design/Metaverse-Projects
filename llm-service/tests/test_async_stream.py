@@ -38,14 +38,13 @@ def test_provider_stream_cancel_closes_socket_and_releases_slot(monkeypatch, pro
     asyncio.run(run())
 
 
-def test_endpoint_filters_reasoning_incrementally_before_done(monkeypatch):
+def test_endpoint_filters_reasoning_before_validated_output(monkeypatch):
     async def run():
         closed = asyncio.Event()
         async def provider(*args, **kwargs):
             try:
                 for text in ['<thi', 'nk>private', '</think>첫 응답']:
                     yield text
-                await asyncio.Event().wait()
             finally:
                 closed.set()
         monkeypatch.setattr('app.main.stream_llm', provider)

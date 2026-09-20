@@ -92,6 +92,7 @@ class HttpQuestionGenerator:
                 "persona": persona.model_dump(mode="json"),
                 "question_count": question_count, "evidence": evidence,
                 "excluded_questions": (excluded_questions or [])[-40:],
+                "instructions": instructions,
                 "model": model,
             })
         except (LlmServiceConnectionError, LlmServiceResponseError) as exc:

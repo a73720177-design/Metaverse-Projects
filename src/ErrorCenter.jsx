@@ -79,6 +79,7 @@ export function ErrorCenter() {
     if (feature.model) details.push(`모델 ${feature.model}`)
     if (feature.mode) details.push(`모드 ${feature.mode}`)
     if (feature.workers) details.push(`동시 작업 ${feature.workers}개`)
+    if (typeof feature.gpu_percent === 'number') details.push(`VRAM 오프로딩 ${feature.gpu_percent}%`)
     if (feature.models && Object.keys(feature.models).length) {
       details.push([...new Set(Object.values(feature.models))].join(', '))
     }
@@ -102,6 +103,7 @@ export function ErrorCenter() {
         {!features && <p className="status-guide">vLLM, Ollama, 임베딩, RAG, DB 등 실제 런타임 기능의 ON/OFF 상태를 확인할 수 있습니다.</p>}
         {features && <div className="feature-status" role="status">
           <p className="feature-summary"><strong>활성 LLM 제공자</strong><span>{features.active_llm_provider}</span></p>
+          <p className="feature-summary"><strong>선택 가능한 모델</strong><span>{(features.models || []).filter((model) => model.available).map((model) => model.id).join(', ') || '없음'}</span></p>
           <div className="feature-grid">{Object.entries(features.features || {}).map(([key, feature]) => {
             const state = featureState(feature)
             return <article className="feature-card" key={key}>

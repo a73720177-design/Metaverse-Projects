@@ -283,6 +283,12 @@ async def feature_health(
             "label": "Ollama 임베딩",
             **(llm_features.get("ollama_embedding") or {"enabled": True, "operational": False}),
         },
+        "gpu_acceleration": {
+            "label": "모델 GPU 가속",
+            **(llm_features.get("gpu_acceleration") or {
+                "enabled": True, "operational": None, "mode": "unknown",
+            }),
+        },
         "streaming": {
             "label": "스트리밍 채팅",
             **(llm_features.get("streaming") or {"enabled": True, "operational": False}),
@@ -323,5 +329,6 @@ async def feature_health(
     return {
         "status": "degraded" if degraded else "ok",
         "active_llm_provider": llm.get("provider", "unknown"),
+        "models": llm.get("models", []),
         "features": features,
     }

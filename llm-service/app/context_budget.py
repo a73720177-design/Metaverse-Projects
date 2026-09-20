@@ -43,7 +43,11 @@ def estimated_tokens(text: str) -> int:
         # Must match the served model; no network calls or implicit downloads.
         return len(_local_tokenizer(path).encode(text, add_special_tokens=False))
     try:
-        ratio = float(os.getenv("LLM_APPROX_CHARS_PER_TOKEN", "2.0"))
+        # Korean and structured JSON use more tokens per character than plain
+        # English. Prefer a conservative fallback when no matching local
+        # tokenizer has been configured; production can use the exact Qwen
+        # tokenizer through LLM_TOKENIZER_PATH.
+        ratio = float(os.getenv("LLM_APPROX_CHARS_PER_TOKEN", "1.8"))
         if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError
     except ValueError as exc:

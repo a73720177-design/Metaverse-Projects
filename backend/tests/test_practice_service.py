@@ -65,7 +65,7 @@ def test_expected_questions_use_multiple_documents_and_personas() -> None:
     response = asyncio.run(run())
     assert len(response.results) == 2
     assert len(response.results[0].questions) == 1
-    assert response.results[1].questions == []
+    assert len(response.results[1].questions) == 1
     assert response.session_id is not None
     assert all("avatar_data_url" not in result.model_dump() for result in response.results)
     assert len(response.results[0].questions[0].sources) == 1
@@ -268,7 +268,7 @@ def test_expected_questions_keep_bounded_overview_when_persona_terms_do_not_matc
     assert not any("какие" in item.question for item in result.results[0].questions)
 
 
-def test_invalid_reference_ids_and_duplicate_persona_questions_are_not_accepted(monkeypatch):
+def test_invalid_reference_ids_are_rejected_but_personas_keep_independent_questions(monkeypatch):
     monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
     calls = []
     class Generator:
@@ -277,7 +277,7 @@ def test_invalid_reference_ids_and_duplicate_persona_questions_are_not_accepted(
             return {'questions': [
                 {'question': '교수논문.pdf 본문에 대한 잘못된 질문입니다?', 'presentation_evidence_ids': ['e2'], 'focus': '참고자료'},
                 {'question': '사업계획.pdf 본문에서 근거를 검증한 방법은 무엇입니까?', 'presentation_evidence_ids': ['invalid'], 'focus': '없는 근거'},
-                {'question': '사업계획.pdf 본문에서 근거를 검증한 방법은 무엇입니까?', 'presentation_evidence_ids': ['e1'], 'focus': '근거 검증'},
+                {'question': '전환율 개선 효과를 사용자 실험으로 검증한 절차는 무엇입니까?', 'presentation_evidence_ids': ['e1'], 'focus': '근거 검증'},
             ]}
     async def run():
         owner = uuid4()
@@ -291,12 +291,86 @@ def test_invalid_reference_ids_and_duplicate_persona_questions_are_not_accepted(
         response = await PracticeService(Generator(), agents, docs).generate_expected_questions(
             ExpectedQuestionRequest(persona_ids=[p.agent_id for p in personas], presentation_document_ids=[presentation.document_id], question_count_per_persona=1), owner)
         questions = [q for r in response.results for q in r.questions]
-        assert len({q.question for q in questions}) == len(questions)
+        assert len(questions) == 2
         assert all(s.document_id == presentation.document_id for q in questions for s in q.sources)
-        assert sum(q.origin == 'model' for q in questions) == 1
-        assert calls[1]['excluded_questions']
-        assert response.results[1].status in {'partial', 'fallback'}
+        assert all(q.origin == 'model' for q in questions)
+        assert all(result.status == 'complete' for result in response.results)
     asyncio.run(run())
+
+
+def test_similar_but_distinct_questions_do_not_starve_later_persona(monkeypatch):
+    monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
+
+    class Generator:
+        async def generate(self, persona, document, instructions, **kwargs):
+            suffix = "측정 지표" if persona.name == "교수" else "측정 기준"
+            return {'questions': [{
+                'question': f'전환율 개선 사용자 실험 검증 절차와 {suffix}는 무엇입니까?',
+                'presentation_evidence_ids': ['e1'],
+                'focus': suffix,
+            }]}
+
+    async def run():
+        owner = uuid4()
+        agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        presentation = _document('사업계획.pdf')
+        personas = [PersonaProfile(name='교수'), PersonaProfile(name='투자자')]
+        await docs.save(presentation, owner)
+        for persona in personas:
+            await agents.save(persona, owner)
+        return await PracticeService(
+            Generator(), agents, docs, max_concurrent_personas=2
+        ).generate_expected_questions(ExpectedQuestionRequest(
+            persona_ids=[persona.agent_id for persona in personas],
+            presentation_document_ids=[presentation.document_id],
+            question_count_per_persona=1,
+        ), owner)
+
+    response = asyncio.run(run())
+    assert [result.generated_count for result in response.results] == [1, 1]
+    assert all(result.status == 'complete' for result in response.results)
+
+
+def test_generic_questions_are_rejected_and_specific_retry_is_accepted(monkeypatch):
+    monkeypatch.setattr('app.services.practice_service.vector_enabled', lambda: False)
+    calls = []
+
+    class Generator:
+        async def generate(self, persona, document, instructions, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {'questions': [{
+                    'question': '발표 자료의 근거와 검증 방법을 구체적으로 설명해 주시겠습니까?',
+                    'presentation_evidence_ids': ['e1'],
+                    'focus': '근거 검증',
+                }]}
+            return {'questions': [{
+                'question': '전환율 개선 효과를 사용자 실험에서 어떤 지표로 측정했습니까?',
+                'presentation_evidence_ids': ['e1'],
+                'focus': '전환율 측정 지표',
+            }]}
+
+    async def run():
+        owner = uuid4()
+        agents, docs = InMemoryAgentRepository(), InMemoryDocumentRepository()
+        presentation = _document('사업계획.pdf')
+        persona = PersonaProfile(name='투자자')
+        await docs.save(presentation, owner)
+        await agents.save(persona, owner)
+        return await PracticeService(Generator(), agents, docs).generate_expected_questions(
+            ExpectedQuestionRequest(
+                persona_ids=[persona.agent_id],
+                presentation_document_ids=[presentation.document_id],
+                question_count_per_persona=1,
+            ), owner)
+
+    result = asyncio.run(run()).results[0]
+    assert [question.question for question in result.questions] == [
+        '전환율 개선 효과를 사용자 실험에서 어떤 지표로 측정했습니까?'
+    ]
+    assert calls[1]['excluded_questions'] == [
+        '발표 자료의 근거와 검증 방법을 구체적으로 설명해 주시겠습니까?'
+    ]
 
 
 def test_overview_includes_first_middle_last_pages_and_reports_coverage(monkeypatch):

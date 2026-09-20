@@ -105,41 +105,9 @@ async def list_chats(
     return await service.list_active(current_user.user_id)
 
 
-@router.delete("/chats/{message_id}", response_model=ChatHistoryItem, summary="채팅을 휴지통으로 이동")
-async def move_chat_to_trash(
-    message_id: UUID,
-    service: ChatService = Depends(get_chat_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> ChatHistoryItem:
-    try:
-        return await service.move_to_trash(message_id, current_user.user_id)
-    except ChatResourceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/trash/chats", response_model=list[ChatHistoryItem], summary="휴지통 채팅 목록 조회")
-async def list_trashed_chats(
-    service: ChatService = Depends(get_chat_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> list[ChatHistoryItem]:
-    return await service.list_trash(current_user.user_id)
-
-
-@router.post("/trash/chats/{message_id}/restore", response_model=ChatHistoryItem, summary="채팅 복원")
-async def restore_chat(
-    message_id: UUID,
-    service: ChatService = Depends(get_chat_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> ChatHistoryItem:
-    try:
-        return await service.restore(message_id, current_user.user_id)
-    except ChatResourceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.delete("/trash/chats/{message_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="휴지통 채팅 완전 삭제")
-async def permanently_delete_chat(
+@router.delete("/chats/{message_id}", status_code=status.HTTP_204_NO_CONTENT,
+               summary="채팅 영구 삭제")
+async def delete_chat(
     message_id: UUID,
     service: ChatService = Depends(get_chat_service),
     current_user: UserResponse = Depends(get_current_user),

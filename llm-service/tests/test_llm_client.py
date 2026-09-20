@@ -101,6 +101,32 @@ def test_runtime_diagnostics_separates_vllm_and_ollama_embedding(monkeypatch):
     assert "url" not in result
 
 
+def test_runtime_diagnostics_only_enables_exact_installed_selectable_models(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+
+    def fake_get(url, **_kwargs):
+        if url.endswith("/api/ps"):
+            return FakeResponse({"models": [{
+                "name": "qwen3:4b", "size": 1000, "size_vram": 750,
+            }]})
+        return FakeResponse({"models": [
+            {"name": "qwen3:4b"},
+            {"name": "qwen3.5:4b"},
+            {"name": "bge-m3:latest"},
+        ]})
+
+    monkeypatch.setattr("app.llm_client.requests.get", fake_get)
+    result = get_runtime_diagnostics()
+
+    assert result["models"] == [
+        {"id": "qwen3:4b", "installed": True, "available": True},
+        {"id": "qwen3.5:9b", "installed": False, "available": False},
+    ]
+    accelerator = result["features"]["gpu_acceleration"]
+    assert accelerator["mode"] == "mixed"
+    assert accelerator["gpu_percent"] == 75.0
+
+
 def test_vllm_stream_skips_reasoning_and_usage_events(monkeypatch):
     captured = {}
     lines = [
@@ -152,6 +178,19 @@ def test_ollama_disables_thinking_in_option_and_prompt(monkeypatch):
     assert call_llm("질문") == "최종 답변"
     assert captured["json"]["think"] is False
     assert captured["json"]["prompt"].endswith("\n/no_think")
+    assert captured["json"]["options"]["num_gpu"] == -1
+
+
+def test_embeddings_request_maximum_gpu_offload(monkeypatch):
+    captured = {}
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse({"embeddings": [[0.1, 0.2]]})
+
+    monkeypatch.setattr("app.llm_client.requests.post", fake_post)
+    assert embed_texts(["문서"]) == [[0.1, 0.2]]
+    assert captured["json"]["options"]["num_gpu"] == -1
 
 
 @pytest.mark.parametrize("vector", [None, [], [True], [float("nan")], [float("inf")], ["1"]])

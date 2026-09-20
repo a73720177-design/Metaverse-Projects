@@ -191,69 +191,14 @@ export function listAgents(token, signal) {
   return apiFetch('/agents', { headers: authHeaders(token), signal })
 }
 
-// Moves a persona to Backend's trash (soft delete) -> PersonaHistoryItem
-export function trashAgent(agentId, token, signal) {
-  return apiFetch(`/agents/${encodeURIComponent(agentId)}`, {
-    method: 'DELETE',
-    headers: authHeaders(token),
-    signal,
-  })
-}
-
-// -> PersonaHistoryItem[]
-export function listTrashedAgents(token, signal) {
-  return apiFetch('/agents/trash', { headers: authHeaders(token), signal })
-}
-
-// -> PersonaHistoryItem (restored, deleted_at cleared)
-export function restoreAgent(agentId, token, signal) {
-  return apiFetch(`/agents/trash/${encodeURIComponent(agentId)}/restore`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    signal,
-  })
-}
-
-// Only works on an already-trashed persona. -> null (204 No Content)
-export function permanentlyDeleteAgent(agentId, token, signal) {
-  return apiFetch(`/agents/trash/${encodeURIComponent(agentId)}`, {
-    method: 'DELETE',
-    headers: authHeaders(token),
-    signal,
-  })
-}
-
 // -> ChatHistoryItem[] (active chat messages only, across all of the caller's personas)
 export function listChats(token, signal) {
   return apiFetch('/chats', { headers: authHeaders(token), signal })
 }
 
-// Moves one Q&A record to Backend's trash (soft delete) -> ChatHistoryItem
-export function trashChat(messageId, token, signal) {
+// Permanently deletes one Q&A record. -> null (204 No Content)
+export function deleteChat(messageId, token, signal) {
   return apiFetch(`/chats/${encodeURIComponent(messageId)}`, {
-    method: 'DELETE',
-    headers: authHeaders(token),
-    signal,
-  })
-}
-
-// -> ChatHistoryItem[]
-export function listTrashedChats(token, signal) {
-  return apiFetch('/trash/chats', { headers: authHeaders(token), signal })
-}
-
-// -> ChatHistoryItem (restored, deleted_at cleared)
-export function restoreChat(messageId, token, signal) {
-  return apiFetch(`/trash/chats/${encodeURIComponent(messageId)}/restore`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    signal,
-  })
-}
-
-// Only works on an already-trashed chat. -> null (204 No Content)
-export function permanentlyDeleteChat(messageId, token, signal) {
-  return apiFetch(`/trash/chats/${encodeURIComponent(messageId)}`, {
     method: 'DELETE',
     headers: authHeaders(token),
     signal,

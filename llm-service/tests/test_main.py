@@ -219,6 +219,52 @@ def test_chat_retries_and_blocks_chinese_output(monkeypatch):
     assert response.json()["answer"] == "한국어로 다시 작성한 답변입니다."
 
 
+def test_structured_response_retries_chinese_generated_fields(monkeypatch):
+    answers = iter([
+        '{"role":"教授","expertise":[],"evaluation_style":[]}',
+        '{"role":"교수","expertise":[],"evaluation_style":[]}',
+    ])
+    prompts = []
+    monkeypatch.setattr(
+        "app.main.call_llm",
+        lambda prompt, **kwargs: prompts.append(prompt) or next(answers),
+    )
+    response = client.post(
+        "/api/v1/personas", json={"name": "평가자", "description": "인공지능"}
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "교수"
+    assert "출력 언어 재확인" in prompts[1]
+
+
+def test_structured_response_does_not_reject_han_inside_source_excerpt(monkeypatch):
+    monkeypatch.setattr("app.main.call_llm", lambda *a, **k: json.dumps({
+        "claims": [],
+        "feedback": {"positive": "좋습니다.", "negative": "보완이 필요합니다.",
+                     "positive_sources": [{"filename": "source.pdf", "excerpt": "人工智能"}],
+                     "negative_sources": []},
+        "questions": [],
+    }, ensure_ascii=False))
+    response = client.post(
+        "/api/v1/reviews",
+        json={"persona": _persona_payload(), "document": _document_payload()},
+    )
+    assert response.status_code == 200
+    assert response.json()["feedback"]["positive_sources"][0]["excerpt"] == "人工智能"
+
+
+def test_structured_response_blocks_repeated_chinese(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.call_llm",
+        lambda *a, **k: '{"role":"教授","expertise":[],"evaluation_style":[]}',
+    )
+    response = client.post(
+        "/api/v1/personas", json={"name": "평가자", "description": "인공지능"}
+    )
+    assert response.status_code == 502
+    assert "教授" not in response.text
+
+
 def test_chat_hides_reasoning_and_limits_duplicate_long_answer(monkeypatch):
     answer = "<think>private</think>" + "\n".join(f"줄 {i}" for i in range(69))
     monkeypatch.setattr("app.main.call_llm", lambda *a, **k: answer)
@@ -261,9 +307,47 @@ def test_chat_stream_returns_token_and_done_events(monkeypatch):
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert 'data: {"token": "안녕"}' in response.text
-    assert 'data: {"token": "하세요"}' in response.text
+    assert 'data: {"token": "안녕하세요"}' in response.text
     assert "event: done" in response.text
+
+
+def test_chat_stream_retries_before_emitting_chinese(monkeypatch):
+    calls = 0
+
+    def fake_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return async_tokens(["这是中文回答"] if calls == 1 else ["한국어 답변입니다."])
+
+    monkeypatch.setattr("app.main.stream_llm", fake_stream)
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕"},
+    )
+    assert calls == 2
+    assert "这是中文回答" not in response.text
+    assert "한국어 답변입니다." in response.text
+    assert "event: done" in response.text
+    assert "event: error" not in response.text
+
+
+def test_chat_stream_blocks_repeated_chinese_without_leaking_it(monkeypatch):
+    calls = 0
+
+    def fake_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return async_tokens(["这是中文回答"])
+
+    monkeypatch.setattr("app.main.stream_llm", fake_stream)
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"persona": _persona_payload(), "message": "안녕"},
+    )
+    assert calls == 2
+    assert "这是中文回答" not in response.text
+    assert "event: error" in response.text
+    assert "event: done" not in response.text
 
 
 def test_chat_routes_general_conversation_without_document_context(monkeypatch):
@@ -320,7 +404,7 @@ def test_chat_stream_uses_same_free_chat_routing(monkeypatch):
 
     assert response.status_code == 200
     assert "일반적인 대화" in captured["prompt"]
-    assert 'data: {"token": "반갑"}' in response.text
+    assert 'data: {"token": "반갑습니다"}' in response.text
 
 
 def test_chat_trims_document_to_reserved_context_budget(monkeypatch):
@@ -471,7 +555,7 @@ def test_chat_history_is_truncated_from_oldest_when_over_budget(monkeypatch):
         return "답변"
 
     monkeypatch.setattr("app.main.call_llm", fake_call)
-    monkeypatch.setenv("CHAT_HISTORY_MAX_CHARS", "30")
+    monkeypatch.setattr("app.prompts.CHAT_HISTORY_MAX_CHARS", 30)
     payload = {
         "persona": _persona_payload(),
         "message": "질문",

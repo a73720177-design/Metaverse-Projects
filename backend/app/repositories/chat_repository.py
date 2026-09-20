@@ -74,7 +74,7 @@ class InMemoryChatRepository:
 
     async def permanently_delete(self, message_id: UUID, owner_id: UUID) -> bool:
         chat = await self.get(message_id, owner_id)
-        if chat is None or chat.deleted_at is None:
+        if chat is None:
             return False
         del self._chats[message_id]
         return True
@@ -199,7 +199,6 @@ class PostgresChatRepository:
                 delete(ChatMessageTable).where(
                     ChatMessageTable.message_id == message_id,
                     ChatMessageTable.owner_id == owner_id,
-                    ChatMessageTable.deleted_at.is_not(None),
                 )
             )
             await session.commit()

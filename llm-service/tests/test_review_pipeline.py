@@ -13,6 +13,7 @@ from app.review_pipeline import (
     _evenly_sample,
     _greedy_pack,
     _pack_chunks,
+    _retain_reduce_sources,
     _split_text,
     generate_review_map_reduce,
     should_use_map_reduce,
@@ -160,6 +161,8 @@ def test_generate_review_map_reduce_runs_map_then_reduce(monkeypatch):
 
 
 def test_generate_review_map_reduce_keeps_section_index_as_page(monkeypatch):
+    # This test targets section/page retention, not intermediate compaction.
+    monkeypatch.setenv("LLM_APPROX_CHARS_PER_TOKEN", "2")
     monkeypatch.setenv("REVIEW_CHUNK_CHARS", "1000")
     # 각 섹션이 하나의 청크로 남을 만큼 작으므로(<1000자), map_chars를 극단적으로
     # 작게 둬서 두 섹션이 같은 그룹으로 묶이지 않고 그룹당 1청크씩 나뉘게 한다.
@@ -225,3 +228,26 @@ def test_map_citations_are_checked_before_reduce():
     result = list(_verify_map_claims(claims, [ReviewChunk(1, "성능이 개선되었습니다.")], "발표.pdf"))
     assert len(result) == 1
     assert result[0].sources[0].page == 1
+
+
+def test_reduce_citations_must_be_exact_copies_of_verified_map_sources():
+    valid = {"filename": "발표.pdf", "page": 1, "excerpt": "검증된 원문입니다."}
+    invented = ReviewSource(filename="발표.pdf", page=99, excerpt="모델이 만든 인용")
+    copied = ReviewSource(**valid)
+    response = ReviewGenerationResponse(
+        claims=[ClaimAssessment(
+            claim="검증 결과", verdict="supported", confidence=.9,
+            sources=[copied, invented],
+        )],
+        feedback=ReviewFeedback(
+            positive="장점", negative="보완",
+            positive_sources=[invented], negative_sources=[copied],
+        ),
+        questions=["검증 결과의 측정 기준은 무엇입니까?"],
+    )
+
+    filtered = _retain_reduce_sources(response, [{"sources": [valid]}])
+
+    assert filtered.claims[0].sources == [copied]
+    assert filtered.feedback.positive_sources == []
+    assert filtered.feedback.negative_sources == [copied]
