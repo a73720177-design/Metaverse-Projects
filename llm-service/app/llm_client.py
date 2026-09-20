@@ -26,6 +26,8 @@ OLLAMA_REVIEW_MODEL = os.getenv("OLLAMA_REVIEW_MODEL", "qwen3:4b").strip()
 OLLAMA_QUESTION_MODEL = os.getenv("OLLAMA_QUESTION_MODEL", "").strip() or OLLAMA_REVIEW_MODEL
 OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "").strip() or OLLAMA_REVIEW_MODEL
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
+OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "-1"))
+SELECTABLE_MODELS = ("qwen3:4b", "qwen3.5:9b")
 OLLAMA_EMBED_BATCH = int(os.getenv("OLLAMA_EMBED_BATCH", "32"))
 if OLLAMA_EMBED_BATCH < 1:
     raise RuntimeError("OLLAMA_EMBED_BATCH must be at least 1")
@@ -137,6 +139,9 @@ def call_llm(
         "options": {
             "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            # -1 asks Ollama to offload as many layers as the detected GPU can
+            # hold. Ollama safely falls back to CPU on unsupported hardware.
+            "num_gpu": OLLAMA_NUM_GPU,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
             "repeat_last_n": 256,
@@ -233,6 +238,7 @@ def stream_llm(
         "options": {
             "num_ctx": context_length(),
             "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
+            "num_gpu": OLLAMA_NUM_GPU,
             "temperature": 0.35,
             "repeat_penalty": 1.18,
             "repeat_last_n": 256,
@@ -309,6 +315,7 @@ def get_runtime_diagnostics() -> dict:
     """
     provider = _provider()
     ollama_models: set[str] = set()
+    loaded_models: list[dict] = []
     ollama_reachable = False
     try:
         response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
@@ -322,12 +329,34 @@ def get_runtime_diagnostics() -> dict:
     except (requests.RequestException, ValueError, AttributeError, TypeError):
         pass
 
+    if ollama_reachable:
+        try:
+            response = requests.get(f"{OLLAMA_HOST}/api/ps", timeout=5)
+            if response.ok:
+                loaded_models = [
+                    item for item in response.json().get("models", [])
+                    if isinstance(item, dict)
+                ]
+        except (requests.RequestException, ValueError, AttributeError, TypeError):
+            pass
+
     def model_available(name: str) -> bool:
-        base = name.split(":")[0]
-        return any(candidate == name or candidate.split(":")[0] == base for candidate in ollama_models)
+        requested_base, separator, requested_tag = name.partition(":")
+        for candidate in ollama_models:
+            candidate_base, _, _ = candidate.partition(":")
+            if candidate == name:
+                return True
+            # Untagged names and :latest are aliases. Explicit size/quantization
+            # tags must match exactly: qwen3.5:4b must never unlock :9b.
+            if candidate_base == requested_base and (
+                not separator or requested_tag == "latest"
+            ):
+                return True
+        return False
 
     vllm_reachable = False
     vllm_model_available = False
+    model_ids: set[str] = set()
     if provider == "vllm":
         try:
             response = requests.get(
@@ -359,9 +388,28 @@ def get_runtime_diagnostics() -> dict:
         else ollama_reachable and all(model_available(name) for name in generation_models.values())
     )
     embedding_operational = ollama_reachable and model_available(OLLAMA_EMBEDDING_MODEL)
+    total_loaded_bytes = sum(max(0, int(item.get("size", 0) or 0)) for item in loaded_models)
+    total_vram_bytes = sum(max(0, int(item.get("size_vram", 0) or 0)) for item in loaded_models)
+    gpu_percent = (
+        round(total_vram_bytes * 100 / total_loaded_bytes, 1)
+        if total_loaded_bytes else None
+    )
+    accelerator_mode = (
+        "idle" if not loaded_models else
+        "gpu" if total_vram_bytes >= total_loaded_bytes and total_loaded_bytes else
+        "mixed" if total_vram_bytes else "cpu"
+    )
+    selectable_models = [
+        {"id": name, "installed": model_available(name), "available": model_available(name)}
+        for name in SELECTABLE_MODELS
+    ] if provider == "ollama" else [
+        {"id": name, "installed": name in model_ids, "available": name in model_ids}
+        for name in SELECTABLE_MODELS
+    ]
     return {
         "status": "ok" if generation_operational and embedding_operational else "degraded",
         "provider": provider,
+        "models": selectable_models,
         "features": {
             "vllm": {
                 "enabled": provider == "vllm",
@@ -377,6 +425,15 @@ def get_runtime_diagnostics() -> dict:
                 "enabled": True,
                 "operational": embedding_operational,
                 "model": OLLAMA_EMBEDDING_MODEL,
+            },
+            "gpu_acceleration": {
+                "enabled": True,
+                "operational": None if accelerator_mode == "idle" else total_vram_bytes > 0,
+                "mode": accelerator_mode,
+                "gpu_percent": gpu_percent,
+                "vram_bytes": total_vram_bytes,
+                "loaded_bytes": total_loaded_bytes,
+                "requested_layers": OLLAMA_NUM_GPU,
             },
             "streaming": {
                 "enabled": True,
@@ -398,7 +455,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         try:
             response = requests.post(
                 f"{OLLAMA_HOST}/api/embed",
-                json={"model": OLLAMA_EMBEDDING_MODEL, "input": batch},
+                json={
+                    "model": OLLAMA_EMBEDDING_MODEL,
+                    "input": batch,
+                    "options": {"num_gpu": OLLAMA_NUM_GPU},
+                },
                 timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
@@ -436,6 +497,7 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
         payload = {"model": model or OLLAMA_MODEL, "prompt": guarded, "stream": True,
                    "think": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                    "options": {"num_ctx": context_length(),
+                               "num_gpu": OLLAMA_NUM_GPU,
                                "num_predict": max_tokens or OLLAMA_MAX_OUTPUT_TOKENS,
                                "temperature": 0.35, "repeat_penalty": 1.18, "repeat_last_n": 256}}
     acquired = False

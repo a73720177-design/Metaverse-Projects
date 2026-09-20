@@ -39,7 +39,10 @@ async def _terminate_process_tree(process) -> None:
 
 
 async def parse_in_process(path, filename):
-    timeout = int(os.getenv("PARSER_TIMEOUT_SECONDS", "650" if os.getenv("DOCUMENT_VISION_MODE") == "ollama" else "120"))
+    timeout = int(os.getenv(
+        "PARSER_TIMEOUT_SECONDS",
+        "650" if os.getenv("DOCUMENT_VISION_MODE") in {"auto", "ollama"} else "120",
+    ))
     worker_env = os.environ.copy()
     worker_env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
     process_options = (

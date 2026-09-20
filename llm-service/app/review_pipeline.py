@@ -21,7 +21,16 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.pipeline_budget import budgeted_groups, limit_groups, reduce_to_fit
-from app.prompts import UNTRUSTED_INPUT_RULE, OUTPUT_LANGUAGE_RULE, REVIEW_MAP_PROMPT, REVIEW_REDUCE_PROMPT, render_persona, render_instructions, FULL_TEXT_MAX_CHARS
+from app.prompts import (
+    FULL_TEXT_MAX_CHARS,
+    OUTPUT_LANGUAGE_RULE,
+    REVIEW_MAP_PROMPT,
+    REVIEW_REDUCE_PROMPT,
+    UNTRUSTED_INPUT_RULE,
+    escape_prompt_data,
+    render_instructions,
+    render_persona,
+)
 from app.schemas_v1 import (
     ClaimAssessment,
     DocumentIn,
@@ -66,6 +75,30 @@ def _verify_map_claims(claims, group, filename):
             # An ungrounded model claim must not feed final prose as source data.
             continue
         yield claim
+
+
+def _retain_reduce_sources(
+    response: ReviewGenerationResponse, input_claims: list[dict]
+) -> ReviewGenerationResponse:
+    """Remove citations that were not copied exactly from verified map claims."""
+    allowed = {
+        (source.get("filename"), source.get("page"), source.get("excerpt"))
+        for claim in input_claims
+        for source in claim.get("sources", [])
+        if isinstance(source, dict)
+    }
+
+    def retained(sources):
+        return [
+            source for source in sources
+            if (source.filename, source.page, source.excerpt) in allowed
+        ]
+
+    for claim in response.claims:
+        claim.sources = retained(claim.sources)
+    response.feedback.positive_sources = retained(response.feedback.positive_sources)
+    response.feedback.negative_sources = retained(response.feedback.negative_sources)
+    return response
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -188,8 +221,10 @@ def generate_review_map_reduce(
 
     def map_prompt(group):
         return REVIEW_MAP_PROMPT.format(
-            persona_json=persona_json, filename=document.filename,
-            instructions=instructions_text, chunk_text=_render_group(group),
+            persona_json=persona_json,
+            filename=escape_prompt_data(document.filename),
+            instructions=instructions_text,
+            chunk_text=escape_prompt_data(_render_group(group)),
         )
 
     all_groups = budgeted_groups(chunks, map_prompt, 768, _positive_env_int("REVIEW_MAP_CHARS", 12000))
@@ -203,8 +238,10 @@ def generate_review_map_reduce(
 
     def final_prompt(claims):
         prompt = REVIEW_REDUCE_PROMPT.format(
-            persona_json=persona_json, filename=document.filename,
-            instructions=instructions_text, claims_json=json.dumps(claims, ensure_ascii=False),
+            persona_json=persona_json,
+            filename=escape_prompt_data(document.filename),
+            instructions=instructions_text,
+            claims_json=escape_prompt_data(json.dumps(claims, ensure_ascii=False)),
         )
         if truncated:
             prompt += "\n일부 구간만 표본 검토했습니다. 피드백에 이 한계를 밝히고 문서 전체를 검토했다고 표현하지 마세요.\n"
@@ -216,15 +253,21 @@ def generate_review_map_reduce(
             "중복만 합치세요. 인용문과 주장은 짧게, claims는 최대 3개로 작성하세요. "
             "시각 분석의 불확실성을 유지하세요.\n"
             + UNTRUSTED_INPUT_RULE + "\n" + OUTPUT_LANGUAGE_RULE
-            + "\n=== 자료 시작 ===\n" + json.dumps(claims, ensure_ascii=False) + "\n=== 자료 끝 ==="
+            + "\n<document_data>\n"
+            + escape_prompt_data(json.dumps(claims, ensure_ascii=False))
+            + "\n</document_data>"
         )
 
+    # Preserve the pre-reduction allow-list. Intermediate compaction is another
+    # model call and therefore cannot be trusted to define new citations.
+    verified_source_claims = list(all_claims)
     all_claims = reduce_to_fit(
         all_claims, final_prompt=final_prompt, final_tokens=2048,
         compact_prompt=compact_prompt, response_model=_MapResult, field="claims",
         generate=generate, model=model, compact_tokens=768,
     )
     response = generate(final_prompt(all_claims), ReviewGenerationResponse, max_tokens=2048, model=model)
+    response = _retain_reduce_sources(response, verified_source_claims)
 
     coverage = ReviewCoverage(
         total_chunks=sum(len(group) for group in all_groups),

@@ -125,8 +125,30 @@ def test_missing_converter_is_actionable(tmp_path, monkeypatch):
 @pytest.mark.parametrize("url", ["https://ollama.com", "http://192.168.0.2:11434", "http://localhost@evil.test"])
 def test_remote_endpoints_are_rejected(url, monkeypatch):
     monkeypatch.setenv("VLM_BASE_URL", url)
-    with pytest.raises(ValueError, match="루프백"):
+    with pytest.raises(ValueError, match="VLM_ALLOWED_HOSTS"):
         vision.OllamaVisionClient()
+
+
+def test_explicitly_allowlisted_lan_or_docker_endpoint_is_accepted(monkeypatch):
+    monkeypatch.setenv("VLM_BASE_URL", "http://192.168.0.20:11434")
+    monkeypatch.setenv("VLM_ALLOWED_HOSTS", "192.168.0.20")
+    assert vision.OllamaVisionClient().url == "http://192.168.0.20:11434"
+
+
+def test_auto_mode_keeps_text_parsing_when_vlm_is_not_ready(tmp_path, monkeypatch):
+    from app.services import document_service
+
+    source = tmp_path / "slides.pdf"
+    source.write_bytes(b"placeholder")
+    monkeypatch.setenv("DOCUMENT_VISION_MODE", "auto")
+    monkeypatch.setitem(document_service.PARSERS, ".pdf", lambda _: [(1, "텍스트 근거")])
+    monkeypatch.setattr(
+        vision.OllamaVisionClient,
+        "diagnostics",
+        lambda self, timeout=1: {"operational": False, "model": self.model},
+    )
+    result = parse_document(source, source.name)
+    assert result.full_text == "텍스트 근거"
 
 
 def test_cloud_model_rejected(monkeypatch):
@@ -145,9 +167,11 @@ def mock_transport(monkeypatch, handler):
 
 
 def test_ollama_request_contains_base64_image_and_separate_system_prompt(monkeypatch):
+    monkeypatch.setenv("VLM_API_KEY", "test-secret")
     def handler(request):
         body = json.loads(request.content)
         assert request.url.path == "/api/chat"
+        assert request.headers["Authorization"] == "Bearer test-secret"
         assert body["stream"] is False
         assert body["model"] == "qwen3-vl:4b-instruct"
         assert body["messages"][0]["role"] == "system"
@@ -155,6 +179,16 @@ def test_ollama_request_contains_base64_image_and_separate_system_prompt(monkeyp
         return httpx.Response(200, json={"done": True, "message": {"content": "차트"}})
     mock_transport(monkeypatch, handler)
     assert vision.OllamaVisionClient().describe(b"png data", "heading", 1, 2) == "차트"
+
+
+def test_vision_diagnostics_checks_configured_model_without_exposing_endpoint(monkeypatch):
+    mock_transport(monkeypatch, lambda request: httpx.Response(200, json={
+        "models": [{"name": "qwen3-vl:4b-instruct"}],
+    }))
+    assert vision.OllamaVisionClient().diagnostics() == {
+        "operational": True,
+        "model": "qwen3-vl:4b-instruct",
+    }
 
 
 @pytest.mark.parametrize("payload", [

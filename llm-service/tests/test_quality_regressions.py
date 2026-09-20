@@ -43,7 +43,7 @@ def test_context_budget_counts_rendered_labels_and_wrappers(monkeypatch, has_sec
 
 
 def test_summary_uses_section_text_and_original_index():
-    prompt = main._build_summary_prompt(SummaryGenerationRequest(document=document()))
+    prompt = prompts.build_summary_prompt(SummaryGenerationRequest(document=document()))
     assert "[구간 7]" in prompt
     assert "실험 참가자는 20명" in prompt
     assert "다른 본문" not in prompt
@@ -73,8 +73,14 @@ def test_long_sections_use_map_reduce_even_if_full_text_is_short(monkeypatch, op
     assert captured["document"] == doc
 
 
-def test_no_chunks_fit_is_explicitly_missing_evidence():
-    assert prompts.render_retrieved_context(document(sections=[{"index": 1, "text": "가" * 5000}])) == "(검색된 근거 없음)"
+def test_oversized_first_chunk_keeps_label_and_bounded_evidence():
+    rendered = prompts.render_retrieved_context(
+        document(sections=[{"index": 1, "text": "가" * 5000}])
+    )
+    assert rendered.startswith("<retrieved_context>")
+    assert "[근거 1]" in rendered
+    assert prompts.TRUNCATE_SUFFIX in rendered
+    assert len(rendered) < 4300
 
 
 def test_summary_sampling_discloses_limited_coverage_to_model(monkeypatch):
@@ -100,3 +106,11 @@ def test_review_threshold_cannot_bypass_renderer_limit(monkeypatch):
     from app.review_pipeline import should_use_map_reduce
     monkeypatch.setenv("REVIEW_SINGLE_PASS_CHARS", "100000")
     assert should_use_map_reduce("가" * (prompts.FULL_TEXT_MAX_CHARS + 1))
+
+
+def test_summary_threshold_cannot_bypass_single_pass_limit(monkeypatch):
+    from app.summary_pipeline import should_use_map_reduce
+
+    monkeypatch.setenv("SUMMARY_SINGLE_PASS_CHARS", "100000")
+    assert should_use_map_reduce("가" * prompts.FULL_TEXT_MAX_CHARS) is False
+    assert should_use_map_reduce("가" * (prompts.FULL_TEXT_MAX_CHARS + 1)) is True

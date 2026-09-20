@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chatPromptPreview, documentDeletePrompt, groupChatsByConversation, validateFiles, readWorkspace, newConversation, restorePracticeChats, shouldSubmitChatKey } from './workspace-utils.mjs'
+import { chatPromptPreview, documentDeletePrompt, groupChatsByConversation, validateFiles, readWorkspace, newConversation, restorePracticeChats, reviewableDocuments, shouldSubmitChatKey } from './workspace-utils.mjs'
 
 test('invalid storage and stale selections are safe', () => {
   assert.deepEqual(readWorkspace('{', [], []), { projectIds: [], selected: [] })
@@ -31,6 +31,32 @@ test('chat enter submits while shift-enter and Korean composition keep editing',
 
 test('source deletion prompt names the file and clearly asks for confirmation', () => {
   assert.equal(documentDeletePrompt('발표자료.pdf'), '정말 "발표자료.pdf" 을 삭제하시겠습니까?')
+})
+
+test('material review only offers selected presentation documents', () => {
+  const documents = [
+    { document_id: 'presentation', filename: '발표.pdf', text_length: 120 },
+    { document_id: 'persona', filename: '교수 참고.pdf', text_length: 240 },
+    { document_id: 'empty', filename: '빈 발표.pdf', text_length: 0 },
+  ]
+  assert.deepEqual(
+    reviewableDocuments(documents, ['presentation', 'empty', 'persona'], ['persona'])
+      .map((document) => document.document_id),
+    ['presentation'],
+  )
+})
+
+test('material review excludes a persona source even when stale workspace state marks it as presentation', () => {
+  const documents = [
+    { document_id: 'presentation', filename: '발표.pdf', full_text: '발표 본문' },
+    { document_id: 'shared-stale', filename: '질문자 기준.pdf', full_text: '평가 기준' },
+  ]
+
+  assert.deepEqual(
+    reviewableDocuments(documents, ['presentation', 'shared-stale'], ['shared-stale'])
+      .map((document) => document.document_id),
+    ['presentation'],
+  )
 })
 
 test('saved practice restores conversation identity and excludes trashed or other conversations', () => {

@@ -29,3 +29,11 @@ def test_rich_content_reaches_eight_and_reports_saturation():
     texts = [' '.join(f'항목{i}내용{j}' for j in range(60)) for i in range(10)]
     result = assess_content(texts)
     assert result.output_limit == 8 and result.saturated
+
+
+def test_expected_question_budget_can_reach_ten_without_changing_default_budget():
+    texts = [' '.join(f'질문근거{i}항목{j}' for j in range(60)) for i in range(12)]
+    result = assess_content(texts, max_output=10)
+    assert result.output_limit == 10
+    assert result.saturated
+    assert assess_content(texts).output_limit == 8

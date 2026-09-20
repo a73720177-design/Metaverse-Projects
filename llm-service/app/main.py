@@ -38,11 +38,11 @@ from app.llm_client import (
     stream_llm_async as stream_llm,
 )
 from app.prompts import (
-    SUMMARY_GENERATION_PROMPT,
     build_effective_chat_prompt,
     build_persona_prompt,
     build_review_prompt,
     build_expected_question_prompt,
+    build_summary_prompt,
     trim_context_to_chunks,
     retrieved_context_text,
     document_text,
@@ -52,9 +52,7 @@ from app.review_pipeline import generate_review_map_reduce, should_use_map_reduc
 from app.response_sanitizer import clean_chat_text, extract_json_object, ReasoningFilter, sanitize_payload
 from app.summary_pipeline import (
     generate_summary_map_reduce,
-    persona_block,
     should_use_map_reduce as should_use_summary_map_reduce,
-    style_guidance,
     style_max_tokens,
 )
 from app.schemas_v1 import (
@@ -77,6 +75,16 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+_HAN_CHARACTER_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]"
+)
+_LANGUAGE_RETRY_RULE = (
+    "\n\n[출력 언어 재확인]\n앞선 결과를 폐기하고 처음부터 다시 작성하세요. "
+    "중국어·일본어 문장과 한자 문자를 하나도 사용하지 말고, 고유명사와 "
+    "전문 용어는 한글 또는 영문으로 표기하세요. JSON 키와 근거 ID는 그대로 유지하세요."
+)
+_QUOTED_SOURCE_KEYS = {"sources", "evidence", "excerpt", "reference_context"}
+
 app = FastAPI(
     title="LLM Service",
     description="발표 자료 기반 페르소나/리뷰/요약/채팅 생성 API",
@@ -94,22 +102,32 @@ def _call_llm_as_json(
     model: str | None = None, *, think: bool = False,
 ) -> dict:
     require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
-    try:
-        raw = call_llm(
-            prompt, model=model, response_schema=response_schema,
-            max_tokens=max_tokens, think=think,
-        )
-    except LLMError:
-        # 로그와 응답 모두 내부 주소·예외 원문을 제외한다.
-        logger.error("Ollama 호출 실패")
-        raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
+    current_prompt = prompt
+    for attempt in range(2):
+        try:
+            raw = call_llm(
+                current_prompt, model=model, response_schema=response_schema,
+                max_tokens=max_tokens, think=think,
+            )
+        except LLMError:
+            # 로그와 응답 모두 내부 주소·예외 원문을 제외한다.
+            logger.error("Ollama 호출 실패")
+            raise HTTPException(status_code=503, detail="LLM 서버에 연결할 수 없습니다.")
 
-    try:
-        return sanitize_payload(extract_json_object(raw, response_schema.get("required", [])))
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        # 모델 원본 출력 전체를 로그에 남기지 않는다 (문서 내용이 섞여 있을 수 있음).
-        logger.error("LLM 응답이 JSON 형식이 아님")
-        raise HTTPException(status_code=502, detail="LLM 응답을 해석할 수 없습니다.")
+        try:
+            data = sanitize_payload(
+                extract_json_object(raw, response_schema.get("required", []))
+            )
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            # 모델 원본 출력 전체를 로그에 남기지 않는다 (문서 내용이 섞여 있을 수 있음).
+            logger.error("LLM 응답이 JSON 형식이 아님")
+            raise HTTPException(status_code=502, detail="LLM 응답을 해석할 수 없습니다.")
+        if not _generated_payload_contains_han(data):
+            return data
+        if attempt == 0:
+            current_prompt = prompt + _LANGUAGE_RETRY_RULE
+    logger.warning("한자가 포함된 구조화 응답을 재생성 후 차단함")
+    raise HTTPException(status_code=502, detail="한국어 응답을 생성하지 못했습니다. 다시 시도하세요.")
 
 
 def _generate(
@@ -143,11 +161,7 @@ def _call_llm_as_text(
         if answer and not _contains_chinese_text(answer):
             return answer
         if attempt == 0:
-            current_prompt = (
-                prompt
-                + "\n\n[출력 언어 재확인]\n중국어 한자를 사용하지 말고 반드시 한국어로만 "
-                "최종 답변을 다시 작성하세요."
-            )
+            current_prompt = prompt + _LANGUAGE_RETRY_RULE
     if not answer:
         raise HTTPException(status_code=502, detail="LLM이 빈 답변을 반환했습니다.")
     logger.warning("중국어가 포함된 채팅 응답을 차단함")
@@ -155,8 +169,55 @@ def _call_llm_as_text(
 
 
 def _contains_chinese_text(value: str) -> bool:
-    """Reject CJK ideographs so accidental Chinese output never reaches the UI."""
-    return re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value) is not None
+    """Reject Han ideographs so accidental Chinese output never reaches the UI."""
+    return _HAN_CHARACTER_RE.search(value) is not None
+
+
+def _generated_payload_contains_han(value, key: str | None = None) -> bool:
+    """Inspect generated prose while leaving quoted source evidence untouched."""
+    if key in _QUOTED_SOURCE_KEYS:
+        return False
+    if isinstance(value, dict):
+        return any(_generated_payload_contains_han(item, item_key)
+                   for item_key, item in value.items())
+    if isinstance(value, list):
+        return any(_generated_payload_contains_han(item, key) for item in value)
+    return isinstance(value, str) and _contains_chinese_text(value)
+
+
+async def _collect_validated_stream_answer(
+    prompt: str, *, model: str, max_tokens: int,
+) -> str:
+    """Buffer before SSE emission so rejected language can never leak to the UI."""
+    from contextlib import aclosing
+
+    current_prompt = prompt
+    last_answer = ""
+    for attempt in range(2):
+        reasoning = ReasoningFilter()
+        visible_parts: list[str] = []
+        output_chars = 0
+        async with aclosing(stream_llm(
+            current_prompt, model=model, max_tokens=max_tokens
+        )) as tokens:
+            async for token in tokens:
+                output_chars += len(token)
+                if output_chars > 200_000:
+                    raise LLMError("출력 한도 초과")
+                visible = reasoning.feed(token)
+                if visible:
+                    visible_parts.append(visible)
+        tail = reasoning.feed("", final=True)
+        if tail:
+            visible_parts.append(tail)
+        last_answer = clean_chat_text("".join(visible_parts))
+        if last_answer and not _contains_chinese_text(last_answer):
+            return last_answer
+        if attempt == 0:
+            current_prompt = prompt + _LANGUAGE_RETRY_RULE
+    if not last_answer:
+        raise LLMError("유효한 답변 없음")
+    raise LLMError("한국어 답변 생성 실패")
 
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -289,20 +350,10 @@ def generate_expected_questions(
     )
 
 
-def _build_summary_prompt(request: SummaryGenerationRequest) -> str:
-    return SUMMARY_GENERATION_PROMPT.format(
-        persona_block=persona_block(request.persona),
-        filename=request.document.filename,
-        full_text=document_text(request.document),
-        style_guidance=style_guidance(request.style),
-        topic_limit=request.topic_limit,
-    )
-
-
 @v1_router.post("/summaries", response_model=SummaryGenerationResponse)
 def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResponse:
     if (should_use_summary_map_reduce(document_text(request.document))
-            or not prompt_fits(_build_summary_prompt(request), style_max_tokens(request.style))):
+            or not prompt_fits(build_summary_prompt(request), style_max_tokens(request.style))):
         return generate_summary_map_reduce(
             document=request.document,
             style=request.style,
@@ -312,7 +363,7 @@ def generate_summary(request: SummaryGenerationRequest) -> SummaryGenerationResp
             topic_limit=request.topic_limit,
         )
     response = _generate(
-        _build_summary_prompt(request), SummaryGenerationResponse,
+        build_summary_prompt(request), SummaryGenerationResponse,
         max_tokens=style_max_tokens(request.style), model=OLLAMA_SUMMARY_MODEL,
     )
     total = len([s for s in request.document.sections if s.text.strip()]) or 1
@@ -358,39 +409,17 @@ async def stream_chat(request: ChatGenerationRequest) -> StreamingResponse:
     effective_request = _fit_chat_context(request)
 
     async def events():
-        from contextlib import aclosing
-        reasoning = ReasoningFilter()
-        emitted = False
-        line_breaks = 0
-        output_chars = 0
         try:
-            async with aclosing(stream_llm(build_effective_chat_prompt(effective_request),
-                                           model=request.model, max_tokens=request.max_output_tokens)) as tokens:
-                async for token in tokens:
-                    output_chars += len(token)
-                    if output_chars > 200_000:
-                        raise LLMError("출력 한도 초과")
-                    visible = reasoning.feed(token)
-                    if _contains_chinese_text(visible):
-                        raise LLMError("한국어 답변 생성 실패")
-                    remaining = 30 - line_breaks
-                    pieces = visible.split("\n")
-                    at_limit = len(pieces) > remaining
-                    visible = "\n".join(pieces[:remaining])
-                    if visible:
-                        emitted = emitted or bool(visible.strip())
-                        yield "event: token\ndata: " + json.dumps({"token": visible}, ensure_ascii=False) + "\n\n"
-                        line_breaks += visible.count("\n")
-                    if at_limit:
-                        break
-            tail = reasoning.feed("", final=True)
-            if _contains_chinese_text(tail):
-                raise LLMError("한국어 답변 생성 실패")
-            if tail and line_breaks < 30:
-                emitted = emitted or bool(tail.strip())
-                yield "event: token\ndata: " + json.dumps({"token": tail}, ensure_ascii=False) + "\n\n"
-            if not emitted:
-                raise LLMError("유효한 답변 없음")
+            answer = await _collect_validated_stream_answer(
+                build_effective_chat_prompt(effective_request),
+                model=request.model,
+                max_tokens=request.max_output_tokens,
+            )
+            lines = answer.splitlines(keepends=True) or [answer]
+            for line in lines:
+                yield "event: token\ndata: " + json.dumps(
+                    {"token": line}, ensure_ascii=False
+                ) + "\n\n"
             yield "event: done\ndata: {}\n\n"
         except (LLMError, ValueError):
             logger.error("Chat stream failed")

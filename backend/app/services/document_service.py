@@ -19,8 +19,16 @@ SUPPORTED_EXTENSIONS = frozenset(PARSERS)
 
 def parse_document(path: Path, original_filename: str) -> DocumentParseResponse:
     vision_mode = os.getenv("DOCUMENT_VISION_MODE", "off").strip().lower()
-    if vision_mode not in {"off", "ollama"}:
-        raise ValueError("DOCUMENT_VISION_MODE는 off 또는 ollama여야 합니다.")
+    if vision_mode not in {"off", "auto", "ollama"}:
+        raise ValueError("DOCUMENT_VISION_MODE는 off, auto 또는 ollama여야 합니다.")
+    vision_enabled = vision_mode == "ollama"
+    if vision_mode == "auto" and path.suffix.lower() in {".pdf", ".pptx"}:
+        try:
+            from app.integrations.vision import OllamaVisionClient
+
+            vision_enabled = bool(OllamaVisionClient().diagnostics(timeout=1)["operational"])
+        except (ValueError, OSError):
+            vision_enabled = False
     parser = PARSERS.get(path.suffix.lower())
     if parser is None:
         raise ValueError(f"지원하지 않는 문서 형식: {path.suffix}")
@@ -31,13 +39,13 @@ def parse_document(path: Path, original_filename: str) -> DocumentParseResponse:
         # PDF/PPTX 원본은 향후 DB/vector 파싱 파이프라인이 다시 처리할 수
         # 있도록 현재 파서가 읽지 못해도 먼저 보관한다. DOCX는 기존처럼
         # 손상된 문서를 거절한다.
-        if path.suffix.lower() in {".pdf", ".pptx"} and vision_mode == "off":
+        if path.suffix.lower() in {".pdf", ".pptx"} and not vision_enabled:
             parsed = []
         else:
             raise ValueError(
                 "파일이 손상됐거나 올바른 PDF, PPTX, DOCX 문서가 아닙니다."
             ) from exc
-    if vision_mode == "ollama" and path.suffix.lower() in {".pdf", ".pptx"}:
+    if vision_enabled and path.suffix.lower() in {".pdf", ".pptx"}:
         from app.parsers.visual_parser import enrich_visual_pages
 
         parsed = enrich_visual_pages(path, parsed)

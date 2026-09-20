@@ -341,4 +341,4 @@ class ChatService:
 
     async def permanently_delete(self, message_id: UUID, owner_id: UUID) -> None:
         if not await self.chat_repository.permanently_delete(message_id, owner_id):
-            raise ChatResourceNotFoundError("Trashed chat not found")
+            raise ChatResourceNotFoundError("Chat not found")

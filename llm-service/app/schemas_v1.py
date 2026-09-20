@@ -148,6 +148,7 @@ class ExpectedQuestionGenerationRequest(BaseModel):
     question_count: int = Field(default=5, ge=1, le=10)
     evidence: list[QuestionEvidence] = Field(min_length=1, max_length=80)
     excluded_questions: list[str] = Field(default_factory=list, max_length=40)
+    instructions: str | None = Field(default=None, max_length=2000)
 
 
 class GeneratedQuestion(BaseModel):

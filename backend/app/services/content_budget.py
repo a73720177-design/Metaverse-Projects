@@ -5,7 +5,9 @@ from collections.abc import Iterable
 from app.models.content_assessment import ContentAssessment
 
 
-def assess_content(texts: Iterable[str]) -> ContentAssessment:
+def assess_content(texts: Iterable[str], *, max_output: int = 8) -> ContentAssessment:
+    if max_output < 1:
+        raise ValueError("max_output must be at least 1")
     # Sentence/line boundaries are independent of file count. Token signatures
     # also collapse repeated paragraphs whose whitespace or punctuation differs.
     accepted: list[set[str]] = []
@@ -27,12 +29,24 @@ def assess_content(texts: Iterable[str]) -> ContentAssessment:
                 continue
             accepted.append(terms)
             effective_chars += sum(map(len, signature))
-            if len(accepted) >= 8 and effective_chars >= 2400:
-                return ContentAssessment(unique_units=len(accepted), effective_chars=effective_chars, output_limit=8, saturated=True)
+            saturation_chars = 2400 if max_output <= 8 else 0
+            if len(accepted) >= max_output and effective_chars >= saturation_chars:
+                return ContentAssessment(
+                    unique_units=len(accepted),
+                    effective_chars=effective_chars,
+                    output_limit=max_output,
+                    saturated=True,
+                )
     units = len(accepted)
-    length_limit = 1 if effective_chars < 100 else 3 if effective_chars < 800 else 5 if effective_chars < 2400 else 8
+    if max_output <= 8:
+        length_limit = 1 if effective_chars < 100 else 3 if effective_chars < 800 else 5 if effective_chars < 2400 else 8
+    else:
+        # Each distinct, non-trivial sentence can ground a question. Character
+        # volume is useful for summaries but must not collapse ten concise
+        # slide claims into only three expected questions.
+        length_limit = max_output
     return ContentAssessment(unique_units=units, effective_chars=effective_chars,
-                             output_limit=min(units, length_limit))
+                             output_limit=min(units, length_limit, max_output))
 
 
 def document_assessment(document) -> ContentAssessment:

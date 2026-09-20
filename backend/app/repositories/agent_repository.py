@@ -61,7 +61,7 @@ class InMemoryAgentRepository:
 
     async def permanently_delete(self, agent_id: UUID, owner_id: UUID) -> bool:
         stored = self._agents.get(agent_id)
-        if stored is None or stored[0] != owner_id or stored[1].deleted_at is None:
+        if stored is None or stored[0] != owner_id:
             return False
         for repository in self.related_repositories:
             await repository.remove_agent(agent_id, owner_id)
@@ -201,7 +201,6 @@ class PostgresAgentRepository:
                 delete(AgentTable).where(
                     AgentTable.agent_id == agent_id,
                     AgentTable.owner_id == owner_id,
-                    AgentTable.deleted_at.is_not(None),
                 )
             )
             await session.commit()

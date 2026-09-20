@@ -70,47 +70,15 @@ async def update_agent(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/trash", response_model=list[PersonaHistoryItem], summary="페르소나 휴지통 조회")
-async def list_trashed_agents(
-    service: PersonaService = Depends(get_persona_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> list[PersonaHistoryItem]:
-    return await service.list_trash(current_user.user_id)
-
-
-@router.post("/trash/{agent_id}/restore", response_model=PersonaHistoryItem, summary="페르소나 복원")
-async def restore_agent(
-    agent_id: UUID,
-    service: PersonaService = Depends(get_persona_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> PersonaHistoryItem:
-    try:
-        return await service.restore(agent_id, current_user.user_id)
-    except PersonaNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.delete("/trash/{agent_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="페르소나 완전 삭제")
-async def permanently_delete_agent(
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT,
+               summary="페르소나 영구 삭제")
+async def delete_agent(
     agent_id: UUID,
     service: PersonaService = Depends(get_persona_service),
     current_user: UserResponse = Depends(get_current_user),
 ) -> None:
     try:
         await service.permanently_delete(agent_id, current_user.user_id)
-    except PersonaNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.delete("/{agent_id}", response_model=PersonaHistoryItem, summary="페르소나를 휴지통으로 이동")
-async def move_agent_to_trash(
-    agent_id: UUID,
-    service: PersonaService = Depends(get_persona_service),
-    current_user: UserResponse = Depends(get_current_user),
-) -> PersonaHistoryItem:
-    try:
-        return await service.move_to_trash(agent_id, current_user.user_id)
     except PersonaNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

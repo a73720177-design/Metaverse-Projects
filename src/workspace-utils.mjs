@@ -50,6 +50,14 @@ export function documentDeletePrompt(filename) {
   return `정말 "${filename}" 을 삭제하시겠습니까?`
 }
 
+export function reviewableDocuments(documents, presentationDocumentIds, personaDocumentIds = []) {
+  const selected = new Set(presentationDocumentIds || [])
+  const personaSources = new Set(personaDocumentIds || [])
+  return (documents || []).filter((document) => selected.has(document.document_id) &&
+    !personaSources.has(document.document_id) &&
+    ((document.text_length || 0) > 0 || Boolean(document.full_text?.length)))
+}
+
 export function restorePracticeChats(session, history, activeConversationId = null) {
   return Object.fromEntries(session.response.results.map((result) => {
     const conversations = Object.fromEntries(result.questions.map((question) => {

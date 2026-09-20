@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager          #시작, 종료시 실행할 작업 정의
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -28,6 +29,7 @@ from app.integrations.llm.client import (
     LlmServiceConnectionError,
     LlmServiceResponseError,
 )
+from app.integrations.vision import OllamaVisionClient
 
 
 @asynccontextmanager
@@ -269,6 +271,19 @@ async def feature_health(
         except Exception:
             storage_operational = False
 
+    vision_mode = os.getenv("DOCUMENT_VISION_MODE", "off").strip().lower()
+    vision_status: dict[str, object] = {
+        "enabled": vision_mode in {"auto", "ollama"},
+        "operational": None,
+        "mode": vision_mode,
+        "model": os.getenv("VLM_MODEL", "qwen3-vl:4b-instruct").strip(),
+    }
+    if vision_status["enabled"]:
+        try:
+            vision_status.update(await asyncio.to_thread(OllamaVisionClient().diagnostics))
+        except (ValueError, OSError):
+            vision_status["operational"] = False
+
     llm_features = llm.get("features") if isinstance(llm.get("features"), dict) else {}
     features: dict[str, dict[str, object]] = {
         "vllm": {
@@ -282,6 +297,16 @@ async def feature_health(
         "embedding": {
             "label": "Ollama 임베딩",
             **(llm_features.get("ollama_embedding") or {"enabled": True, "operational": False}),
+        },
+        "vision": {
+            "label": "문서 이미지 VLM",
+            **vision_status,
+        },
+        "gpu_acceleration": {
+            "label": "모델 GPU 가속",
+            **(llm_features.get("gpu_acceleration") or {
+                "enabled": True, "operational": None, "mode": "unknown",
+            }),
         },
         "streaming": {
             "label": "스트리밍 채팅",
@@ -323,5 +348,6 @@ async def feature_health(
     return {
         "status": "degraded" if degraded else "ok",
         "active_llm_provider": llm.get("provider", "unknown"),
+        "models": llm.get("models", []),
         "features": features,
     }
