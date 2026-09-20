@@ -105,11 +105,10 @@ _HISTORY_START = "<conversation_history>"
 _HISTORY_END = "</conversation_history>"
 _MESSAGE_START = "<user_message>"
 _MESSAGE_END = "</user_message>"
-_RESERVED_PROMPT_TAG_RE = re.compile(
-    r"<\s*/?\s*(?:document_data|user_instructions|retrieved_context|"
-    r"conversation_history|user_message)\b[^>]*>",
-    re.IGNORECASE,
-)
+_RESERVED_PROMPT_TAGS = frozenset({
+    "document_data", "user_instructions", "retrieved_context",
+    "conversation_history", "user_message",
+})
 
 # 페르소나 특성(trait) 중 실제로 근거가 있다고 볼 수 있는 상태만 채팅/리뷰
 # 프롬프트에 노출한다. unknown/conflicting은 확신할 수 없는 값이라 모델에게
@@ -125,11 +124,43 @@ def truncate(text: str, max_chars: int) -> str:
 
 
 def escape_prompt_data(text: str) -> str:
-    """Neutralize exact, spaced and case-varied forms of reserved prompt tags."""
-    return _RESERVED_PROMPT_TAG_RE.sub(
-        lambda match: match.group(0).replace("<", "[").replace(">", "]"),
-        text,
-    )
+    """Neutralize reserved tags with a linear scanner, avoiding regex DoS."""
+    output: list[str] = []
+    index = 0
+    while index < len(text):
+        start = text.find("<", index)
+        if start < 0:
+            output.append(text[index:])
+            break
+        output.append(text[index:start])
+        end = text.find(">", start + 1)
+        nested = text.find("<", start + 1, end if end >= 0 else len(text))
+        if nested >= 0:
+            output.append("<")
+            index = start + 1
+            continue
+        if end < 0:
+            output.append(text[start:])
+            break
+        raw = text[start + 1:end]
+        candidate = raw.lstrip()
+        if candidate.startswith("/"):
+            candidate = candidate[1:].lstrip()
+        name_end = 0
+        while name_end < len(candidate) and (
+            candidate[name_end].isalnum() or candidate[name_end] == "_"
+        ):
+            name_end += 1
+        name = candidate[:name_end].lower()
+        boundary = candidate[name_end:name_end + 1]
+        if name in _RESERVED_PROMPT_TAGS and (
+            not boundary or boundary.isspace() or boundary == "/"
+        ):
+            output.extend(("[", raw, "]"))
+        else:
+            output.append(text[start:end + 1])
+        index = end + 1
+    return "".join(output)
 
 
 def _render_trait_values(traits: list[PersonaTrait]) -> str:

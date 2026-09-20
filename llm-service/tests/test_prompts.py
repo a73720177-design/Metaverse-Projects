@@ -433,6 +433,15 @@ def test_chat_history_and_current_message_neutralize_reserved_tags():
     assert prompt.count("<conversation_history>") == 1
 
 
+def test_prompt_tag_escaping_handles_long_spaced_input_without_regex_backtracking():
+    from app.prompts import escape_prompt_data
+
+    hostile = "<" + (" " * 200_000) + "/USER_MESSAGE   >끝"
+    escaped = escape_prompt_data(hostile)
+    assert escaped.startswith("[")
+    assert escaped.endswith("]끝")
+
+
 def test_build_chat_prompt_fills_all_placeholders():
     request = ChatGenerationRequest(persona=_persona(), message="매출은 얼마인가요?", document=_document())
     prompt = build_chat_prompt(request)
