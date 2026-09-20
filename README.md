@@ -215,4 +215,4 @@ python -m backend.scripts.setup_test_db
 
 ## PPTX/PDF 이미지 분석
 
-로컬 Qwen3-VL로 슬라이드의 그림·차트·도식을 읽어 기존 예상 질문과 피드백에 반영할 수 있습니다. LibreOffice와 VLM 설치 후 `backend/.env`에서 `DOCUMENT_VISION_MODE=ollama`로 활성화하세요. 기본값은 텍스트 파싱(`off`)입니다. [설치·모델 선정·제한 사항](docs/LOCAL_VISION.md)을 참고하세요.
+Qwen3-VL로 슬라이드의 그림·차트·도식을 읽어 기존 예상 질문과 피드백에 반영할 수 있습니다. LibreOffice와 VLM 설치 후 `backend/.env`에서 `DOCUMENT_VISION_MODE=ollama`로 활성화하세요. 개발 노트북처럼 VLM이 항상 켜져 있지 않은 환경은 `auto`로 설정하면 연결 가능할 때만 이미지 분석하고 나머지는 텍스트 파싱을 유지합니다. 같은 PC뿐 아니라 Docker의 `ollama`/`host.docker.internal` 또는 명시적으로 허용한 데스크톱 VLM도 연결할 수 있습니다. 원격 호스트는 반드시 `VLM_ALLOWED_HOSTS`에 정확히 등록하고, 인증 프록시 사용 시 `VLM_API_KEY`를 설정합니다. 기본값은 텍스트 파싱(`off`)입니다. [설치·모델 선정·제한 사항](docs/LOCAL_VISION.md)을 참고하세요.

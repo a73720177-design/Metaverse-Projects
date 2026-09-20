@@ -578,6 +578,12 @@ def test_feature_health_reports_safe_runtime_switches(monkeypatch) -> None:
     monkeypatch.setenv("RAG_MODE", "lexical")
     monkeypatch.setenv("OBJECT_STORAGE_MODE", "local")
     monkeypatch.setenv("PRACTICE_MAX_CONCURRENT_PERSONAS", "1")
+    monkeypatch.setenv("DOCUMENT_VISION_MODE", "ollama")
+    monkeypatch.setenv("VLM_MODEL", "qwen3-vl:4b-instruct")
+    monkeypatch.setattr(
+        "app.main.OllamaVisionClient.diagnostics",
+        lambda self: {"operational": True, "model": self.model},
+    )
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/diagnostics"
@@ -609,6 +615,13 @@ def test_feature_health_reports_safe_runtime_switches(monkeypatch) -> None:
         assert payload["features"]["vllm"]["operational"] is True
         assert payload["features"]["embedding"]["operational"] is False
         assert payload["features"]["gpu_acceleration"]["gpu_percent"] == 100.0
+        assert payload["features"]["vision"] == {
+            "label": "문서 이미지 VLM",
+            "enabled": True,
+            "operational": True,
+            "mode": "ollama",
+            "model": "qwen3-vl:4b-instruct",
+        }
         assert payload["models"][0]["id"] == "qwen3:4b"
         assert payload["models"][1]["available"] is False
         assert payload["features"]["vector_rag"]["enabled"] is False

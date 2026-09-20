@@ -29,14 +29,28 @@ class OllamaVisionClient:
     def __init__(self) -> None:
         self.url = os.getenv("VLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
         target = urlsplit(self.url)
-        # Dedicated adapter is deliberately local-only, including redirects/proxies.
-        if (target.scheme != "http" or target.hostname not in {"localhost", "127.0.0.1", "::1"}
+        allowed_hosts = {
+            item.strip().lower()
+            for item in os.getenv(
+                "VLM_ALLOWED_HOSTS",
+                "localhost,127.0.0.1,::1,ollama,host.docker.internal",
+            ).split(",")
+            if item.strip()
+        }
+        # Prevent SSRF: Docker/LAN VLM endpoints only work when their exact host
+        # is explicitly allowlisted. Redirects and environment proxies stay off.
+        if (target.scheme not in {"http", "https"}
+                or not target.hostname or target.hostname.lower() not in allowed_hosts
                 or target.username or target.password or target.query or target.fragment
                 or target.path not in {"", "/"}):
-            raise ValueError("VLM_BASE_URL은 로컬 Ollama의 http 루프백 주소여야 합니다.")
+            raise ValueError(
+                "VLM_BASE_URL 호스트는 VLM_ALLOWED_HOSTS에 명시적으로 등록해야 합니다."
+            )
         self.model = os.getenv("VLM_MODEL", "qwen3-vl:4b-instruct").strip()
         if not self.model or "cloud" in self.model.lower():
             raise ValueError("VLM_MODEL에는 클라우드 모델을 사용할 수 없습니다.")
+        api_key = os.getenv("VLM_API_KEY", "").strip()
+        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.num_gpu = int(os.getenv("OLLAMA_NUM_GPU", "-1"))
         self.keep_alive = _get_positive_int("VLM_KEEP_ALIVE_SECONDS", 300)
         self.unload_after_document = os.getenv("VLM_UNLOAD_AFTER_DOCUMENT", "true").strip().lower()
@@ -53,7 +67,7 @@ class OllamaVisionClient:
             if self._used and self.unload_after_document == "true":
                 try:
                     with httpx.Client(timeout=5, trust_env=False, follow_redirects=False) as client:
-                        response = client.post(self.url + "/api/generate", json={
+                        response = client.post(self.url + "/api/generate", headers=self.headers, json={
                             "model": self.model, "keep_alive": 0, "stream": False,
                         })
                         response.raise_for_status()
@@ -67,7 +81,7 @@ class OllamaVisionClient:
         self._used = True
         try:
             with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
-                response = client.post(self.url + "/api/chat", json={
+                response = client.post(self.url + "/api/chat", headers=self.headers, json={
                     "model": self.model,
                     "stream": False,
                     "keep_alive": self.keep_alive,
@@ -91,6 +105,25 @@ class OllamaVisionClient:
                 return content.strip()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise VisionUnavailableError(
-                f"{page}페이지 이미지 분석에 실패했습니다. 로컬 Ollama 실행 상태와 "
+                f"{page}페이지 이미지 분석에 실패했습니다. VLM Ollama 실행 상태와 "
                 "VLM_MODEL 설치 여부를 확인하세요. 문서는 저장되지 않았습니다."
             ) from exc
+
+    def diagnostics(self, timeout: float = 3) -> dict[str, object]:
+        """Return a secret-free reachability/model check for the status UI."""
+        try:
+            with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+                response = client.get(self.url + "/api/tags", headers=self.headers)
+                response.raise_for_status()
+                payload = response.json()
+            models = payload.get("models", []) if isinstance(payload, dict) else []
+            names = {
+                str(item.get("name") or item.get("model") or "").strip()
+                for item in models
+                if isinstance(item, dict)
+            }
+            aliases = {name.split(":", 1)[0] for name in names}
+            installed = self.model in names or (":" not in self.model and self.model in aliases)
+            return {"operational": installed, "model": self.model}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            return {"operational": False, "model": self.model}
