@@ -1,0 +1,49 @@
+services:
+  ollama:
+    gpus: all
+  vllm:
+    image: vllm/vllm-openai:v0.23.0
+    gpus: all
+    ipc: host
+    volumes:
+      - vllm_models:/root/.cache/huggingface
+    command:
+      - --model
+      - ${VLLM_SOURCE_MODEL:-RedHatAI/Qwen3.5-4B-quantized.w4a16}
+      - --served-model-name
+      - ${VLLM_MODEL:-qwen3:4b}
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8000'
+      - --generation-config
+      - vllm
+      - --reasoning-parser
+      - qwen3
+      - --language-model-only
+      - --max-model-len
+      - '4096'
+      - --gpu-memory-utilization
+      - '0.78'
+      - --max-num-seqs
+      - '2'
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)"]
+      start_period: 20m
+      interval: 10s
+      timeout: 8s
+      retries: 60
+  llm:
+    environment:
+      LLM_PROVIDER: vllm
+      VLLM_BASE_URL: http://vllm:8000
+      VLLM_MODEL: ${VLLM_MODEL:-qwen3:4b}
+      VLLM_GPU_ENABLED: 'true'
+    depends_on:
+      ollama:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+
+volumes:
+  vllm_models:

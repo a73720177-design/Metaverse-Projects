@@ -1,0 +1,84 @@
+Metaverse Local 설치 및 실행
+
+오류 확인
+- 설치가 중단되면 화면에 표시되는 로그 경로를 확인하세요.
+- 설치 로그: %LOCALAPPDATA%\MetaverseLocal\logs\setup-*.log
+- Docker 상세 로그: %LOCALAPPDATA%\MetaverseLocal\logs\docker-*.log
+- 실행 시 CMD 창에서 qwen3:4b 또는 qwen3.5:9b를 선택합니다. 최초 선택한 모델과 bge-m3 다운로드 때문에 네트워크 환경에 따라 오래 걸릴 수 있습니다. 진행 출력이 계속 갱신되면 정상 다운로드 중입니다.
+
+1. 새 Windows x64 PC에 Metaverse-Setup.exe 하나를 복사하고 실행합니다.
+   CMD 창에서 1(qwen3:4b, 권장), 2(qwen3.5:9b, 고품질), 3(두 모델 모두 다운로드)를 선택합니다.
+   3번은 두 모델을 모두 설치하고 qwen3:4b로 시작하며, 실행 화면에서 설치된 9B 모델로 변경할 수 있습니다.
+2. 최초 실행에는 인터넷이 필요합니다. Docker 설치, 앱 이미지 준비,
+   전용 DB 초기화와 migration 적용, 선택한 채팅 모델 및 bge-m3 모델 다운로드를 수행합니다.
+3. Docker 설치 전에 WSL 2와 Windows 가상 머신 플랫폼을 확인합니다.
+   필요한 경우 관리자 승인 후 wsl --install --no-distribution을 실행합니다.
+   Ubuntu 설치나 Linux 사용자 계정 생성은 필요하지 않습니다.
+   Docker/WSL 최초 설치 시 Windows 승인 또는 재부팅이 필요할 수 있습니다.
+   재부팅 후 같은 EXE를 다시 실행하면 이어서 준비합니다.
+   BIOS 가상화가 꺼진 PC는 BIOS에서 가상화를 켜야 합니다.
+   Docker Desktop 최초 약관 확인은 해당 화면에서 직접 진행합니다.
+4. 준비가 완료되면 브라우저가 열립니다. 회원가입 후 예시 PDF를 업로드합니다.
+5. 이후에는 바탕화면의 'Metaverse 실행'을 사용합니다.
+6. 종료할 때는 'Metaverse 서버 종료'를 실행합니다. 콘솔이나 브라우저만
+   닫으면 서버는 계속 실행됩니다. PC 재부팅 후에는 실행 바로가기를 누릅니다.
+
+저장 위치
+- 설치 파일 및 설정: %LOCALAPPDATA%\MetaverseLocal
+- 실행 로그: %LOCALAPPDATA%\MetaverseLocal\logs
+- 예시 PDF: %LOCALAPPDATA%\MetaverseLocal\examples
+- DB, 업로드, 모델: 이 앱 전용 Docker 볼륨
+- 화면 주소: 기본 http://127.0.0.1:18180 (충돌 시 18181~18199 중 선택)
+- 외부 PC에 DB/AI/API 포트를 공개하지 않습니다.
+
+데이터와 재실행
+- 다른 PC의 계정, 대화, 업로드, .env와 비밀번호는 포함하지 않았습니다.
+- 새 PC에서 생성한 계정과 문서는 서버 종료 후에도 보존됩니다.
+- config.json, compose.env는 자동 생성한 DB 암호와 인증 키를 포함합니다.
+  공유하거나 지우지 마세요. Docker 볼륨을 삭제하면 저장 데이터가 사라집니다.
+- 다운로드/설치 실패 시 로그의 원인을 해결하고 EXE를 다시 실행합니다.
+- 재부팅 대기(종료 코드 3010)와 실제 실패(종료 코드 1)를 구분합니다.
+  재부팅 안내가 나오면 종료 후 전원 켜기 대신 Windows의 '다시 시작'을 선택합니다.
+  WSL 준비와 Docker 설치 각각에서 재부팅이 필요할 수 있습니다.
+  동일한 부팅 상태에서는 설치를 반복하지 않고, 재부팅 후 상태를 다시 확인합니다.
+- 설치 실패, 관리자 승인 취소, Docker 시작 시간 초과는 재부팅으로 처리하지 않습니다.
+  실패 단계와 로그 경로를 확인하세요. WSL 상세 로그는 logs\wsl-*.log입니다.
+- 5단계 모델 다운로드는 실패 시 최대 3회 재시도합니다.
+  6단계 앱 시작은 최대 10분, 각 AI 실제 응답 검사는 최대 30분 기다립니다.
+  AI 검사 중 30초마다 대기 상태를 표시하며 생성/임베딩을 각각 확인합니다.
+  오류가 지속되면 logs\setup-*.log와 logs\services-*.log를 확인하세요.
+  서비스 로그에는 앱의 최근 실행 내용이 포함될 수 있어 공유 전 확인하세요.
+  이 단계의 실패는 Windows 재부팅 요청으로 처리하지 않습니다.
+- WSL 설치로 BIOS/UEFI의 Intel VT-x 또는 AMD SVM 설정까지 켤 수는 없습니다.
+  BIOS 가상화가 꺼져 있다면 PC 제조사 안내에 따라 직접 활성화해야 합니다.
+- 최초 준비를 완료한 뒤에는 로컬 AI 처리를 위해 외부 AI API가 필요하지 않습니다.
+
+성능 및 설치 범위
+- 최초 설치 때 NVIDIA GPU가 감지되면 vLLM GPU 생성 서버와 2개 병렬 처리를 기본으로 활성화합니다.
+- qwen3.5:9b는 4B보다 다운로드 용량, 메모리 사용량, 응답 시간이 큽니다. RAM 여유가 부족한 PC에서는 qwen3:4b를 선택하세요.
+- 생성 요청과 페르소나 예상 질문은 기본 2개까지 병렬 처리합니다.
+- 여유 저장 공간 20GB 이상과 RAM 16GB 이상을 준비 기준으로 권장하지만,
+  실제 최소 사양 및 GPU 성능을 검증한 제품판은 아닙니다.
+- NVIDIA GPU 신규 설치는 설치 폴더에 gpu.enabled를 자동 생성하고
+  vLLM GPU 생성 서버와 병렬 처리를 기본으로 사용합니다.
+  최초 실행 시 vLLM 이미지와 GPU용 양자화 모델을 추가로 다운로드합니다. 오류가 발생하면
+  gpu.enabled 파일을 제거하고 다시 실행해 CPU 모드로 돌아갈 수 있습니다.
+- EXE에는 앱 코드와 화면, 설치 스크립트, 예시 PDF가 들어 있습니다.
+  Docker 이미지와 AI 모델은 최초 실행 시 내려받는 온라인 설치 방식입니다.
+- 코드 서명 인증서는 적용하지 않았습니다. Windows가 알 수 없는 게시자로
+  표시할 수 있습니다. 함께 제공한 SHA256.txt로 파일 동일성을 확인할 수 있습니다.
+
+개발 및 검증
+- 기준 브랜치: fix/korean-only-llm-output-20260919
+- 기준 커밋: 34aba2d8730b20050f9b9bfe6db8f1559b9db069
+- 2026-09-19 현재 작업 트리의 Backend, LLM, Frontend 변경사항을 포함합니다.
+- 저장 기록 화면은 자료 리뷰와 대화 이력만 제공합니다. 질문자와 대화 삭제는 확인 후 영구 삭제되며 복구할 수 없습니다.
+- build 폴더에는 설치 패키지 소스가 있습니다. 새 PC에 복사할 필요는 없습니다.
+- 읽기 전용 패키지 검사: Metaverse-Setup.exe --check
+- 창/브라우저 없는 자동 실행 검사: Metaverse-Setup.exe --no-browser
+- 서버 종료: Metaverse-Setup.exe --stop
+- 검증 범위와 결과는 검증결과.txt에 기록합니다.
+
+공식 설치 안내
+https://docs.docker.com/desktop/setup/install/windows-install/
+https://docs.ollama.com/docker

@@ -1,32 +1,8 @@
-# Python
+.env
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Node / Vite
-node_modules/
-dist/
-
-# Virtual environments and local configuration
-.venv/
-venv/
-.env
-.env.*
-!.env.example
-!.env.test.example
-
-# Runtime data
-.runtime-logs/
-backend/uploads/*
-!backend/uploads/.gitkeep
-*.db
-*.sqlite
-*.sqlite3
-
-# IDE and OS
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
+.demo_artifact_build/
+backup-*/
+build/check-output/
+build/*.zip
+build/sample-*.png

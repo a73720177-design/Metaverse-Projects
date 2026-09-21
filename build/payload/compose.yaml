@@ -1,0 +1,109 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.2-pg16-bookworm@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+    environment:
+      POSTGRES_DB: metaverse_local
+      POSTGRES_USER: metaverse
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Missing DB_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U metaverse -d metaverse_local"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  ollama:
+    image: ollama/ollama@sha256:684d8674b4315fa18f4f0e973a118ec2652ed96f67563277839985175858e0ba
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: 2m
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+    volumes:
+      - models:/root/.ollama
+    healthcheck:
+      test: [CMD, ollama, list]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+  llm:
+    build: ./llm-service
+    environment:
+      LLM_PROVIDER: ollama
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:4b}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:4b}
+      OLLAMA_REVIEW_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:4b}
+      OLLAMA_QUESTION_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:4b}
+      OLLAMA_SUMMARY_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:4b}
+      OLLAMA_EMBEDDING_MODEL: bge-m3
+      OLLAMA_TIMEOUT: '2000'
+      LLM_MAX_CONCURRENT_GENERATIONS: ${LLM_MAX_CONCURRENT_GENERATIONS:-1}
+      LLM_MAX_MODEL_LEN: '4096'
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      start_period: 60s
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health', timeout=5)"]
+      interval: 5s
+      timeout: 8s
+      retries: 30
+  backend:
+    build: ./backend
+    environment:
+      REPOSITORY_MODE: postgres
+      DATABASE_URL: postgresql+asyncpg://metaverse:${DB_PASSWORD}@db:5432/metaverse_local
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Missing JWT_SECRET_KEY}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: '480'
+      OBJECT_STORAGE_MODE: local
+      LOCAL_STORAGE_DIR: /data/uploads
+      DB_AUTO_CREATE: 'false'
+      RAG_MODE: vector
+      OLLAMA_EMBEDDING_URL: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: bge-m3
+      EMBEDDING_TIMEOUT_SECONDS: '180'
+      DOCUMENT_VISION_MODE: auto
+      VLM_BASE_URL: http://ollama:11434
+      VLM_MODEL: qwen3-vl:4b-instruct
+      VLM_ALLOWED_HOSTS: ollama
+      VLM_MAX_PAGES: '40'
+      VLM_IMAGE_MAX_EDGE: '1600'
+      VLM_PAGE_TIMEOUT_SECONDS: '120'
+      VLM_DOCUMENT_TIMEOUT_SECONDS: '600'
+      VLM_KEEP_ALIVE_SECONDS: '300'
+      VLM_UNLOAD_AFTER_DOCUMENT: 'true'
+      LLM_SERVICE_URL: http://llm:8001
+      LLM_API_PREFIX: /api/v1
+      LLM_SERVICE_TIMEOUT: '2000'
+      PRACTICE_MAX_CONCURRENT_PERSONAS: ${PRACTICE_MAX_CONCURRENT_PERSONAS:-1}
+      FRONTEND_ORIGINS: http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT}
+      FRONTEND_ORIGIN_REGEX: ''
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
+    healthcheck:
+      start_period: 60s
+      test: [CMD, python, -c, "import json,urllib.request; d=json.load(urllib.request.urlopen('http://localhost:8000/health/services', timeout=8)); assert d['status']=='ok'"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+  web:
+    build: ./web
+    ports:
+      - 127.0.0.1:${WEB_PORT}:80
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  database:
+  models:
+  uploads:

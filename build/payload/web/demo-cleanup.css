@@ -1,0 +1,17 @@
+/* 실제 시연에서는 내부 검증·개발 상태를 노출하지 않는다. */
+.persona-entry > .grounding-note {
+  display: none;
+}
+
+/* 헤더 바로 뒤의 분석 범위는 유지하고, 뒤의 검증 경고와 평가 근거만 숨긴다. */
+.chat-panel > .grounding-note,
+.chat-panel > header ~ p:not([class]),
+.chat-panel .message > .grounding-note,
+.chat-panel .message > small,
+.chat-panel .message > .timing {
+  display: none;
+}
+
+.chat-panel > header + .grounding-note {
+  display: block;
+}
