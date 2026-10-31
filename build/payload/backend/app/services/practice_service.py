@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from uuid import UUID
 from app.models.coverage import Coverage
 from app.services.content_budget import assess_content
@@ -128,6 +129,7 @@ class PracticeService:
         document_repository: DocumentRepository,
         max_concurrent_personas: int = 1,
         session_repository=None,
+        filter_observer: Callable[[dict], None] | None = None,
     ) -> None:
         if max_concurrent_personas < 1:
             raise ValueError("max_concurrent_personas must be at least 1")
@@ -136,6 +138,9 @@ class PracticeService:
         self.document_repository = document_repository
         self.max_concurrent_personas = max_concurrent_personas
         self.session_repository = session_repository or InMemoryPracticeRepository()
+        # Measurement hook (scripts/measure_practice_filter.py). Receives one
+        # event per model candidate with the first filter rule it failed.
+        self.filter_observer = filter_observer
 
     async def generate_expected_questions(
         self, request: ExpectedQuestionRequest, owner_id: UUID
@@ -286,32 +291,46 @@ class PracticeService:
             count = min(requested_count, assessment.output_limit)
             if count < requested_count:
                 warnings.append(f"중복을 제외한 발표 근거의 내용량에 따라 질문 상한을 {requested_count}개에서 {count}개로 조정했습니다.")
-            def accept(text, ids, focus, origin):
+            def accept(text, ids, focus, origin) -> str | None:
+                """Return None when accepted, else the first rule the candidate failed."""
                 question = _usable_question(text)
-                if not question or len(question) > 500 or not ids or any(key not in evidence for key in ids):
-                    return False
+                if not question or len(question) > 500:
+                    return "format"
+                if not ids or any(key not in evidence for key in ids):
+                    return "evidence_id"
                 sections = [evidence[key] for key in dict.fromkeys(ids)]
                 body = "\n".join(section.text.split("\n", 1)[-1] for section in sections)
                 filenames = [section.source_filename or synthetic.filename for section in sections]
                 if not _specific_evidence_terms(question, body, filenames) and not _QUANTITY.search(question):
-                    return False
+                    return "specific_terms"
                 normalized = question
                 for p in personas:
                     normalized = normalized.replace(p.name, "")
                 if not _supported_quantities(question, body):
-                    return False
+                    return "quantity"
                 # Questions from one presentation naturally share core terms.
                 # A higher threshold removes near-copies without discarding
                 # distinct concerns that use the same source-specific anchor.
                 if _too_similar(normalized, accepted_for_persona, threshold=0.82):
-                    return False
+                    return "duplicate"
                 sources = [ReviewSource(document_id=section.source_document_id,
                     filename=section.source_filename or synthetic.filename,
                     page=section.index if section.source_document_type in {"pdf", "pptx"} else None,
                     excerpt=section.text.split("\n", 1)[-1][:500]) for section in sections]
                 questions.append(ExpectedQuestion(question=question, sources=sources, focus=focus[:150], origin=origin))
                 accepted_for_persona.append(normalized)
-                return True
+                return None
+
+            def observe(attempt, candidate, reason):
+                if self.filter_observer is None:
+                    return
+                fields = candidate if isinstance(candidate, dict) else {}
+                self.filter_observer({
+                    "persona_id": str(persona.agent_id), "persona_name": persona.name,
+                    "attempt": attempt, "requested_count": count, "reason": reason,
+                    "question": fields.get("question") if isinstance(fields.get("question"), str) else repr(candidate)[:500],
+                    "evidence_ids": fields.get("presentation_evidence_ids"),
+                })
 
             # Bounded batches let the model replace rejected candidates without
             # consuming the context budget with an ever-larger output request.
@@ -336,16 +355,24 @@ class PracticeService:
                 except ReviewGeneratorError as exc:
                     logger.warning("Question generation failed: %s", exc)
                     generation_error = str(exc)
+                    observe(attempt, None, "generation_error")
                     continue
-                for candidate in generated.get("questions", []):
+                candidates = generated.get("questions", [])
+                for position, candidate in enumerate(candidates):
+                    reason = "malformed"
                     if isinstance(candidate, dict):
                         ids = candidate.get("presentation_evidence_ids", [])
                         focus = candidate.get("focus", "")
                         if isinstance(ids, list) and all(isinstance(key, str) for key in ids) and isinstance(focus, str):
                             candidate_text = candidate.get("question")
-                            if not accept(candidate_text, ids, focus, "model") and isinstance(candidate_text, str):
+                            reason = accept(candidate_text, ids, focus, "model")
+                            if reason and isinstance(candidate_text, str):
                                 rejected_questions.append(candidate_text.strip()[:500])
+                    observe(attempt, candidate, reason)
                     if len(questions) == count:
+                        # Candidates left in this batch are never evaluated.
+                        for surplus in candidates[position + 1:]:
+                            observe(attempt, surplus, "surplus")
                         break
                 if len(questions) == count:
                     break
