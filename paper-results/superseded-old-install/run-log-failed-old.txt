@@ -1,0 +1,96 @@
+##### 2026-10-31 12:32:49 예열: --model qwen3:4b --repeats 1 --out /tmp/warmup
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/app/scripts/measure_practice_filter.py", line 172, in <module>
+    main()
+    ~~~~^^
+  File "/app/scripts/measure_practice_filter.py", line 157, in main
+    events = asyncio.run(run(args.session_id, args.repeats, args.model))
+  File "/usr/local/lib/python3.14/asyncio/runners.py", line 205, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/local/lib/python3.14/asyncio/runners.py", line 128, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/local/lib/python3.14/asyncio/base_events.py", line 720, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/app/scripts/measure_practice_filter.py", line 45, in run
+    from app.dependencies import get_practice_service
+  File "/app/app/dependencies.py", line 41, in <module>
+    from app.services.practice_service import PracticeService
+  File "/app/app/services/practice_service.py", line 8, in <module>
+    from app.services.source_evidence import select_excerpts
+ModuleNotFoundError: No module named 'app.services.source_evidence'
+[exit=1 wall=2s]
+##### 2026-10-31 12:32:51 4B 본측정: --model qwen3:4b --repeats 3 --out /tmp/practice-filter-4b
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/app/scripts/measure_practice_filter.py", line 172, in <module>
+    main()
+    ~~~~^^
+  File "/app/scripts/measure_practice_filter.py", line 157, in main
+    events = asyncio.run(run(args.session_id, args.repeats, args.model))
+  File "/usr/local/lib/python3.14/asyncio/runners.py", line 205, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/local/lib/python3.14/asyncio/runners.py", line 128, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/local/lib/python3.14/asyncio/base_events.py", line 720, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/app/scripts/measure_practice_filter.py", line 45, in run
+    from app.dependencies import get_practice_service
+  File "/app/app/dependencies.py", line 41, in <module>
+    from app.services.practice_service import PracticeService
+  File "/app/app/services/practice_service.py", line 8, in <module>
+    from app.services.source_evidence import select_excerpts
+ModuleNotFoundError: No module named 'app.services.source_evidence'
+##### 2026-10-31 12:34:21 측정 중 nvidia-smi
+Sat Oct 31 12:34:21 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.60                 KMD Version: 610.60        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4070      WDDM  |   00000000:01:00.0  On |                  N/A |
+|  0%   44C    P5             28W /  200W |    1315MiB /  12282MiB |      2%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            4728    C+G   ...iles\Riot Vanguard\vgtray.exe      N/A      |
+|    0   N/A  N/A            7664    C+G   ....0.4283.62\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A            9524    C+G   ...\Console\Dell.UCA.Systray.exe      N/A      |
+|    0   N/A  N/A           10684    C+G   C:\Windows\explorer.exe               N/A      |
+|    0   N/A  N/A           11328    C+G   ...indows\System32\ShellHost.exe      N/A      |
+|    0   N/A  N/A           18440    C+G   ...yb3d8bbwe\WindowsTerminal.exe      N/A      |
+|    0   N/A  N/A           18960    C+G   ...2p2nqsd0c76g0\app\ChatGPT.exe      N/A      |
+|    0   N/A  N/A           19180    C+G   ...8bbwe\PhoneExperienceHost.exe      N/A      |
+|    0   N/A  N/A           21764    C+G   ...2p2nqsd0c76g0\app\ChatGPT.exe      N/A      |
+|    0   N/A  N/A           21772    C+G   ...\codex-computer-use-swift.exe      N/A      |
+|    0   N/A  N/A           22924    C+G   ...5n1h2txyewy\TextInputHost.exe      N/A      |
+|    0   N/A  N/A           23768    C+G   ...p\frontend\Docker Desktop.exe      N/A      |
+|    0   N/A  N/A           28752    C+G   ...xyewy\ShellExperienceHost.exe      N/A      |
+|    0   N/A  N/A           30268    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
+|    0   N/A  N/A           30716    C+G   ...erControlCenter_v2\Killer.exe      N/A      |
+|    0   N/A  N/A           32176    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           34248    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           34840    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
+|    0   N/A  N/A           34884    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           36644    C+G   ...n1h2txyewy\CHXSmartScreen.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+##### 측정 중 ollama ps
+NAME        ID              SIZE      PROCESSOR    CONTEXT    UNTIL               
+qwen3:4b    359d7dd4bcda    3.2 GB    100% CPU     4096       25 minutes from now    
+[exit=1 wall=90s]
+##### 2026-10-31 12:34:21 완료
