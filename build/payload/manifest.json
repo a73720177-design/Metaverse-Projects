@@ -5,23 +5,23 @@
     "commit":  "34aba2d8730b20050f9b9bfe6db8f1559b9db069",
     "files":  [
                   {
-                      "sha256":  "C94BB7257E6F2E1938F50C0FE8D202BB8C07FD5C871B32F540C88F88C29D7286",
+                      "sha256":  "61DE730EAC3E40094046E73EF9A9AC1DDE0F2C813AC70FE9D4E4A0E893A8FC83",
                       "path":  "compose.gpu.yaml"
                   },
                   {
-                      "sha256":  "040176BC5DACF2A456E355C3B2B87C99AEE9D2E227B055D44C129367F062B565",
+                      "sha256":  "00E2242CDE2754AFCDBE72E6359F92813280679587B4A386EC7D1384F8DA6456",
                       "path":  "compose.yaml"
                   },
                   {
-                      "sha256":  "1B694C8439C66F030D53371F26873B8A7166327C6C0CD958E6A29C4491C19036",
+                      "sha256":  "50A6EAC240472A1FED48BD1AA0FBDB3A99AC225EFCD43803FE38047A7C239F32",
                       "path":  "prepare-wsl.ps1"
                   },
                   {
-                      "sha256":  "EE9771F57381D70E7B5CAE3E67326BF7744FF560BB986CB4F444F0707AE0CCA1",
+                      "sha256":  "E9E1437042B96F8D1EECAEBFAFE9B81AA8FDF7DE0F7A941CB036D5E0BA6A0FF0",
                       "path":  "setup.ps1"
                   },
                   {
-                      "sha256":  "C9A11BBC4BE2078C61DEBD502A109745E5B21560BFD8CA2631C1C01D0212F377",
+                      "sha256":  "BBB781BA4B1BA079568A9BF193DD843417B424B5946E4FBB475306BCF52410E5",
                       "path":  "backend/Dockerfile"
                   },
                   {
@@ -45,7 +45,7 @@
                       "path":  "backend/app/error_handlers.py"
                   },
                   {
-                      "sha256":  "92957743DB5368E9987F450782D9B7040F89DFE7AB5CF996350DD146704954E1",
+                      "sha256":  "EEF153DA204DBC4E7B54F66949FF9063563F7E2942835450FBFEEA64694EB284",
                       "path":  "backend/app/main.py"
                   },
                   {
@@ -53,7 +53,7 @@
                       "path":  "backend/app/__init__.py"
                   },
                   {
-                      "sha256":  "8D353A59828F648C687A129200D6FE29981F604D72B733DB4388FC56A9A5A55A",
+                      "sha256":  "B34449710666DD11B5295B83AE1244FD3AA3C6EFA890ACBB0220C972586FB6A6",
                       "path":  "backend/app/controllers/agent_controller.py"
                   },
                   {
@@ -61,7 +61,7 @@
                       "path":  "backend/app/controllers/auth_controller.py"
                   },
                   {
-                      "sha256":  "1497246132C813474DF95D9CB0A1BD428B0E785900D0BDC43463A016A8CCACB2",
+                      "sha256":  "3D42F16FE7410E54E627FB7910FF5CCAE6046122DF41546A7A81CCB289F41C6E",
                       "path":  "backend/app/controllers/chat_controller.py"
                   },
                   {
@@ -89,7 +89,7 @@
                       "path":  "backend/app/db/tables.py"
                   },
                   {
-                      "sha256":  "CD34C13CB51CC99FFEB291F623F4597261F81306351F5C9D0DDB6237C1AAFEB5",
+                      "sha256":  "2F635CAA591DB35690D9BF9C19FC5776033E069743676FA437AE8582493AE6C6",
                       "path":  "backend/app/integrations/vision.py"
                   },
                   {
@@ -105,7 +105,7 @@
                       "path":  "backend/app/integrations/llm/contracts.py"
                   },
                   {
-                      "sha256":  "09061CCD101712EDE91D9257359EA2FB4BC0463E74AECC2C51F61C4E723C2B10",
+                      "sha256":  "A6336395BB7C75191D82BCD8AA4B1E528A93D49774D1987DE86AF9EDC28DCFE1",
                       "path":  "backend/app/integrations/llm/generators.py"
                   },
                   {
@@ -113,7 +113,7 @@
                       "path":  "backend/app/integrations/llm/response_sanitizer.py"
                   },
                   {
-                      "sha256":  "77A5354BA78A92C97EFF6E3C64AC28B9F0318820950570B785CFB4C4D7DC5FCC",
+                      "sha256":  "D065C38503EDB685A4FA3AFA55D754B23B8D48B42F862B180C557FEEC9161239",
                       "path":  "backend/app/integrations/llm/stream_sanitizer.py"
                   },
                   {
@@ -125,7 +125,7 @@
                       "path":  "backend/app/models/chat.py"
                   },
                   {
-                      "sha256":  "14FB161CF3BA5085EB218D7C539708DD1E2CA6B5495539413FA2472D63251B00",
+                      "sha256":  "C8566E5D21D020FB907BC6478A9ACDEA34F82394CB413156DA7CAC6229D6C22F",
                       "path":  "backend/app/models/content_assessment.py"
                   },
                   {
@@ -141,11 +141,11 @@
                       "path":  "backend/app/models/error.py"
                   },
                   {
-                      "sha256":  "450473E672A48B1FF7E973AE3D47FD2BCBBA18FF1B3A4DCC9F284232D2E8EB3B",
+                      "sha256":  "7132CC912407C5762BBFCD5257E0D69C6B0E2492F5257A5CCFC17C1CA8BE8341",
                       "path":  "backend/app/models/llm.py"
                   },
                   {
-                      "sha256":  "CCB4532A8F788B89FF0CE3DEF2A216DA19E775071609AB4A768B660277689815",
+                      "sha256":  "94699ECD63FEB346C6595AC36E4A1766746500CBC99E113983CD247AF83FD1B6",
                       "path":  "backend/app/models/persona.py"
                   },
                   {
@@ -193,11 +193,11 @@
                       "path":  "backend/app/parsers/__init__.py"
                   },
                   {
-                      "sha256":  "0D59ED880FE43E22E9CD3E0574B54923C87C55588103D52C2F6EDF21C0A9A6C4",
+                      "sha256":  "78810AE8ABE0314CDD54BA9CF0CF76CD0B0D993B39C6409E71FB74FF2EDD942D",
                       "path":  "backend/app/repositories/agent_repository.py"
                   },
                   {
-                      "sha256":  "7A9C49072183A19D396830266C204E73678C87B9522D8A331C01C84CC00CDBB0",
+                      "sha256":  "0C00E0D6DB9C3A93FB0422F3F35F2DFAE6E3277B700785434BA655F50EB2B456",
                       "path":  "backend/app/repositories/chat_repository.py"
                   },
                   {
@@ -229,15 +229,15 @@
                       "path":  "backend/app/services/auth_service.py"
                   },
                   {
-                      "sha256":  "AE3BB5B7659C8D96C7566329B5D422DA2A163F71CF4FE33AFBA16EEB3295D8D6",
+                      "sha256":  "87098750A9F6547F54751495A954AFE211823BF10A99B138A58A819324D50343",
                       "path":  "backend/app/services/chat_service.py"
                   },
                   {
-                      "sha256":  "EEE4F724806D49CE017CBCCF3BE5BF69C27D5E9421691F8EE1B49B77D3E6B52E",
+                      "sha256":  "FCC342D4234DE79CC098B5B89D31D978F6B0037D9FC01C0E6CFE2A9A36211916",
                       "path":  "backend/app/services/content_budget.py"
                   },
                   {
-                      "sha256":  "FC53EFC82F528F961AADF223557843B35D0DBE326325DE95CA59811A9DE50226",
+                      "sha256":  "9EE20679099AF99068DE195083846935EE35CADCC8DF47F661429375AF88F91A",
                       "path":  "backend/app/services/document_service.py"
                   },
                   {
@@ -249,15 +249,15 @@
                       "path":  "backend/app/services/login_rate_limiter.py"
                   },
                   {
-                      "sha256":  "9610F1198ADC308DD580B3AECE5D53F7D8E03302DD966DB53F7005352E941742",
+                      "sha256":  "EE4B8A39C9A332B01329630214D13B129026132B7B53B5FC75F1E941BAD94B68",
                       "path":  "backend/app/services/parser_process.py"
                   },
                   {
-                      "sha256":  "1D988124E65BFD5C62BFE7CE0D4A0B0D5DCC372AD449CB0D6654B4B15DCB8123",
+                      "sha256":  "B1C2CF611390A75A29915D5191B5F61D3BF9BE7B1CB06EF06A6438079E9CECEF",
                       "path":  "backend/app/services/persona_service.py"
                   },
                   {
-                      "sha256":  "EF76B80CCF47B758C32AD10EEDF951DC055F78F384DED179B4EB499560D2C4C2",
+                      "sha256":  "07ED7BC607B52B549112345B76C21431D4213C11EC71A7A8E744293B3BF4ACC5",
                       "path":  "backend/app/services/practice_service.py"
                   },
                   {
@@ -397,11 +397,11 @@
                       "path":  "examples/sample-presentation.pdf"
                   },
                   {
-                      "sha256":  "9C96122CA93604BE55AA3DD66A4EAFA7C5DA964F725F0F1D11107BB5D644C6FE",
+                      "sha256":  "E90DCAF50A1BB83B808B90A2D91AA4DF73226B6205B81425D82989D4C4E3E013",
                       "path":  "llm-service/Dockerfile"
                   },
                   {
-                      "sha256":  "4D32843E2E089E5EE597A8F4576D2C320A6F65277EC29EA9A7B386C151EF7935",
+                      "sha256":  "36889722F8B838101C0CEC2E572A2F44D3C315C0441665E9C4B723FFD540F517",
                       "path":  "llm-service/requirements.lock"
                   },
                   {
@@ -409,19 +409,19 @@
                       "path":  "llm-service/requirements.txt"
                   },
                   {
-                      "sha256":  "D12C18D38FCFA511DBFC9399E76CB195F8E2FFA848493FBF5171D3AC26794855",
+                      "sha256":  "33C31D16DF68763B169697039E1867FA66744671B5D5676FFB2CCDF0BEEE0036",
                       "path":  "llm-service/app/context_budget.py"
                   },
                   {
-                      "sha256":  "77D22EACCC0659CA193F029690757D2A47D23263B559841E860ADACFC4D5AA97",
+                      "sha256":  "0B31751B37E240125E12D6007AC690369F46F71B67DDB9808E56FF4FE511F8C5",
                       "path":  "llm-service/app/installer_check.py"
                   },
                   {
-                      "sha256":  "78C9D429798CADC622942BC782A94F138173C64B884327B5F78660E9D17E268E",
+                      "sha256":  "870AD49FD2DB271258931432B2989E19ABD3E06EBBCA7FDFE0225BDC57CE5AB6",
                       "path":  "llm-service/app/llm_client.py"
                   },
                   {
-                      "sha256":  "3E6B2FB7A3327D78BA28EA50EE82353F241790DDD1848B576AC860F15E05849D",
+                      "sha256":  "9C3E6EFEB51A36752317DD6BD51DE3E525057B2F11F780BAE1A6467ADED768DE",
                       "path":  "llm-service/app/main.py"
                   },
                   {
@@ -429,7 +429,7 @@
                       "path":  "llm-service/app/pipeline_budget.py"
                   },
                   {
-                      "sha256":  "19CEC9192351BC51D2443FF237ECCCFE37043062D3E3C4C5D2B545C39CF4A8B2",
+                      "sha256":  "330BC078DB99EC61D51EFA626934D0BF4E02AA078BFBDB670E4E30AA238774D1",
                       "path":  "llm-service/app/prompts.py"
                   },
                   {
@@ -437,7 +437,7 @@
                       "path":  "llm-service/app/response_sanitizer.py"
                   },
                   {
-                      "sha256":  "658350E9FB95F16DF10B1B2CF4848C4EDE72FD487C1230D506251684427136B1",
+                      "sha256":  "1AC47F88898C0255ED9DC480E3367B18173B7E4F58FFA4F3A9078BB97DFA04EE",
                       "path":  "llm-service/app/review_pipeline.py"
                   },
                   {
@@ -445,11 +445,11 @@
                       "path":  "llm-service/app/routing.py"
                   },
                   {
-                      "sha256":  "5A726C1C8DDF1C12CF14199577148B14C56C266E410FB0DF8E974116D17DEA5F",
+                      "sha256":  "B82ABCB4DA52F6E2BABEBAE3957333AA30870C169C5676FDDDCFD1B9F01F00D5",
                       "path":  "llm-service/app/schemas_v1.py"
                   },
                   {
-                      "sha256":  "B865518DDB036A5F55C172C88B2F67B87A3E2CEF45213CF4D8DD94DE341DEB6D",
+                      "sha256":  "7BCD9D0361B9A89028D2961E8F3B16FF78A69BB5DA6EA0333D7403A0334CC9B8",
                       "path":  "llm-service/app/summary_pipeline.py"
                   },
                   {
@@ -465,55 +465,55 @@
                       "path":  "llm-service/scripts/serve_vllm.py"
                   },
                   {
-                      "sha256":  "CE4815CF6B9BC73728E9D06FC37D396EE3152C7AE25D2668A4620ED143F4826D",
+                      "sha256":  "2D86C63DFEA0BB61BD0ABFAAC298820B3EA8EB0A1187D5C75C9204D53C9CB713",
                       "path":  "web/demo-cleanup.css"
                   },
                   {
-                      "sha256":  "FEC0B6BEAEFBAD3DF25912ACA98799A7A3E25E7C167642B28CB61DB875152AF2",
+                      "sha256":  "B16F847AF0E9312CA1075098E61835825C76D157355859E73730020BAEB9ACC0",
                       "path":  "web/Dockerfile"
                   },
                   {
-                      "sha256":  "73AF0C8C4E93C8D447B64F68FF8E888B513CD1A5758C359E95189CABED3C9890",
+                      "sha256":  "947FEFFD00A2F0B86857D0C0C6F982F2855C667A9F8A40907CF6AA9187C4A113",
                       "path":  "web/index.html"
                   },
                   {
-                      "sha256":  "941DB0141032DEAD6D1C9D69706A1E947D36AC741015CBB72ECF91A5791D0C20",
+                      "sha256":  "40B5A2FB06B51385B98E2A7B939A23EABCB34F2A8C7B6AA510BE5AC6CD8C7F43",
                       "path":  "web/nginx.conf"
                   },
                   {
-                      "sha256":  "6F54E038B3DBF41006057DD0236AF0917BD7B07B886BE5245B7056D417CC40C6",
+                      "sha256":  "6A538DE16FEB169252F146A56795C5B88120E5C4F66E564E2231B00C067DD1F5",
+                      "path":  "web/assets/index-6a538de16f.js"
+                  },
+                  {
+                      "sha256":  "9E86ABC281E1695EC9D26D4FFEF48FA98955B3724D2013E5CE5EEA1E8D9D8881",
                       "path":  "web/assets/index-Bbpg5yfT.css"
                   },
                   {
-                      "sha256":  "49FA0307DC8054E87B1640E0898E36EA00F30DE33BA5E1BC8C7FDEEEABE5D1E7",
+                      "sha256":  "8600C182F98529F4F06E03A97FD4FAF296E97591548F4CD83CBB9809342A8D18",
                       "path":  "web/assets/index-Bgsp5Mm_.css"
                   },
                   {
-                      "sha256":  "C6AF142202F1E92BF955A002337F51685909C96345A7C63DE5BF3B5A02DDA833",
+                      "sha256":  "AF02FD6E242CCB18AE29D6EF60ACDAABC38C2C6D41007D02F11AE078523CF748",
                       "path":  "web/assets/index-BikWEYoY.css"
                   },
                   {
-                      "sha256":  "28F226E3E9F46C2C5F0440692AE6D1A124FF6D23E669F7AFB290B857FE27F637",
-                      "path":  "web/assets/index-BlFeGfG_.js"
-                  },
-                  {
-                      "sha256":  "B6D65AEB45CA0E028E6F0F108F3D070B8DDBFF36F6BE71BEF1EB864A464C3B62",
+                      "sha256":  "695AA19DF76388F28A6DA289B6C4ED7331536632163C3242D13090EC331BC572",
                       "path":  "web/assets/index-BTJ86W0q.css"
                   },
                   {
-                      "sha256":  "8610BA0FAAF74380494608697264B541DE7651087428AA89BEAE06922806DFF8",
+                      "sha256":  "4A7C9D0E58C7FB39DB0F5D3B3DC519B7976F8CE317159FEC26837ED7883FDDC6",
                       "path":  "web/assets/index-Bvf8O5Xz.js"
                   },
                   {
-                      "sha256":  "28F226E3E9F46C2C5F0440692AE6D1A124FF6D23E669F7AFB290B857FE27F637",
+                      "sha256":  "AE4EF7FC7FB0B7C4455BA74A1907144FAF1A0F9AEFAEE03D32E4B4631C9D19AA",
                       "path":  "web/assets/index-CjR02yyw.js"
                   },
                   {
-                      "sha256":  "8610BA0FAAF74380494608697264B541DE7651087428AA89BEAE06922806DFF8",
+                      "sha256":  "4A7C9D0E58C7FB39DB0F5D3B3DC519B7976F8CE317159FEC26837ED7883FDDC6",
                       "path":  "web/assets/index-Cqc4YisP.js"
                   },
                   {
-                      "sha256":  "2AFA38C3FEEDF74A16033AF488CEC27376EFC67BA54B1F62D320E30396C5CFC0",
+                      "sha256":  "8975E2B8B09DB80EA3A985A1F5D987FC27C0715F76A992318E41553748FA3733",
                       "path":  "web/assets/index-DUSIJ8ZA.js"
                   }
               ]

@@ -7,6 +7,8 @@ DEFAULT_MODEL = "qwen3:4b"
 MODELS = {
     "1": "qwen3:4b",
     "2": "qwen3.5:9b",
+    "4": "qwen3.5:4b",
+    "qwen3.5:4b": "qwen3.5:4b",
     "qwen3:4b": "qwen3:4b",
     "qwen3.5:9b": "qwen3.5:9b",
 }
@@ -16,13 +18,14 @@ def choose_model() -> str:
     print("\n사용할 LLM 모델을 선택하세요.")
     print("  [1] qwen3:4b    - 빠른 실행, 낮은 메모리 사용 (권장)")
     print("  [2] qwen3.5:9b  - 더 높은 품질, 더 긴 다운로드와 높은 메모리 사용")
+    print("  [4] qwen3.5:4b")
     while True:
-        choice = input("선택 [1/2, 기본값 1]: ").strip()
+        choice = input("선택 [1/2/4, 기본값 1]: ").strip()
         if not choice:
             return DEFAULT_MODEL
         if choice in MODELS:
             return MODELS[choice]
-        print("1 또는 2를 입력하세요.")
+        print("1, 2 또는 4를 입력하세요.")
 
 
 def save_to_env(env_path: Path, model: str) -> None:

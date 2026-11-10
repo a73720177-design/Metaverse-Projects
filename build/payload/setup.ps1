@@ -191,9 +191,10 @@ function SelectChatModel {
     Write-Host "`n사용할 LLM 모델을 선택하세요." -ForegroundColor Cyan
     Write-Host '  [1] qwen3:4b    - 빠른 실행, 낮은 메모리 사용 (권장)'
     Write-Host '  [2] qwen3.5:9b  - 더 높은 품질, 더 긴 다운로드와 높은 메모리 사용'
-    Write-Host '  [3] 두 모델 모두 - 4B와 9B를 모두 다운로드하고 4B로 시작'
+    Write-Host '  [3] 세 모델 모두 - qwen3:4b, qwen3.5:4b, qwen3.5:9b 설치 후 qwen3:4b로 시작'
+    Write-Host '  [4] qwen3.5:4b - Qwen3.5 4B로 시작'
     while ($true) {
-        $choice = (Read-Host '선택 [1/2/3, 기본값 1]').Trim()
+        $choice = (Read-Host '선택 [1/2/3/4, 기본값 1]').Trim()
         if (-not $choice -or $choice -eq '1' -or $choice -eq 'qwen3:4b') {
             $script:modelsToInstall = @('qwen3:4b')
             return 'qwen3:4b'
@@ -204,11 +205,15 @@ function SelectChatModel {
             return 'qwen3.5:9b'
         }
         if ($choice -eq '3') {
-            $script:modelsToInstall = @('qwen3:4b','qwen3.5:9b')
-            Write-Host '두 모델을 모두 다운로드합니다. 설치 후 기본 모델은 qwen3:4b이며 화면에서 9B로 변경할 수 있습니다.' -ForegroundColor Yellow
+            $script:modelsToInstall = @('qwen3:4b','qwen3.5:4b','qwen3.5:9b')
+            Write-Host '세 모델을 준비합니다. 기본 모델은 qwen3:4b이며 웹에서 변경할 수 있습니다.' -ForegroundColor Yellow
             return 'qwen3:4b'
         }
-        Write-Host '1, 2 또는 3을 입력하세요.' -ForegroundColor Yellow
+        if ($choice -eq '4' -or $choice -eq 'qwen3.5:4b') {
+            $script:modelsToInstall = @('qwen3.5:4b')
+            return 'qwen3.5:4b'
+        }
+        Write-Host '1, 2, 3 또는 4를 입력하세요.' -ForegroundColor Yellow
     }
 }
 function SaveDiagnostics {
@@ -235,7 +240,7 @@ try {
     Status 'Metaverse Local - 설치 및 실행 준비'
     Write-Host '최초 실행: 인터넷 연결과 수 GB 이상의 다운로드가 필요합니다.'
     Write-Host 'Docker/WSL 최초 설치 시 Windows 승인, 약관 확인 또는 재부팅이 필요할 수 있습니다.'
-    Write-Host 'NVIDIA GPU가 감지되면 vLLM GPU 생성 서버와 병렬 처리를 기본으로 사용합니다.'
+    Write-Host 'NVIDIA GPU가 감지되면 Ollama GPU 가속과 병렬 처리를 기본으로 사용합니다.'
     if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITEW6432 -ne 'AMD64') {
         throw '이 설치 파일은 Windows x64 전용입니다.'
     }
@@ -325,7 +330,7 @@ try {
         }
         if ($nvidiaSmi) {
             New-Item -ItemType File -Path $gpuFlagPath -Force | Out-Null
-            Write-Host 'NVIDIA GPU가 감지되어 vLLM GPU 모드를 기본으로 활성화했습니다.' -ForegroundColor Green
+            Write-Host 'NVIDIA GPU가 감지되어 Ollama GPU 모드를 기본으로 활성화했습니다.' -ForegroundColor Green
         }
     }
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -364,11 +369,6 @@ try {
     $env:JWT_SECRET_KEY = $config.jwtSecret
     $env:WEB_PORT = [string]$config.port
     $generationConcurrency = '2'
-    $vllmSourceModel = if ($env:OLLAMA_CHAT_MODEL -eq 'qwen3.5:9b') {
-        'RedHatAI/Qwen3.5-9B-quantized.w4a16'
-    } else {
-        'RedHatAI/Qwen3.5-4B-quantized.w4a16'
-    }
     $env:OLLAMA_NUM_PARALLEL = $generationConcurrency
     $env:LLM_MAX_CONCURRENT_GENERATIONS = $generationConcurrency
     $env:PRACTICE_MAX_CONCURRENT_PERSONAS = $generationConcurrency
@@ -376,9 +376,7 @@ try {
         "OLLAMA_CHAT_MODEL=$($env:OLLAMA_CHAT_MODEL)",
         "OLLAMA_NUM_PARALLEL=$generationConcurrency",
         "LLM_MAX_CONCURRENT_GENERATIONS=$generationConcurrency",
-        "PRACTICE_MAX_CONCURRENT_PERSONAS=$generationConcurrency",
-        "VLLM_MODEL=$($env:OLLAMA_CHAT_MODEL)",
-        "VLLM_SOURCE_MODEL=$vllmSourceModel"
+        "PRACTICE_MAX_CONCURRENT_PERSONAS=$generationConcurrency"
     ) | Set-Content -LiteralPath (Join-Path $InstallRoot '.env') -Encoding ASCII
     $envFile = Join-Path $InstallRoot 'compose.env'
     @(
@@ -388,9 +386,7 @@ try {
         "OLLAMA_CHAT_MODEL=$($env:OLLAMA_CHAT_MODEL)",
         "OLLAMA_NUM_PARALLEL=$generationConcurrency",
         "LLM_MAX_CONCURRENT_GENERATIONS=$generationConcurrency",
-        "PRACTICE_MAX_CONCURRENT_PERSONAS=$generationConcurrency",
-        "VLLM_MODEL=$($env:OLLAMA_CHAT_MODEL)",
-        "VLLM_SOURCE_MODEL=$vllmSourceModel"
+        "PRACTICE_MAX_CONCURRENT_PERSONAS=$generationConcurrency"
     ) | Set-Content -LiteralPath $envFile -Encoding ASCII
     $script:composeArgs = @('compose','--progress','plain','--project-name',$config.project,'--env-file',$envFile,'--file',(Join-Path $payload 'compose.yaml'))
     if (Test-Path -LiteralPath $gpuFlagPath) { $script:composeArgs += @('--file',(Join-Path $payload 'compose.gpu.yaml')); Write-Host 'NVIDIA GPU 모드가 선택되었습니다.' }
@@ -426,7 +422,7 @@ try {
             if ($availableModels -notmatch $pattern) { PullModel $model } else { Write-Host "$model 준비됨" }
         }
         Status '[6/7] 앱 서버 시작 및 상태 검사'
-        Compose @('up','-d','--wait','--wait-timeout','1800')
+        Compose @('up','-d','--remove-orphans','--wait','--wait-timeout','1800')
         $url = "http://127.0.0.1:$($config.port)"
         $releaseToken = $packageHash.Substring(0, 12)
         $appUrl = $url + '/?model=' + [uri]::EscapeDataString($env:OLLAMA_CHAT_MODEL) + '&release=' + $releaseToken

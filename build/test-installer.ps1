@@ -81,7 +81,9 @@ if (($script:modelsToInstall -join ',') -ne 'qwen3:4b') { throw '4B download lis
 $script:modelChoice='2'
 if ((SelectChatModel) -ne 'qwen3.5:9b') { throw '9B model selection failed' }
 $script:modelChoice='3'
-if ((SelectChatModel) -ne 'qwen3:4b') { throw 'Both-model default selection failed' }
-if (($script:modelsToInstall -join ',') -ne 'qwen3:4b,qwen3.5:9b') { throw 'Both-model download list failed' }
+if ((SelectChatModel) -ne 'qwen3:4b') { throw 'All-model default selection failed' }
+if (($script:modelsToInstall -join ',') -ne 'qwen3:4b,qwen3.5:4b,qwen3.5:9b') { throw 'All-model download list failed' }
+$script:modelChoice='4'
+if ((SelectChatModel) -ne 'qwen3.5:4b') { throw 'Qwen3.5 4B selection failed' }
 Write-Host 'PASS interactive model selection'
 Write-Host 'All simulated scenarios passed. No WSL/Docker installation or reboot executed.'

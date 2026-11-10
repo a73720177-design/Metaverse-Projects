@@ -60,7 +60,7 @@ def probe(label, endpoint, payload, validate, *, base_url=None, headers=None):
 
 def main():
     chat_model = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:4b").strip()
-    if chat_model not in {"qwen3:4b", "qwen3.5:9b"}:
+    if chat_model not in {"qwen3:4b", "qwen3.5:4b", "qwen3.5:9b"}:
         raise RuntimeError(f"Unsupported installer chat model: {chat_model}")
     provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
     if provider not in {"ollama", "vllm"}:

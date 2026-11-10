@@ -286,10 +286,6 @@ async def feature_health(
 
     llm_features = llm.get("features") if isinstance(llm.get("features"), dict) else {}
     features: dict[str, dict[str, object]] = {
-        "vllm": {
-            "label": "vLLM 생성 서버",
-            **(llm_features.get("vllm") or {"enabled": None, "operational": None}),
-        },
         "ollama_generation": {
             "label": "Ollama 답변 생성",
             **(llm_features.get("ollama_generation") or {"enabled": None, "operational": None}),

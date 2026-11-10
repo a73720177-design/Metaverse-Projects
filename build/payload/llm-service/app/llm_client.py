@@ -27,7 +27,7 @@ OLLAMA_QUESTION_MODEL = os.getenv("OLLAMA_QUESTION_MODEL", "").strip() or OLLAMA
 OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "").strip() or OLLAMA_REVIEW_MODEL
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3").strip()
 OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "-1"))
-SELECTABLE_MODELS = ("qwen3:4b", "qwen3.5:9b")
+SELECTABLE_MODELS = ("qwen3:4b", "qwen3.5:4b", "qwen3.5:9b")
 OLLAMA_EMBED_BATCH = int(os.getenv("OLLAMA_EMBED_BATCH", "32"))
 if OLLAMA_EMBED_BATCH < 1:
     raise RuntimeError("OLLAMA_EMBED_BATCH must be at least 1")
@@ -74,6 +74,13 @@ def _vllm_model(model: str | None) -> str:
     return resolved
 
 
+def _generation_provider(model: str | None) -> str:
+    provider = _provider()
+    if provider == "vllm" and model in SELECTABLE_MODELS and model != _vllm_model(model):
+        return "ollama"
+    return provider
+
+
 def _disable_thinking_prompt(prompt: str, *, think: bool = False) -> str:
     """Use Qwen's prompt switch as a second guard in addition to API options."""
     if think or prompt.rstrip().endswith("/no_think"):
@@ -102,7 +109,7 @@ def call_llm(
     """
     require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt, think=think)
-    if _provider() == "vllm":
+    if _generation_provider(model) == "vllm":
         payload = {
             "model": _vllm_model(model),
             "messages": [{"role": "user", "content": guarded_prompt}],
@@ -182,7 +189,7 @@ def stream_llm(
     completed = False
     require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded_prompt = _disable_thinking_prompt(prompt)
-    if _provider() == "vllm":
+    if _generation_provider(model) == "vllm":
         payload = {
             "model": _vllm_model(model),
             "messages": [{"role": "user", "content": guarded_prompt}],
@@ -418,13 +425,11 @@ def get_runtime_diagnostics() -> dict:
             "mixed" if total_vram_bytes else "cpu"
         )
         accelerator_operational = None if accelerator_mode == "idle" else total_vram_bytes > 0
-    selectable_models = [
-        {"id": name, "installed": model_available(name), "available": model_available(name)}
-        for name in SELECTABLE_MODELS
-    ] if provider == "ollama" else [
-        {"id": name, "installed": name in model_ids, "available": name in model_ids}
-        for name in SELECTABLE_MODELS
-    ]
+    selectable_models = []
+    for name in SELECTABLE_MODELS:
+        engine = _generation_provider(name)
+        available = name in model_ids if engine == "vllm" else model_available(name)
+        selectable_models.append({"id": name, "installed": available, "available": available})
     return {
         "status": "ok" if generation_operational and embedding_operational else "degraded",
         "provider": provider,
@@ -504,7 +509,7 @@ async def stream_llm_async(prompt: str, model: str | None = None, max_tokens: in
     """Cancellation closes the provider HTTP response, including while awaiting tokens."""
     import asyncio
     import httpx
-    provider = _provider()
+    provider = _generation_provider(model)
     require_prompt_fits(prompt, max_tokens or OLLAMA_MAX_OUTPUT_TOKENS)
     guarded = _disable_thinking_prompt(prompt)
     if provider == "vllm":

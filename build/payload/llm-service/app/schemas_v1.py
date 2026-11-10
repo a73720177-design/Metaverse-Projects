@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-LlmModel = Literal["qwen3:4b", "qwen3.5:9b"]
+LlmModel = Literal["qwen3:4b", "qwen3.5:4b", "qwen3.5:9b"]
 
 
 class EvidenceStatus(StrEnum):
